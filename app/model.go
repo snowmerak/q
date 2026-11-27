@@ -216,6 +216,7 @@ type workspaceModelConfiguredMsg struct {
 type chatResultMsg struct {
 	responseContext     *client.Message
 	replyAlreadyEmitted bool
+	promptUsageManaged  bool
 	turnID              uint64
 	response            *client.ChatResponse
 	intermediate        []client.Message
@@ -233,6 +234,8 @@ type AgentEvent struct {
 	replyAlreadyEmitted bool
 	persistenceAck      chan struct{}
 	usage               *client.Usage
+	promptUsage         *memory.PromptUsage
+	promptUsageManaged  bool
 	status              string
 	activity            *agentActivity
 	trace               *agentTrace
@@ -249,12 +252,13 @@ type AgentEvent struct {
 	requestEstimate     int
 	toolCalls           int
 
-	streamDelta    *chatStreamDelta
-	questionCallID string
-	taskStarted    *workspace.ActiveTask
-	taskCompleted  bool
-	contextReplace *agentContextReplacement
-	err            error
+	streamDelta       *chatStreamDelta
+	questionCallID    string
+	taskStarted       *workspace.ActiveTask
+	taskCompleted     bool
+	contextReplace    *agentContextReplacement
+	toolTokenEstimate int
+	err               error
 }
 
 type agentEvent = AgentEvent
@@ -800,6 +804,9 @@ func (m model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.config, m.draftConfig, m.client = message.config, message.config, message.client
 		m.conversationID = ""
 		m.clearResponseReplay()
+		if m.memory != nil {
+			m.memory.Configure(memoryPolicy(m.activeConfig()))
+		}
 		m.status = message.modelID + " · " + m.preferredModelAPIMode(message.modelID)
 		return m, m.modelFilter.Focus()
 	case modelRoleConfiguredMsg:
@@ -1100,6 +1107,7 @@ func (m *model) enterSession(value config.Config, configuredClient chatClient) {
 	m.runID = ""
 	m.sessionTitle = ""
 	m.sessionUpdatedAt = time.Time{}
+	m.historyRevision = ""
 
 	m.waiting = false
 	m.compacting = false
@@ -1540,6 +1548,7 @@ func (m *model) resetConversationState(runIDs ...string) {
 	m.sessionOperation = nil
 	m.messages = nil
 	m.responseUsage = nil
+	m.historyRevision = ""
 	m.transcriptThoughts = nil
 	m.streamResponse = ""
 	if prompt := m.activeConfig().Provider.SystemPrompt; prompt != "" {
@@ -1685,6 +1694,7 @@ func (m *model) restoreWorkspaceSession() {
 	interruptedCalls := len(interruptedResults)
 	m.messages = mergeWorkspaceMessages(base, transcript)
 	m.responseUsage = append([]workspace.ResponseUsage(nil), session.ResponseUsage...)
+	m.historyRevision = session.HistoryRevision
 	m.transcriptThoughts = restoreTranscriptThoughts(base, transcript, session.TranscriptThoughts)
 	requestContext := session.Context
 	if len(requestContext) == 0 {
@@ -1868,6 +1878,7 @@ func (m *model) saveWorkspaceSession() error {
 		Title:              m.sessionTitle,
 		UpdatedAt:          workspaceTimePointer(m.sessionUpdatedAt),
 		Transcript:         workspaceSessionMessages(m.messages),
+		HistoryRevision:    m.historyRevision,
 		ResponseUsage:      m.responseUsage,
 		TranscriptThoughts: collectTranscriptThoughts(m.messages, m.transcriptThoughts),
 		Context:            requestContext,
@@ -2294,7 +2305,7 @@ func (m model) renderedAgentActivities() string {
 func agentSummary(states map[string]string) string {
 	parts := []string{titleStyle.Render("agents")}
 	roles := []string{
-		subagent.BuiltinManagerID, subagent.BuiltinInterviewerID,
+		subagent.BuiltinManagerID,
 		subagent.BuiltinResearchID, subagent.BuiltinSeniorDeveloperID,
 		subagent.BuiltinJuniorDeveloperID,
 		subagent.BuiltinWebSearchID, subagent.BuiltinWebTesterID,

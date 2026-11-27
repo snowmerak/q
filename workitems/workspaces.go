@@ -82,7 +82,7 @@ func (s *Store) initialize(ctx context.Context, dir string) error {
 	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
 		return err
 	}
-	if version < 0 || version > 9 {
+	if version < 0 || version > 10 {
 		return fmt.Errorf("workitems: unsupported catalog schema version %d", version)
 	}
 	_, err := s.db.ExecContext(ctx, `
@@ -105,6 +105,9 @@ CREATE TABLE IF NOT EXISTS catalog_migrations (name TEXT PRIMARY KEY, completed_
 	if err := s.initializeItems(ctx); err != nil {
 		return err
 	}
+	if err := s.initializeAssets(ctx); err != nil {
+		return err
+	}
 	if err := s.initializeCoordinator(ctx); err != nil {
 		return err
 	}
@@ -118,6 +121,9 @@ CREATE TABLE IF NOT EXISTS catalog_migrations (name TEXT PRIMARY KEY, completed_
 		return err
 	}
 	if err := s.initializeDependencies(ctx); err != nil {
+		return err
+	}
+	if err := s.initializeChildren(ctx); err != nil {
 		return err
 	}
 	var complete int
@@ -315,7 +321,7 @@ func mutationError(err error) error {
 }
 
 func (s *Store) ListWorkspaces(ctx context.Context, includeArchived bool) ([]Workspace, error) {
-	query := `SELECT w.id,w.name,w.manager_session_id,w.coordinator_session_id,w.created_at,w.updated_at,w.archived_at,r.path,coalesce(p.max_parallel_tickets,0),coalesce(p.max_parallel_subagents,0) FROM workspaces w JOIN workspace_roots r ON r.workspace_id=w.id LEFT JOIN workspace_settings p ON p.workspace_id=w.id`
+	query := `SELECT w.id,w.name,w.manager_session_id,w.coordinator_session_id,w.created_at,w.updated_at,w.archived_at,r.path,coalesce(p.max_parallel_tickets,0),coalesce(p.max_parallel_subagents,0),coalesce(a.required,0) FROM workspaces w JOIN workspace_roots r ON r.workspace_id=w.id LEFT JOIN workspace_settings p ON p.workspace_id=w.id LEFT JOIN workspace_start_approval a ON a.workspace_id=w.id`
 	if !includeArchived {
 		query += ` WHERE w.archived_at IS NULL`
 	}
@@ -330,7 +336,7 @@ func (s *Store) ListWorkspaces(ctx context.Context, includeArchived bool) ([]Wor
 		var value Workspace
 		var created, updated, path string
 		var archived sql.NullString
-		if err := rows.Scan(&value.ID, &value.Name, &value.ManagerSessionID, &value.CoordinatorSessionID, &created, &updated, &archived, &path, &value.Limits.MaxParallelTickets, &value.Limits.MaxParallelSubagents); err != nil {
+		if err := rows.Scan(&value.ID, &value.Name, &value.ManagerSessionID, &value.CoordinatorSessionID, &created, &updated, &archived, &path, &value.Limits.MaxParallelTickets, &value.Limits.MaxParallelSubagents, &value.Limits.RequireTicketApproval); err != nil {
 			return nil, err
 		}
 		if len(values) == 0 || values[len(values)-1].ID != value.ID {
@@ -436,6 +442,9 @@ func (s *Store) UpdateWorkspace(ctx context.Context, id string, input WorkspaceI
 		return Workspace{}, err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT coalesce((SELECT max_parallel_tickets FROM workspace_settings WHERE workspace_id=?),0),coalesce((SELECT max_parallel_subagents FROM workspace_settings WHERE workspace_id=?),0)`, id, id).Scan(&value.Limits.MaxParallelTickets, &value.Limits.MaxParallelSubagents); err != nil {
+		return Workspace{}, err
+	}
+	if value.Limits.RequireTicketApproval, err = projectRequiresStartApproval(ctx, tx, id); err != nil {
 		return Workspace{}, err
 	}
 	if input.Limits != nil {

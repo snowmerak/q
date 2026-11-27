@@ -310,6 +310,23 @@ func TestHTTPBoundaryAndDashboard(t *testing.T) {
 		t.Fatalf("unknown query status=%v err=%v", response.StatusCode, err)
 	}
 	_ = response.Body.Close()
+
+	api := NewClient(testServer.URL, time.Second)
+	record.At = record.At.Add(-time.Minute)
+	record.Attribution = client.UsageAttribution{ProjectID: "project-1", ProjectName: "A project"}
+	if err := api.Append(t.Context(), record); err != nil {
+		t.Fatal(err)
+	}
+	outcome := client.UsageRecord{EventID: strings.Repeat("b", 32), At: record.At, Model: record.Model, Role: record.Role,
+		Performance: &client.UsagePerformance{Status: "failed", DurationMS: 120}}
+	if err := api.Append(t.Context(), outcome); err != nil {
+		t.Fatal(err)
+	}
+	view, err := api.Query(t.Context(), Filter{Model: record.Model, Role: record.Role, Details: true})
+	if err != nil || view.Totals.Calls != 1 || view.Totals.CacheHitSamples != 1 || len(view.Projects) != 1 ||
+		len(view.Performance) != 1 || view.Performance[0].Failed != 1 {
+		t.Fatalf("extended usage response: %#v, err=%v", view, err)
+	}
 }
 
 func TestConfigRejectsNonLoopbackHost(t *testing.T) {

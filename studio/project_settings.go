@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workitems"
+	"github.com/snowmerak/q/workspace"
 )
 
 type projectAgentOption struct {
@@ -28,32 +30,39 @@ func (s *sessionsService) projectAgentOptions(root string) ([]projectAgentOption
 	if err != nil {
 		return nil, 0, err
 	}
+	var targets map[string]config.SubagentTarget
+	if root != "" {
+		targets, err = (workspace.Store{Root: root}).LoadSubagentTargets()
+		if err != nil {
+			return nil, 0, err
+		}
+	}
 	options := []projectAgentOption{}
-	for _, def := range subagent.PublicAgentDefinitions() {
-		o := projectAgentOption{ID: def.Info.Name, Description: def.Info.Description, Kind: def.Info.Kind, Available: true}
-		if o.Kind == subagent.AgentKindExternal {
-			_, _, o.Available = value.ExternalAgentConnection(def.Info.Role)
-		}
-		if !o.Available {
-			o.Reason = "Configure an enabled ACP connection for this role in Providers."
-		}
-		options = append(options, o)
+	for _, definition := range subagent.PublicAgentDefinitions() {
+		options = append(options, projectAgentFromDefinition(value, definition, targets))
 	}
 	for _, entry := range profileStore(s.main, root).List() {
-		o := projectAgentOption{ID: entry.Scope + "/" + entry.Profile.Name, Description: entry.Profile.Description, Kind: entry.Profile.EffectiveKind(), Available: entry.Err == nil}
-		if entry.Err != nil {
-			o.Reason = entry.Err.Error()
+		definition, err := subagent.DefinitionForProfile(entry)
+		if err != nil {
+			options = append(options, projectAgentOption{ID: entry.Scope + "/" + entry.Profile.Name, Description: entry.Profile.Description, Kind: entry.Profile.EffectiveKind(), Reason: err.Error()})
+			continue
 		}
-		if o.Kind == subagent.AgentKindExternal && o.Available {
-			connection, exists := value.Agents.Connections[entry.Profile.Agent]
-			o.Available = exists && !connection.Disabled
-			if !o.Available {
-				o.Reason = "The profile's ACP connection is missing or disabled."
-			}
-		}
-		options = append(options, o)
+		options = append(options, projectAgentFromDefinition(value, definition, targets))
 	}
 	return options, value.EffectiveAgents().MaxParallel, nil
+}
+
+func projectAgentFromDefinition(value config.Config, definition subagent.AgentDefinition, targets map[string]config.SubagentTarget) projectAgentOption {
+	effective := subagent.ExecutionDefinition(value, definition, targets)
+	option := projectAgentOption{ID: effective.Info.Name, Description: effective.Info.Description, Kind: effective.Info.Kind, Available: true}
+	if effective.Info.Kind == subagent.AgentKindExternal {
+		connection, found := value.Agents.Connections[effective.Connection]
+		if !found || connection.Disabled {
+			option.Available = false
+			option.Reason = "Select an enabled ACP connection for this subagent."
+		}
+	}
+	return option
 }
 
 func (s *sessionsService) validateProjectAgent(id, root string) error {
@@ -111,15 +120,30 @@ func (s *sessionsService) serveProjectDefaults(w http.ResponseWriter, r *http.Re
 		if r.Method == http.MethodPut {
 			return c.UpdateProjectDefaults(ctx, value)
 		}
-		return c.GetProjectDefaults(ctx)
+		return loadProjectDefaults(ctx, c)
 	})
+}
+
+func loadProjectDefaults(ctx context.Context, c *library.Client) (workitems.ProjectDefaults, error) {
+	defaults, err := c.GetProjectDefaults(ctx)
+	if err != nil {
+		return defaults, err
+	}
+	// The catalog starts at revision 1. Later revisions can intentionally be empty.
+	if defaults.Revision == 1 && len(defaults.AgentIDs) == 0 {
+		for _, definition := range subagent.BuiltinAgentDefinitions() {
+			defaults.AgentIDs = append(defaults.AgentIDs, definition.Info.Name)
+		}
+	}
+	defaults.AgentIDs = slices.DeleteFunc(defaults.AgentIDs, func(id string) bool {
+		return id == "builtin/interviewer"
+	})
+	return defaults, nil
 }
 
 func (s *sessionsService) prepareInitialMembers(input *studioProjectUpdateRequest) error {
 	if input.InitialMembers == nil {
-		defaults, err := withProjectCatalog(s.projects, func(ctx context.Context, c *library.Client) (workitems.ProjectDefaults, error) {
-			return c.GetProjectDefaults(ctx)
-		})
+		defaults, err := withProjectCatalog(s.projects, loadProjectDefaults)
 		if err != nil {
 			return err
 		}

@@ -22,10 +22,10 @@ Studio의 **Settings → Subagents**에서 내장 정의를 확인하고 사용�
 
 공개 내장 ID는 다음과 같습니다.
 
-- `builtin/interviewer`
 - `builtin/manager`
 - `builtin/senior-developer`
 - `builtin/junior-developer`
+- `builtin/code-reviewer`
 - `builtin/research`
 - `builtin/web-search`
 - `builtin/web-tester`

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/snowmerak/decisions"
 	"github.com/snowmerak/q/client/systemone"
 	"github.com/snowmerak/q/systemoneconfig"
 )
@@ -43,7 +44,7 @@ func (service *settingsService) serveSystemOneModelCatalog(writer http.ResponseW
 		}
 	}
 	if len(result.Models) == 0 && firstError != nil {
-		writeAPIError(writer, http.StatusBadGateway, fmt.Errorf("discover System One models: %w", firstError))
+		writeAPIError(writer, http.StatusBadGateway, fmt.Errorf("discover Decisions models: %w", firstError))
 		return
 	}
 	sort.Slice(result.Models, func(i, j int) bool { return result.Models[i].ID < result.Models[j].ID })
@@ -86,7 +87,7 @@ func (service *settingsService) serveSystemOneModelAssignmentUpdate(writer http.
 			value.RoleModels[role] = update.Model
 		}
 	default:
-		writeAPIError(writer, http.StatusNotFound, errors.New("unknown System One model assignment"))
+		writeAPIError(writer, http.StatusNotFound, errors.New("unknown Decisions model assignment"))
 		return
 	}
 	if err := service.systemOne.Save(value); err != nil {
@@ -161,7 +162,7 @@ func (service *settingsService) serveSystemOneProviderDelete(writer http.Respons
 		return
 	}
 	if len(value.Providers) == 1 {
-		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("at least one System One provider is required"))
+		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("at least one Decisions provider is required"))
 		return
 	}
 	value.Providers = append(value.Providers[:index], value.Providers[index+1:]...)
@@ -217,6 +218,12 @@ func applySystemOneProviderUpdate(provider systemoneconfig.ProviderConfig, updat
 	provider.ID = strings.TrimSpace(update.ID)
 	provider.URI = strings.TrimSpace(update.URI)
 	provider.APIKeyEnv = strings.TrimSpace(update.APIKeyEnv)
+	if update.API != nil {
+		provider.API = decisions.API(strings.TrimSpace(*update.API))
+	}
+	if update.ModelFilterRegex != nil {
+		provider.ModelFilterRegex = *update.ModelFilterRegex
+	}
 	return provider
 }
 

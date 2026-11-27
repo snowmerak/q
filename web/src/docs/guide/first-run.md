@@ -29,7 +29,7 @@ Studio prints its loopback URL and opens it in your browser. Keep that q process
 
 Open **Settings → Providers**, add a Gateway provider, and enter its endpoint and API key environment variable. Then open **Settings → Models** and assign a discovered model to **Default**. Provider and model changes save automatically.
 
-Use **Settings → System One** only when you want a separate typed-decision provider for tasks such as Agent Skill relevance checks.
+Use **Settings → Decisions** only when you want a separate typed-decision provider for tasks such as Agent Skill relevance checks.
 
 ## Create a session
 

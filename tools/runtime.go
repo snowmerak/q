@@ -359,6 +359,7 @@ func newRuntimeWithLSP(
 		return nil, err
 	}
 	if optionsValue.workClient != nil {
+		server.AddReceivingMiddleware(workitemtools.NativeDelegatedSession)
 		workitemtools.Register(server, optionsValue.workClient, optionsValue.workBinding)
 	}
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
@@ -657,6 +658,9 @@ func (r *Runtime) Call(ctx context.Context, call client.ToolCall) (client.ToolRe
 	}
 	r.externalMu.RUnlock()
 	params := &mcp.CallToolParams{Name: call.Function.Name, Arguments: arguments}
+	if sessionID := workitemtools.DelegatedSession(ctx); sessionID != "" && r.workClient != nil {
+		params.Meta = mcp.Meta{workitemtools.DelegatedSessionMetaKey: sessionID}
+	}
 	if call.Function.Name == "search_archive" {
 		if message := sessionstore.SearchMessageExclusion(ctx, call.ID); message != nil {
 			params.Meta = mcp.Meta{builtin.ArchiveExcludeMessageMetaKey: message}

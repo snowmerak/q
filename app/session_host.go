@@ -5,15 +5,20 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/llm-provider/gateway"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/coordinator"
+	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/hostruntime"
+	"github.com/snowmerak/q/internal/workitemtools"
+	"github.com/snowmerak/q/internal/workmedia"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/workspace"
@@ -426,25 +431,40 @@ func (host *SessionHost) run(
 		return err
 	}
 	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
-		return errors.New("prompt is required")
-	}
 	options := SessionOptions{}
 	if len(configured) > 0 {
 		options = configured[0]
+	}
+	if prompt == "" && len(options.Images) == 0 {
+		return errors.New("prompt is required")
+	}
+	if options.OperationID != "" && len(options.Images) != 0 {
+		return errors.New("idempotent session operations accept text prompts only")
+	}
+	images, err := workmedia.Prepare(options.Images, options.ImageMaxEdge)
+	if err != nil {
+		return err
+	}
+	options.Images = images
+	if review := workitemtools.AssignedReview(requestContext); review.Active() && review.OperationID == options.OperationID {
+		options.review = review
+	}
+	configured = nil
+	if options.configuresRuntime() || options.review.Active() {
+		configured = []SessionOptions{options}
 	}
 	session, err := host.acquireLiveSession(workspaceStore, sessionID, configured...)
 	if err != nil {
 		return err
 	}
 	defer session.busy.Unlock()
-	_, err = session.execute(requestContext, prompt, false, emit, control, options.OperationID)
+	_, err = session.execute(requestContext, prompt, false, emit, control, options)
 	return err
 }
 
 // Compact summarizes older context for one inactive session without adding a
 // user message or changing its transcript.
-func (host *SessionHost) Compact(requestContext context.Context, workspaceStore workspace.Store, sessionID string) (string, error) {
+func (host *SessionHost) Compact(requestContext context.Context, workspaceStore workspace.Store, sessionID string) (status string, resultErr error) {
 	if host == nil {
 		return "", fmt.Errorf("%w: host is unavailable", ErrSessionRuntimeUnavailable)
 	}
@@ -454,12 +474,33 @@ func (host *SessionHost) Compact(requestContext context.Context, workspaceStore 
 	if strings.TrimSpace(sessionID) == "" {
 		return "", errors.New("session ID is required")
 	}
+	if requestContext == nil {
+		requestContext = context.Background()
+	}
+	ctx := diagnostics.WithAttrs(requestContext, slog.String("session_id", sessionID))
+	logger := diagnostics.Logger(ctx)
+	started := time.Now()
+	logger.InfoContext(ctx, "studio.compact.started")
+	defer func() {
+		outcome, level := "completed", slog.LevelInfo
+		switch {
+		case errors.Is(resultErr, context.DeadlineExceeded):
+			outcome, level = "timeout", slog.LevelError
+		case errors.Is(resultErr, context.Canceled):
+			outcome = "cancelled"
+		case resultErr != nil:
+			outcome, level = "failed", slog.LevelError
+		case status == nothingToCompactStatus:
+			outcome = "skipped"
+		}
+		logger.Log(ctx, level, "studio.compact.finished", "status", outcome, "duration_ms", time.Since(started).Milliseconds())
+	}()
 	session, err := host.acquireLiveSession(workspaceStore, sessionID)
 	if err != nil {
 		return "", err
 	}
 	defer session.busy.Unlock()
-	return session.execute(requestContext, "", true, nil, nil)
+	return session.execute(ctx, "", true, nil, nil)
 }
 
 type preparedSession struct {
@@ -473,6 +514,7 @@ type preparedSession struct {
 	toolsCloser    io.Closer
 	executionRoot  string
 	projectContext *SessionWorkspaceContext
+	review         workitemtools.ReviewAssignment
 }
 
 func (prepared *preparedSession) Close() error {
@@ -538,6 +580,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if len(configured) > 0 {
 		options = configured[0]
 	}
+	customRuntime := options.configuresRuntime()
 	executionRoot, projectContext, projectFound, err := host.resolveSessionExecution(runContext, prepared.store, configured...)
 	if err != nil {
 		return nil, fmt.Errorf("resolve session execution workspace: %w", err)
@@ -545,13 +588,21 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	prepared.executionRoot = executionRoot
 	if projectFound {
 		prepared.projectContext = &projectContext
+		runContext = client.WithUsageProject(runContext, projectContext.ProjectID, projectContext.ProjectName)
 		options.SystemPrompt = strings.TrimSpace(options.SystemPrompt + "\n\n" + coordinator.RoleInstructions(projectContext.Role))
+	}
+	if options.review.Active() {
+		if !projectFound || projectContext.Role != coordinator.RoleIntegrator {
+			return nil, errors.New("assigned ticket review requires the project's Integrator session")
+		}
+		prepared.review = options.review
+		options.SystemPrompt = strings.TrimSpace(options.SystemPrompt + "\n\n" + workitemtools.AssignedReviewInstructions)
 	}
 	if executionRoot != prepared.store.Root {
 		options.WorkingDirectory = executionRoot
 		options.AuxiliaryDirectories = append([]string(nil), projectContext.AuxiliaryRoots...)
 	}
-	if prepared.store.SessionID != "" && len(configured) == 0 {
+	if prepared.store.SessionID != "" && !customRuntime {
 		selection, err := prepared.store.LoadSessionModelConfig()
 		if err != nil {
 			return nil, err
@@ -570,7 +621,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 			}
 		}
 	}
-	if len(configured) == 0 && loaded.Provider.Model == "" {
+	if !customRuntime && loaded.Provider.Model == "" {
 		return nil, fmt.Errorf("%w: q is not configured; choose an API model or ACP provider in Studio", ErrSessionRuntimeUnavailable)
 	}
 	loaded, err = host.ensureProvider(loaded)
@@ -590,7 +641,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 		loaded.Provider.Model = options.Model
 		loaded.Provider.ContextWindow = 0
 	}
-	if len(configured) > 0 {
+	if customRuntime {
 		loaded.Provider.ReasoningEffort = options.ReasoningEffort
 	}
 	memoryContext := host.ctx
@@ -627,8 +678,10 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 			auxiliary = options.AuxiliaryDirectories
 		}
 		startup = startupRequest{
-			projectID: projectContext.ProjectID, sessionID: prepared.store.SessionID, projectManager: projectContext.Role == coordinator.RoleIntegrator,
-			ctx: runContext, memoryCtx: memoryContext, store: host.store, workspaceStore: prepared.store,
+			projectID: projectContext.ProjectID, sessionID: prepared.store.SessionID,
+			projectManager: projectContext.Role == coordinator.RoleIntegrator, projectCoordinator: projectContext.Role == coordinator.RoleCoordinator,
+			review: prepared.review,
+			ctx:    runContext, memoryCtx: memoryContext, store: host.store, workspaceStore: prepared.store,
 			loaded: loaded, manager: host.manager, factory: host.factory, lifecycle: prepared.lifecycle, providerReady: true,
 			disableExternalMCP: options.DisableExternalMCP,
 			checkoutRoot:       options.WorkingDirectory, auxiliaryRoots: append([]string(nil), auxiliary...),
@@ -673,7 +726,7 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if err != nil {
 		return nil, err
 	}
-	if len(configured) == 0 {
+	if !customRuntime {
 		options.ReasoningEffort = startup.config.Provider.ReasoningEffort
 		if sessionModel.ReasoningEffort != "" {
 			options.ReasoningEffort = sessionModel.ReasoningEffort
@@ -682,10 +735,11 @@ func (host *SessionHost) prepareSession(runContext context.Context, workspaceSto
 	if options.Model == "" {
 		options.Model = sessionModel.Model
 	}
-	if len(configured) > 0 || options.Model != "" || sessionModel.ReasoningEffort != "" || options.WorkingDirectory != "" {
+	if customRuntime || options.Model != "" || sessionModel.ReasoningEffort != "" || options.WorkingDirectory != "" || options.review.Active() {
 		stable := options
 		stable.OperationID = ""
 		stable.Control = nil
+		stable.review = workitemtools.ReviewAssignment{}
 		prepared.state.sessionOptions = &stable
 		if injected != nil {
 			prepared.state.toolRuntime = injected

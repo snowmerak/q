@@ -59,7 +59,7 @@ The commit workflow generates one or more Conventional Commit proposals. You can
 
 ## Settings and operations
 
-**Settings** owns global models and role assignments, Gateway providers, System One providers and decision models, runtime limits, services, occupational subagents, Agent Skills, MCP, language servers, and `.qignore`. Fields save when they change; there is no separate save shortcut.
+**Settings** owns global models and role assignments, Gateway providers, Decisions providers and decision models, runtime limits, services, occupational subagents, Agent Skills, MCP, language servers, and `.qignore`. Fields save when they change; there is no separate save shortcut.
 
 Repository model overrides appear when a workspace is selected. Provider changes are applied to subsequent turns without restarting Studio. API key values are handled as secrets and are not returned by read APIs.
 
@@ -69,4 +69,4 @@ Repository model overrides appear when a workspace is selected. Provider changes
 
 Studio binds to loopback by default and performs file, process, Git, and configuration work through the local q process. The browser never receives direct filesystem access. Shell commands still have the authority of the local q process and are not an operating-system sandbox. `--host` can deliberately widen the network boundary, so access control must then be supplied by the network or an authenticated reverse proxy.
 
-Bare `q` remains available as a compatibility chat client, and `q acp` remains the ACP server entry point. Configuration commands such as `q model`, `q gateway`, `q systemone`, `q subagents`, `q skills`, `q mcp`, and `q lsp` open the corresponding Studio surface.
+Bare `q` remains available as a compatibility chat client, and `q acp` remains the ACP server entry point. Configuration commands such as `q model`, `q gateway`, `q decisions`, `q subagents`, `q skills`, `q mcp`, and `q lsp` open the corresponding Studio surface.

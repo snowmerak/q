@@ -254,7 +254,7 @@ func (a *acpAgent) finishACPCommit(content string) (acp.PromptResponse, error) {
 	streamedResponse := ""
 	return a.finishPrompt(client.ChatResponse{Choices: []client.Choice{{Message: client.Message{
 		Role: client.RoleAssistant, Content: content,
-	}}}}, 0, &streamedResponse, nil, false)
+	}}}}, &streamedResponse, nil, false)
 }
 
 func (a *acpAgent) elicitACPCommitAction(ctx context.Context, proposal string) (string, error) {

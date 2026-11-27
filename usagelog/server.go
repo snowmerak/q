@@ -166,7 +166,7 @@ func newHTTPHandler(store *Store, health Health, allowedHost string) http.Handle
 func parseFilter(query url.Values) (Filter, error) {
 	for key := range query {
 		switch key {
-		case "from", "to", "model", "role":
+		case "from", "to", "model", "role", "details":
 		default:
 			return Filter{}, fmt.Errorf("unknown query parameter %q", key)
 		}
@@ -190,6 +190,12 @@ func parseFilter(query url.Values) (Filter, error) {
 	}
 	filter.Model = strings.TrimSpace(query.Get("model"))
 	filter.Role = strings.TrimSpace(query.Get("role"))
+	if query.Has("details") {
+		if query.Get("details") != "1" {
+			return Filter{}, errors.New("details must be 1")
+		}
+		filter.Details = true
+	}
 	if len(filter.Model) > 256 || len(filter.Role) > 64 {
 		return Filter{}, errors.New("model or role filter is too long")
 	}

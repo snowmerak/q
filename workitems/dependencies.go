@@ -58,6 +58,9 @@ func setTicketDependencies(ctx context.Context, tx *sql.Tx, item *Item, ids []st
 		if err != nil || prerequisite.Deleted || prerequisite.Schedule != nil && prerequisite.Schedule.Every != "" {
 			return fmt.Errorf("%w: prerequisite %q must be an existing ticket in this workspace; recurring templates cannot complete", ErrInvalidInput, id)
 		}
+		if prerequisite.ParentTicketID != item.ParentTicketID || prerequisite.ParentWorktreeID != item.ParentWorktreeID {
+			return fmt.Errorf("%w: prerequisites must share the same parent worktree", ErrInvalidInput)
+		}
 	}
 	encoded, err := json.Marshal(ids)
 	if err != nil {

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('session model selection persists, stays local, and locks during execution', async ({ page, request }, testInfo) => {
   const first = await (await request.post('/api/v1/chats', { data: {} })).json();

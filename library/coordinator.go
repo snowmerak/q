@@ -20,6 +20,24 @@ type InboxList struct {
 	Entries []workitems.InboxEntry `json:"entries"`
 }
 
+func (c *Client) HumanInbox(ctx context.Context, workspaceID string) (workitems.HumanInbox, error) {
+	var out workitems.HumanInbox
+	err := c.doJSON(ctx, http.MethodGet, "/user-inbox?workspace_id="+url.QueryEscape(workspaceID), nil, &out)
+	return out, err
+}
+
+func (c *Client) AnswerTicketQuestion(ctx context.Context, attempt string, input workitems.AnswerInput) (workitems.Item, error) {
+	var out workitems.Item
+	err := c.doJSON(ctx, http.MethodPost, "/attempts/"+url.PathEscape(attempt)+"/answer", input, &out)
+	return out, err
+}
+
+func (c *Client) QueueTicketGuidance(ctx context.Context, attempt string, input workitems.TicketGuidanceInput) (workitems.TicketGuidance, error) {
+	var out workitems.TicketGuidance
+	err := c.doJSON(ctx, http.MethodPost, "/attempts/"+url.PathEscape(attempt)+"/guidance", input, &out)
+	return out, err
+}
+
 func (c *Client) DispatchTicketSchedules(ctx context.Context, workspaceID string) (workitems.ItemPage, error) {
 	var out workitems.ItemPage
 	err := c.doJSON(ctx, http.MethodPost, "/workspaces/"+url.PathEscape(workspaceID)+"/ticket-schedules/dispatch", struct{}{}, &out)
@@ -46,6 +64,12 @@ func (c *Client) NextPendingInbox(ctx context.Context, workspaceID string) (Inbo
 func (c *Client) ListMembers(ctx context.Context, id string) (MemberList, error) {
 	var out MemberList
 	err := c.doJSON(ctx, http.MethodGet, "/workspaces/"+url.PathEscape(id)+"/members", nil, &out)
+	return out, err
+}
+func (c *Client) ListChildren(ctx context.Context, id, worktree string) (workitems.ItemPage, error) {
+	var out workitems.ItemPage
+	query := url.Values{"worktree": {worktree}}
+	err := c.doJSON(ctx, http.MethodGet, "/items/"+url.PathEscape(id)+"/children?"+query.Encode(), nil, &out)
 	return out, err
 }
 func (c *Client) PutMember(ctx context.Context, id string, in workitems.MemberInput) (workitems.Member, error) {
@@ -124,6 +148,20 @@ func coordinatorWrite[I, O any](mux *http.ServeMux, route string, action func(co
 }
 
 func registerCoordinatorRoutes(mux *http.ServeMux, s *workitems.Store) {
+	coordinatorWrite(mux, "POST /v1/attempts/{attempt}/guidance", func(ctx context.Context, r *http.Request, input workitems.TicketGuidanceInput) (workitems.TicketGuidance, error) {
+		return s.QueueTicketGuidance(ctx, r.PathValue("attempt"), input)
+	})
+	coordinatorWrite(mux, "POST /v1/attempts/{attempt}/answer", func(ctx context.Context, r *http.Request, input workitems.AnswerInput) (workitems.Item, error) {
+		return s.AnswerQuestion(ctx, r.PathValue("attempt"), input)
+	})
+	mux.HandleFunc("GET /v1/user-inbox", func(w http.ResponseWriter, r *http.Request) {
+		value, err := s.HumanInbox(r.Context(), r.URL.Query().Get("workspace_id"))
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, value)
+	})
 	coordinatorWrite(mux, "POST /v1/workspaces/{workspace}/ticket-schedules/dispatch", func(ctx context.Context, r *http.Request, _ struct{}) (workitems.ItemPage, error) {
 		return s.DispatchTicketSchedules(ctx, r.PathValue("workspace"), time.Now().UTC())
 	})
@@ -180,6 +218,14 @@ func registerCoordinatorRoutes(mux *http.ServeMux, s *workitems.Store) {
 			return
 		}
 		writeJSON(w, 200, AttemptList{Attempts: out})
+	})
+	mux.HandleFunc("GET /v1/items/{item}/children", func(w http.ResponseWriter, r *http.Request) {
+		out, err := s.ListChildren(r.Context(), r.PathValue("item"), r.URL.Query().Get("worktree"))
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		writeJSON(w, 200, out)
 	})
 	mux.HandleFunc("GET /v1/attempts/{attempt}", func(w http.ResponseWriter, r *http.Request) {
 		out, err := s.GetAttempt(r.Context(), r.PathValue("attempt"))

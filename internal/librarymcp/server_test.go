@@ -3,6 +3,7 @@ package librarymcp
 import (
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,8 +15,13 @@ import (
 
 func connect(t *testing.T, client *library.Client, binding workitemtools.Binding) *mcp.ClientSession {
 	t.Helper()
+	return connectServer(t, NewServer(client, &binding))
+}
+
+func connectServer(t *testing.T, mcpServer *mcp.Server) *mcp.ClientSession {
+	t.Helper()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	server, err := NewServer(client, binding).Connect(t.Context(), serverTransport, nil)
+	server, err := mcpServer.Connect(t.Context(), serverTransport, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +94,37 @@ func TestWorkspaceSourceToolsAndRetiredLearning(t *testing.T) {
 	if err != nil || len(thread.Posts) != 2 || thread.Posts[1].Author != "agent/actor" {
 		t.Fatalf("thread source: %+v %v", thread, err)
 	}
+	reply := thread.Posts[1]
+	other := connect(t, client, workitemtools.Binding{WorkspaceID: w.ID, SessionID: "other"})
+	edit := &mcp.CallToolParams{Name: "post_update", Arguments: map[string]any{"id": reply.ID, "revision": reply.Revision, "content": "Corrected finding"}}
+	if result, err := other.CallTool(t.Context(), edit); err != nil || !result.IsError {
+		t.Fatalf("editing another agent's comment: %+v %v", result, err)
+	}
+	if result, err := session.CallTool(t.Context(), edit); err != nil || result.IsError {
+		t.Fatalf("editing own comment: %+v %v", result, err)
+	}
+	current, err := client.GetItem(t.Context(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := &mcp.CallToolParams{Name: "issue_update", Arguments: map[string]any{"id": item.ID, "revision": current.Revision, "title": item.Title, "state": "closed", "labels": []string{}}}
+	if result, err := other.CallTool(t.Context(), change); err != nil || !result.IsError {
+		t.Fatalf("closing another agent's issue: %+v %v", result, err)
+	}
+	plannerBinding := workitemtools.Binding{WorkspaceID: w.ID, SessionID: w.CoordinatorSessionID, Coordinator: true}
+	native := mcp.NewServer(&mcp.Implementation{Name: "native", Version: "1"}, nil)
+	native.AddReceivingMiddleware(workitemtools.NativeDelegatedSession)
+	workitemtools.Register(native, client, plannerBinding)
+	nativeSession := connectServer(t, native)
+	change.Meta = mcp.Meta{workitemtools.DelegatedSessionMetaKey: "other"}
+	if result, err := nativeSession.CallTool(t.Context(), change); err != nil || !result.IsError {
+		t.Fatalf("delegate inherited Coordinator permission: %+v %v", result, err)
+	}
+	change.Meta = nil
+	planner := connect(t, client, plannerBinding)
+	if result, err := planner.CallTool(t.Context(), change); err != nil || result.IsError {
+		t.Fatalf("Coordinator closing project issue: %+v %v", result, err)
+	}
 	result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: "ticket_create", Arguments: map[string]any{"title": "Inspect", "content": "Find evidence", "request_id": "auto-ticket"}})
 	if err != nil || result.IsError {
 		t.Fatalf("ticket issue: %+v %v", result, err)
@@ -114,6 +151,12 @@ func TestWorkspaceSourceToolsAndRetiredLearning(t *testing.T) {
 	var dependent workitems.Item
 	if err := json.Unmarshal(encoded, &dependent); err != nil || len(dependent.DependsOn) != 1 || dependent.DependsOn[0] != prerequisite.ID {
 		t.Fatalf("MCP dependencies lost: %s %v", encoded, err)
+	}
+	if result, err := other.CallTool(t.Context(), &mcp.CallToolParams{Name: "ticket_update", Arguments: map[string]any{
+		"id": dependent.ID, "revision": dependent.Revision, "title": dependent.Title,
+		"state": dependent.State, "labels": []string{}, "depends_on": []string{},
+	}}); err != nil || !result.IsError {
+		t.Fatalf("rewiring another agent's ticket: %+v %v", result, err)
 	}
 	for _, clear := range []bool{false, true} {
 		args := map[string]any{"id": dependent.ID, "revision": dependent.Revision, "title": dependent.Title, "state": dependent.State, "labels": []string{}}
@@ -176,9 +219,13 @@ func TestLibraryUnavailableDoesNotPreventMCPInitialization(t *testing.T) {
 }
 
 func TestReservedRoleToolCatalogs(t *testing.T) {
-	for _, role := range []string{"coordinator", "integrator"} {
+	for _, role := range []string{"unbound", "worker", "coordinator", "integrator"} {
 		t.Run(role, func(t *testing.T) {
-			session := connect(t, library.NewClient("http://127.0.0.1:1/v1", "", time.Second), workitemtools.Binding{WorkspaceID: "project", SessionID: role, Manager: role == "integrator"})
+			binding := workitemtools.Binding{SessionID: role, Manager: role == "integrator"}
+			if role != "unbound" {
+				binding.WorkspaceID = "project"
+			}
+			session := connect(t, library.NewClient("http://127.0.0.1:1/v1", "", time.Second), binding)
 			catalog, err := session.ListTools(t.Context(), nil)
 			if err != nil {
 				t.Fatal(err)
@@ -187,10 +234,29 @@ func TestReservedRoleToolCatalogs(t *testing.T) {
 			for _, tool := range catalog.Tools {
 				names[tool.Name] = true
 			}
-			for _, name := range []string{"issue_create", "ticket_create", "ticket_get", "ticket_worker_read"} {
+			for _, name := range []string{"issue_get", "ticket_get", "post_get", "search_work", "search_skills", "get_skill"} {
 				if !names[name] {
 					t.Fatalf("%s lacks %s", role, name)
 				}
+			}
+			for _, name := range []string{"issue_create", "ticket_create", "ticket_worker_read"} {
+				if names[name] != (role != "unbound") {
+					t.Fatalf("%s has incorrect project access: %s=%t", role, name, names[name])
+				}
+			}
+			wantCount := 23
+			switch role {
+			case "unbound":
+				wantCount = 8
+			case "integrator":
+				wantCount = 25
+			}
+			if len(names) != wantCount {
+				t.Fatalf("unexpected %s catalog: %v", role, names)
+			}
+			instructions := session.InitializeResult().Instructions
+			if instructions != InstructionsFor(&binding) || strings.Contains(instructions, "ticket_review") != binding.Manager {
+				t.Fatalf("wrong %s instructions: %s", role, instructions)
 			}
 			for _, name := range []string{"manager_inbox", "ticket_review"} {
 				if names[name] != (role == "integrator") {

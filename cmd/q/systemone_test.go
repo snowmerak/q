@@ -21,18 +21,18 @@ import (
 )
 
 func TestParseSystemOneOptions(t *testing.T) {
-	options, err := parseSystemOneOptions([]string{"--host", "127.0.0.1", "--port", "0"}, io.Discard)
+	options, err := parseSystemOneOptions("decisions", []string{"--host", "127.0.0.1", "--port", "0"}, io.Discard)
 	if err != nil || !options.hostSet || !options.portSet || options.port != 0 {
 		t.Fatalf("options = %#v, %v", options, err)
 	}
 	for _, args := range [][]string{{"--host", "localhost"}, {"--port", "-1"}, {"other"}} {
-		if _, err := parseSystemOneOptions(args, io.Discard); err == nil {
+		if _, err := parseSystemOneOptions("decisions", args, io.Discard); err == nil {
 			t.Fatalf("accepted options %q", args)
 		}
 	}
 	var help strings.Builder
-	if _, err := parseSystemOneOptions([]string{"--help"}, &help); !errors.Is(err, flag.ErrHelp) ||
-		!strings.Contains(help.String(), "q systemone start") {
+	if _, err := parseSystemOneOptions("decisions", []string{"--help"}, &help); !errors.Is(err, flag.ErrHelp) ||
+		!strings.Contains(help.String(), "q decisions start") {
 		t.Fatalf("help = %q, %v", help.String(), err)
 	}
 }
@@ -71,7 +71,7 @@ func TestRunSystemOneWithStoreServesAndStops(t *testing.T) {
 	}()
 	done := make(chan error, 1)
 	go func() {
-		done <- runSystemOneWithStore(ctx, []string{"--port", "0"}, writer, io.Discard, store)
+		done <- runSystemOneWithStore(ctx, "decisions", []string{"--port", "0"}, writer, io.Discard, store)
 		if err := writer.Close(); err != nil {
 			t.Error(err)
 		}
@@ -80,7 +80,7 @@ func TestRunSystemOneWithStoreServesAndStops(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseURL := strings.TrimSpace(strings.TrimPrefix(line, "q systemone listening on "))
+	baseURL := strings.TrimSpace(strings.TrimPrefix(line, "q decisions listening on "))
 	request, err := http.NewRequest(http.MethodGet, baseURL+"/models", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -151,7 +151,7 @@ func TestRunSystemOneWithManagedKey(t *testing.T) {
 	}()
 	done := make(chan error, 1)
 	go func() {
-		done <- runSystemOneWithStore(ctx, []string{"--port", "0"}, writer, io.Discard, store)
+		done <- runSystemOneWithStore(ctx, "decisions", []string{"--port", "0"}, writer, io.Discard, store)
 		if err := writer.Close(); err != nil {
 			t.Error(err)
 		}
@@ -160,7 +160,7 @@ func TestRunSystemOneWithManagedKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseURL := strings.TrimSpace(strings.TrimPrefix(line, "q systemone listening on "))
+	baseURL := strings.TrimSpace(strings.TrimPrefix(line, "q decisions listening on "))
 	requestModels := func(key string) int {
 		t.Helper()
 		request, err := http.NewRequest(http.MethodGet, baseURL+"/models", nil)
@@ -218,7 +218,7 @@ func TestSystemOneKeyringReloadsWhileServing(t *testing.T) {
 	server := httptest.NewServer(instance.Handler())
 	defer server.Close()
 	ctx, cancel := context.WithCancel(t.Context())
-	done := watchSystemOneKeyring(ctx, store, instance, io.Discard)
+	done := watchSystemOneKeyring(ctx, "decisions", store, instance, io.Discard)
 	defer func() { cancel(); <-done }()
 	status := func() int {
 		response, err := http.Get(server.URL + "/v1/models")

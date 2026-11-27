@@ -1,11 +1,10 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('provider API mode initializes once and model Chat override survives reload', async ({ page, request }, testInfo) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => {
-    // Studio has no favicon; its browser-generated 404 is unrelated to settings.
-    if (message.type() === 'error' && !message.location().url.endsWith('/favicon.ico')) errors.push(message.text());
+    if (message.type() === 'error') errors.push(message.text());
   });
   const settings = await (await request.get('/api/v1/settings')).json();
   const source = settings.gateway_providers.items.find(provider => provider.base_url);

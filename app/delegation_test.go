@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -69,7 +70,7 @@ func TestStoredProfileRetiredGrantsAreInactiveButNewGrantsAreRejected(t *testing
 	legacy := subagent.Profile{
 		Version: 1, Name: "legacy-reader", Role: config.AgentRoleAdvisor,
 		SystemPrompt: "Read.", Tools: []string{},
-		Delegates: []string{"builtin/scout", "builtin/griller", "builtin/planner", "builtin/executor", "builtin/coder", "builtin/reviewer", subagent.BuiltinSeniorDeveloperID},
+		Delegates: []string{"builtin/scout", "builtin/griller", "builtin/planner", "builtin/executor", "builtin/coder", "builtin/reviewer", "builtin/interviewer", subagent.BuiltinSeniorDeveloperID},
 	}
 	if err := m.customStore().Save(legacy, "workspace", nil); err != nil {
 		t.Fatal(err)
@@ -115,6 +116,47 @@ func TestConfiguredExternalDelegatesIncludesCustomProfileConnection(t *testing.T
 	value.Agents.Connections["research-acp"] = connection
 	if _, found = configuredExternalDelegates(value, t.TempDir(), registry)[definition.Info.Name]; found {
 		t.Fatal("disabled custom external connection remained available")
+	}
+}
+
+func TestExternalDelegationUsesEachProfileACPModelAndEffort(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := config.AgentConnectionConfig{Command: executable, Args: []string{"-test.run=^TestManagerACPHelperProcess$", "--", "subagent-acp-helper"}}
+	root := t.TempDir()
+	value := config.Default()
+	value.Provider.Model = "test-model"
+	value.Agents.Connections = map[string]config.AgentConnectionConfig{"wire": connection}
+	value.Agents.Roles = map[string]config.AgentConfig{
+		config.AgentRoleSearch:            {Agent: "wire", ACPSelection: config.ACPSelection{AgentModel: "fast", AgentReasoningEffort: "low"}},
+		config.AgentRoleExternalWebTester: {Agent: "wire", ACPSelection: config.ACPSelection{AgentModel: "deep", AgentReasoningEffort: "max"}},
+	}
+	settings := config.Store{Dir: t.TempDir()}
+	if err := settings.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	value, err = settings.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := ProbeACPModelSettings(t.Context(), root, "wire", connection, "deep")
+	if err != nil || options.CurrentModel != "deep" || len(options.ReasoningEfforts) != 2 || options.ReasoningEfforts[1].ID != "max" {
+		t.Fatalf("model-dependent probe: %+v %v", options, err)
+	}
+	runtime, err := configuredAgentToolRuntime(&fakeAgentTools{}, mcpconfig.RoleDefault, value, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []struct{ tool, arguments, output string }{
+		{subagent.ExternalSearchToolName, `{"query":"Read the evidence."}`, "model=fast effort=low"},
+		{subagent.ExternalWebTesterToolName, `{"request":"Verify the fixture."}`, "model=deep effort=max"},
+	} {
+		result, err := runtime.Call(t.Context(), planToolCall(profile.tool, profile.arguments))
+		if err != nil || result.IsError || !strings.Contains(result.Content, profile.output) {
+			t.Fatalf("%s delegation: %+v %v", profile.tool, result, err)
+		}
 	}
 }
 

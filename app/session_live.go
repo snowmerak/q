@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/sessionstore"
@@ -80,6 +81,7 @@ type liveSessionRequest struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	prompt      string
+	images      []ImageInput
 	compact     bool
 	emit        SessionEventSink
 	control     *SessionRunControl
@@ -178,7 +180,12 @@ func (host *SessionHost) sessionConfiguration(store workspace.Store, configured 
 	if len(configured) > 0 {
 		stable := configured[0]
 		stable.OperationID = ""
-		values = append(values, stable)
+		if stable.configuresRuntime() {
+			values = append(values, stable)
+		}
+		if stable.review.Active() {
+			values = append(values, stable.review)
+		}
 	}
 	if host.manager != nil {
 		values = append(values, host.manager.Config(), host.manager.Endpoint())
@@ -292,7 +299,7 @@ func newLiveSession(ctx context.Context, cancel context.CancelFunc, prepared *pr
 	return session
 }
 
-func (session *liveSession) execute(parent context.Context, prompt string, compact bool, emit SessionEventSink, control *SessionRunControl, operationIDs ...string) (string, error) {
+func (session *liveSession) execute(parent context.Context, prompt string, compact bool, emit SessionEventSink, control *SessionRunControl, options ...SessionOptions) (string, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -304,8 +311,9 @@ func (session *liveSession) execute(parent context.Context, prompt string, compa
 	defer stop()
 	defer cancel()
 	request := &liveSessionRequest{ctx: ctx, cancel: cancel, prompt: prompt, compact: compact, emit: emit, control: control, result: make(chan liveSessionResult, 1)}
-	if len(operationIDs) > 0 {
-		request.operationID = operationIDs[0]
+	if len(options) > 0 {
+		request.operationID = options[0].OperationID
+		request.images = options[0].Images
 	}
 	session.program.Send(request)
 	select {
@@ -501,7 +509,11 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 		}
 		if request.emit != nil {
 			store := m.execution.state.workspaceStore
-			if err := request.emit(SessionEvent{Type: "session", WorkingDirectory: store.Root, SessionID: store.SessionID, Created: m.created}); err != nil {
+			kind := "native"
+			if m.execution.state.clientIsACPRemote() {
+				kind = "acp"
+			}
+			if err := request.emit(SessionEvent{Type: "session", Kind: kind, WorkingDirectory: store.Root, SessionID: store.SessionID, Created: m.created}); err != nil {
 				m.finish(err)
 				return m, nil
 			}
@@ -532,12 +544,15 @@ func (m liveSessionModel) Update(message tea.Msg) (updatedModel tea.Model, nextC
 		// their session context. Commands capture this turn context on start.
 		parent := m.execution.state.ctx
 		m.execution.state.ctx = request.ctx
+		if project := m.execution.state.studioWorkspaceContext; project != nil {
+			m.execution.state.ctx = client.WithUsageProject(request.ctx, project.ProjectID, project.ProjectName)
+		}
 		var updated tea.Model
 		var command tea.Cmd
 		if request.compact {
 			updated, command = m.execution.state.startManualCompaction()
 		} else {
-			updated, command = m.execution.state.startSessionOperation(request.prompt, request.operationID)
+			updated, command = m.execution.state.startSessionOperation(request.prompt, request.operationID, request.images)
 		}
 		m.execution.state = updated.(model)
 		m.execution.state.ctx = parent

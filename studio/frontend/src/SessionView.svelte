@@ -3,6 +3,8 @@
   import { onMount } from 'svelte';
   import SessionTree from './sessions/SessionTree.svelte';
   import Transcript from './sessions/Transcript.svelte';
+  import ImagePicker from './workitems/ImagePicker.svelte';
+  import { appendImages, imageDataURL, imageFiles } from './workitems/images';
   import ModelTimings from './sessions/ModelTimings.svelte';
   import { loadDraft, saveDraft } from './sessions/drafts';
   import { historyPageSize, mergeHistory } from './sessions/history';
@@ -15,8 +17,8 @@
   import { apiError, requestResponse } from './api';
   import { contextPercent, formatTokenCount, shortID } from './sessions/format';
   import { RunMonitor, runStatusLabel, terminalRun } from './sessions/run-monitor';
-  import { workspaceRoleTitle, workspaceRoleDescription } from './sessions/types';
-  import type { DelegationNode, DelegationSession, FlatDelegation, Message, RegisteredSessionTree, RunEvent, RunSnapshot, SessionDetail, StudioProject, SessionType } from './sessions/types';
+  import { sessionListVisible, workspaceRoleTitle, workspaceRoleDescription } from './sessions/types';
+  import type { DelegationNode, DelegationSession, FlatDelegation, Message, RegisteredSessionTree, ResponseAction, RunEvent, RunSnapshot, SessionDetail, StudioProject, SessionType } from './sessions/types';
 
   export let openChanges: (workspaceRoot: string) => void = () => {};
   let workflowCreate: 'council' | 'composer' | null = null;
@@ -81,6 +83,11 @@
   let runStatus = '';
   let events: RunEvent[] = [];
   let activeRun: RunSnapshot | null = null;
+  let loadedRunReply = '';
+  $: finishingRun = sending && !!activeRun && terminalRun(activeRun.status);
+  $: compacting = sending && activeRun?.kind === 'compaction';
+  $: revisingResponse = sending && activeRun?.kind === 'response_change';
+  $: maintenanceRun = compacting || revisingResponse;
   $: runError = activeRun && ['failed', 'cancelled', 'interrupted'].includes(activeRun.status)
     ? activeRun.error || (activeRun.status === 'failed' ? 'The turn failed without an error detail.' : 'The turn stopped before completion.')
     : '';
@@ -113,16 +120,31 @@
     saveDraft(draftKey, prompt);
     draftKey = key;
     prompt = key ? loadDraft(key) : '';
+    imageDraft = [];
+    imageMaxEdge = 2048;
     closeActions();
   }
 
   function clearPrompt() {
     prompt = '';
+    imageDraft = [];
+    imageMaxEdge = 2048;
     saveDraft(draftKey, '');
   }
 
   function closeActions() {
     if (actionsMenu) actionsMenu.open = false;
+  }
+
+  let imageDraft: File[] = [];
+  let imageMaxEdge = 2048;
+
+  function pasteImages(event: ClipboardEvent) {
+    const files = imageFiles(event);
+    if (!files.length || sending || selectedDelegation) return;
+    event.preventDefault();
+    try { imageDraft = appendImages(imageDraft, files); }
+    catch (cause) { error = (cause as Error).message; }
   }
 
   function openFileLink(value: string) {
@@ -139,7 +161,7 @@
   const runMonitor = new RunMonitor({
     page: async (page) => {
       activeRun = page.run;
-      events = [...events, ...page.events.map(record => record.event)];
+      if (page.run.kind !== 'response_change') events = [...events, ...page.events.map(record => record.event)];
       for (const record of page.events) {
         handleRunEvent(record.event);
         if (record.event.type === 'redirect' && record.event.run_id) {
@@ -149,17 +171,29 @@
           return;
         }
       }
-      sending = !terminalRun(page.run.status);
+      sending = !terminalRun(page.run.status) || page.next_cursor < page.run.cursor || completedACP(page.run) ||
+        ((page.run.kind === 'compaction' || page.run.kind === 'response_change') && page.run.status === 'completed');
       runStatus = runStatusLabel(page.run);
     },
-    complete: async () => {
-      await Promise.all([reloadSelected(), refreshSessionListOnly(), loadDelegations()]);
+    complete: async (run, signal) => {
+      const refreshed = await reloadSelected(signal);
+      if (signal.aborted || activeRun?.id !== run.id) return;
+      if (refreshed) loadedRunReply = run.id;
+      // ACP tool and plan updates are live UI. Once the saved conversation
+      // arrives, replaying them would mask its authoritative final answer.
+      if (refreshed && completedACP(run)) events = [];
+      sending = false;
+      await Promise.all([refreshSessionListOnly(), loadDelegations()]);
     },
     retry: (cause) => {
       error = cause instanceof Error ? cause.message : 'Could not reconnect to the run';
       runStatus = 'Connection lost · retrying…';
     }
   });
+
+  function completedACP(run: RunSnapshot) {
+    return run.status === 'completed' && (run.provider_kind === 'acp' || (!run.provider_kind && !!sessionAgent));
+  }
 
   function isCurrentSession(generation: number) {
     return generation === sessionGeneration;
@@ -262,22 +296,54 @@
 
   async function compactSession() {
     if (!selected || !workspaceRoot || sending || sessionLoading) return;
+    const generation = sessionGeneration;
+    const target = { workspaceRoot, sessionID: selected.session.session_id };
     sessionLoading = true;
     error = '';
     runStatus = 'Compacting context…';
     try {
-      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/compact`, {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(target.sessionID)}/compact`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace_root: workspaceRoot })
+        body: JSON.stringify({ workspace_root: target.workspaceRoot, background: true })
       });
-      runStatus = ((await response.json()) as { status?: string }).status || 'Context compacted';
+      const run = (await response.json()) as RunSnapshot;
+      if (!isCurrentSession(generation)) return;
+      activeRun = run;
+      sending = true;
+      runStatus = runStatusLabel(run);
       events = [];
-      await reloadSelected();
+      runMonitor.start(target, run.id);
     } catch (cause) {
+      if (!isCurrentSession(generation)) return;
       error = cause instanceof Error ? cause.message : 'Could not compact the context';
       runStatus = 'Compaction failed';
     } finally {
-      sessionLoading = false;
+      if (isCurrentSession(generation)) sessionLoading = false;
+    }
+  }
+
+  async function changeResponse(action: ResponseAction, index: number, content?: string) {
+    if (!selected || selectedDelegation || !workspaceRoot || sending || sessionLoading || historyLoading || modelSaving) return;
+    const generation = sessionGeneration;
+    const target = { workspaceRoot, sessionID: selected.session.session_id };
+    sessionLoading = true;
+    error = '';
+    try {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(target.sessionID)}/responses`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace_root: target.workspaceRoot, updated_at: selected.session.updated_at, action, index, content })
+      });
+      const run = (await response.json()) as RunSnapshot;
+      if (!isCurrentSession(generation)) return;
+      activeRun = run;
+      events = [];
+      sending = true;
+      runStatus = runStatusLabel(run);
+      runMonitor.start(target, run.id);
+    } catch (cause) {
+      if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not update the response';
+    } finally {
+      if (isCurrentSession(generation)) sessionLoading = false;
     }
   }
 
@@ -314,7 +380,7 @@
       const targetID = preferredRegistration || selectedRegistration?.registration_id || sessionFromLocation();
       const legacyTarget = legacy?.[2] ? registeredSessions.find(item => item.session.type === typeFilter && item.session.session_id === decodeURIComponent(legacy[2])) : null;
       const target = legacyTarget || registeredSessions.find((registration) => registration.registration_id === targetID && !registration.issue)
-        || (!legacy?.[2] ? registeredSessions.find((registration) => !registration.issue && (typeFilter === 'all' || registration.session.type === typeFilter)) : null);
+        || (!legacy?.[2] ? registeredSessions.find((registration) => sessionListVisible(registration.kind) && !registration.issue && (typeFilter === 'all' || registration.session.type === typeFilter)) : null);
       if (target) {
         await selectRegisteredSession(target, false, approved);
         window.history.replaceState({}, '', currentPath());
@@ -341,7 +407,7 @@
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== registration.registration_id);
       if (selectedRegistration?.registration_id === registration.registration_id) {
         workflowDirty = false;
-        const next = registeredSessions.find((item) => !item.issue);
+        const next = registeredSessions.find((item) => sessionListVisible(item.kind) && !item.issue);
         if (next) await selectRegisteredSession(next, false);
         else clearSelectedSession();
         window.history.replaceState({}, '', next ? `/sessions/${encodeURIComponent(next.registration_id)}` : '/sessions');
@@ -366,7 +432,7 @@
       const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}`, { method: 'DELETE' });
       await fetch(`/api/v1/registered-sessions/${encodeURIComponent(selectedRegistration.registration_id)}`, { method: 'DELETE' });
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== selectedRegistration?.registration_id);
-      const next = registeredSessions.find((item) => !item.issue);
+      const next = registeredSessions.find((item) => sessionListVisible(item.kind) && !item.issue);
       if (next) await selectRegisteredSession(next, false);
       else clearSelectedSession();
       window.history.replaceState({}, '', next ? `/sessions/${encodeURIComponent(next.registration_id)}` : '/sessions');
@@ -514,9 +580,10 @@
   }
 
   async function sendPrompt() {
-    if (modelSaving) return;
+    if (modelSaving || maintenanceRun) return;
     const content = prompt.trim();
-    if (!selected || !workspaceRoot || !content || sessionLoading) return;
+    if (!selected || !workspaceRoot || (!content && !imageDraft.length) || sessionLoading || finishingRun) return;
+    if ((selectedDelegation || sending) && !content) return;
     const generation = sessionGeneration;
     if (selectedDelegation && delegationKind !== 'inner') return;
     if (selectedDelegation && !sending) {
@@ -539,27 +606,35 @@
       return;
     }
     if (sending && activeRun) {
+      const guidedRunID = activeRun.id;
       sessionLoading = true;
       try { await commandRun('guidance', { content }); }
       finally { if (isCurrentSession(generation)) sessionLoading = false; }
       if (isCurrentSession(generation) && !error) {
         clearPrompt();
-        runStatus = selectedDelegation ? 'Guidance sent' : 'Guidance queued…';
+        if (activeRun?.id === guidedRunID && sending) {
+          runStatus = selectedDelegation ? 'Guidance sent' : 'Guidance queued…';
+        }
       }
       return;
     }
     const target = { workspaceRoot, sessionID: selected.session.session_id };
+    const files = imageDraft;
+    const maxEdge = imageMaxEdge;
+    runMonitor.stop();
     clearPrompt();
     sending = true;
     error = '';
     runStatus = 'Starting default loop…';
     activeRun = null;
     events = [];
-    messages = [...messages, { role: 'user', content }];
     try {
-      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/messages`, {
+      const images = await Promise.all(files.map(imageDataURL));
+      if (!isCurrentSession(generation)) return;
+      messages = [...messages, { role: 'user', content, images }];
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(target.sessionID)}/messages`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ workspace_root: workspaceRoot, content })
+        body: JSON.stringify({ workspace_root: target.workspaceRoot, content, images: images.map(url => ({ data: url.split(',')[1] })), image_max_edge: images.length && maxEdge === 1600 ? maxEdge : undefined })
       });
       const run = (await response.json()) as RunSnapshot;
       if (!isCurrentSession(generation)) return;
@@ -570,6 +645,7 @@
       error = cause instanceof Error ? cause.message : 'The turn failed';
       runStatus = 'Turn failed';
       if (!prompt) { prompt = content; saveDraft(draftKey, content); }
+      if (!imageDraft.length && files.length) { imageDraft = files; imageMaxEdge = maxEdge; }
       await reloadSelected();
       if (!isCurrentSession(generation)) return;
       sending = false;
@@ -589,9 +665,11 @@
     activeRun = run;
     sending = !terminalRun(run.status);
     runStatus = runStatusLabel(run);
-    // Completed messages and thoughts are already in the durable transcript.
-    // Replaying their stream fragments would replace it with a partial tail.
-    if (terminalRun(run.status)) return;
+    if (terminalRun(run.status)) {
+      // An ACP turn may finish between loading its transcript and run status.
+      if (completedACP(run) || run.kind === 'response_change') await reloadSelected();
+      return;
+    }
     runMonitor.start(target, run.id);
   }
 
@@ -616,15 +694,17 @@
     }
   }
 
-  async function reloadSelected() {
-    if (!selected || !workspaceRoot) return;
+  async function reloadSelected(signal?: AbortSignal): Promise<boolean> {
+    if (!selected || !workspaceRoot || signal?.aborted) return false;
     const generation = sessionGeneration;
-    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}&limit=${historyPageSize}`);
-    if (!response.ok) return;
+    const limit = activeRun?.kind === 'response_change' ? Math.min(200, Math.max(historyPageSize, messages.length)) : historyPageSize;
+    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}&limit=${limit}`, { cache: 'no-store', signal });
+    if (!response.ok) return false;
     const detail = (await response.json()) as SessionDetail;
-    if (!isCurrentSession(generation)) return;
+    if (!isCurrentSession(generation) || signal?.aborted) return false;
     selected = mergeHistory(selected, detail);
     if (!selectedDelegation) messages = selected.transcript;
+    return true;
   }
 
   async function loadEarlierHistory() {
@@ -637,7 +717,10 @@
       const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?${query}`);
       const earlier = await response.json() as SessionDetail;
       if (!isCurrentSession(generation) || !selected) return;
-      if (earlier.history?.end !== before) throw new Error('Session history changed. Reopen the session to reload it.');
+      if (earlier.history?.end !== before || earlier.history_revision !== selected.history_revision) {
+        await reloadSelected();
+        return;
+      }
       selected = mergeHistory(earlier, { ...selected, transcript: messages });
       messages = selected.transcript;
     } catch (cause) {
@@ -685,6 +768,7 @@
     if (!selected || !workspaceRoot || !activeRun) return;
     error = '';
     const generation = sessionGeneration;
+    const runID = activeRun.id;
     try {
       if (selectedDelegation) {
         if (delegationKind !== 'inner') return;
@@ -696,12 +780,13 @@
         if (isCurrentSession(generation)) applyDelegationSession(value);
         return;
       }
-      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/runs/${encodeURIComponent(activeRun.id)}/commands`, {
+      const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}/runs/${encodeURIComponent(runID)}/commands`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace_root: workspaceRoot, action, ...extra })
       });
       const run = (await response.json()) as RunSnapshot;
-      if (!isCurrentSession(generation)) return;
+      // Polling can already have followed a redirect or read newer events.
+      if (!isCurrentSession(generation) || activeRun?.id !== runID || run.cursor < activeRun.cursor) return;
       activeRun = run;
       sending = !terminalRun(activeRun.status);
       runStatus = runStatusLabel(activeRun);
@@ -837,9 +922,12 @@
               </div>
             </details>
           {/if}
-          {#if !selectedDelegation}
-            {#if sending && activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else if sending}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
-            {#if sending}<button class="stop-control" title="Stop turn" aria-label="Stop turn" onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>{/if}
+          {#if !selectedDelegation && sending && !finishingRun}
+            {#if !maintenanceRun}
+              {#if activeRun?.status === 'paused'}<button title="Resume turn" aria-label="Resume turn" onclick={() => commandRun('resume')}><Play aria-hidden="true" size={15} /></button>{:else}<button title="Pause turn" aria-label="Pause turn" onclick={() => commandRun('pause')}><Pause aria-hidden="true" size={15} /></button>{/if}
+            {/if}
+            {@const stopLabel = compacting ? 'Stop compaction' : revisingResponse ? 'Stop response change' : 'Stop turn'}
+            <button class="stop-control" title={stopLabel} aria-label={stopLabel} onclick={stopTurn}><Square aria-hidden="true" size={13} fill="currentColor" /></button>
           {/if}
         </div>
       </div>
@@ -853,7 +941,11 @@
           {#if selected.active_task}<small>The task is still active. Send a message to continue.</small>{/if}
         </div>
       {/if}
-      <Transcript {messages} thoughts={selectedDelegation ? [] : selected?.transcript_thoughts || []} events={selectedDelegation ? [] : events} sessionKey={fileContext} loading={sessionLoading} hasEarlier={!selectedDelegation && !!selected?.history?.start} loadingEarlier={historyLoading} onearlier={loadEarlierHistory} onfile={openFileLink} />
+      <Transcript {messages} thoughts={selectedDelegation ? [] : selected?.transcript_thoughts || []} events={selectedDelegation ? [] : events} sessionKey={fileContext}
+        historyRevision={selected.history_revision || ''} useSavedReply={!!activeRun && loadedRunReply === activeRun.id}
+        loading={sessionLoading} hasEarlier={!selectedDelegation && !!selected?.history?.start} loadingEarlier={historyLoading}
+        onearlier={loadEarlierHistory} onfile={openFileLink} onresponse={selectedDelegation ? undefined : changeResponse}
+        responseActionsDisabled={sending || sessionLoading || historyLoading || modelSaving} canRegenerate={!sessionAgent} />
       {#if !selectedDelegation && activeRun?.pending_question}
         <section class="run-question" aria-labelledby="run-question-title">
           <div><span>Q NEEDS INPUT</span><h3 id="run-question-title">{activeRun.pending_question.question}</h3>{#if activeRun.pending_question.context}<p>{activeRun.pending_question.context}</p>{/if}</div>
@@ -871,16 +963,25 @@
       {:else}
         <div class="composer-wrap">
           <div class="composer">
-            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} placeholder={sending ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
-            <button class="send-button" title={sending ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || !prompt.trim()}><ArrowUp aria-hidden="true" size={17} /></button>
+            <textarea bind:value={prompt} oninput={(event) => saveDraft(draftKey, event.currentTarget.value)} aria-label="Message Q" onkeydown={submitFromKeyboard} onpaste={pasteImages} placeholder={sending && !finishingRun && !maintenanceRun ? 'Guide the current turn…' : selectedRegistration?.kind === 'coordinator' ? 'Describe the work to plan and delegate…' : workspaceRoleTitle(selectedRegistration?.kind) ? 'Discuss results and review changes…' : selectedRegistration?.kind === 'chat' ? 'Message Q…' : 'Ask Q to work in this repository…'} rows="3" disabled={sessionLoading}></textarea>
+            <button class="send-button" title={sending && !finishingRun && !maintenanceRun ? 'Guide current turn' : 'Send message'} onclick={sendPrompt} disabled={sessionLoading || modelSaving || finishingRun || maintenanceRun || (!prompt.trim() && !imageDraft.length)}><ArrowUp aria-hidden="true" size={17} /></button>
           </div>
           <div class="composer-footer">
+            {#if !selectedDelegation}<ImagePicker bind:files={imageDraft} disabled={sending || sessionLoading} onerror={value => error = value} />{/if}
+            {#if imageDraft.length}
+              <label class="image-resolution"><span>Image resolution</span>
+                <select bind:value={imageMaxEdge} disabled={sending || sessionLoading}>
+                  <option value={2048}>Standard · 2,048 px</option>
+                  <option value={1600}>Smaller · 1,600 px</option>
+                </select>
+              </label>
+            {/if}
             {#if !selectedDelegation && selected.session.session_id === selectedRegistration?.session.session_id && selected.workspace_root === workspaceRoot}
               {#key `${workspaceRoot}/${selected.session.session_id}`}
                 <SessionModelPicker {workspaceRoot} sessionID={selected.session.session_id} disabled={sending || sessionLoading} bind:saving={modelSaving} bind:agent={sessionAgent} />
               {/key}
             {/if}
-            <p>{sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.name || workspaceRoleTitle(selectedRegistration?.kind) : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
+            <p>{maintenanceRun ? 'Send after the current operation finishes' : finishingRun ? 'Loading the final reply…' : sending ? 'Enter to redirect the current work with guidance' : 'Enter to send'} · Shift+Enter for a new line · {workspaceRoleTitle(selectedRegistration?.kind) ? selectedProject?.name || workspaceRoleTitle(selectedRegistration?.kind) : selectedRegistration?.kind === 'chat' ? 'Personal chat' : workspaceRoot}</p>
           </div>
         </div>
       {/if}
@@ -901,5 +1002,7 @@
 
 <style>
   .workflow-panel { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  .image-resolution { display: flex; align-items: center; gap: 6px; color: var(--subtle); font-size: var(--type-small); }
+  .image-resolution select { width: auto; }
   @media(max-width:800px) { .workflow-panel { min-height:560px; overflow:visible; } }
 </style>

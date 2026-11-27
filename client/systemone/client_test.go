@@ -6,10 +6,64 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/snowmerak/decisions"
 )
+
+func TestListModelsUsesProviderRegex(t *testing.T) {
+	for _, fixture := range []struct {
+		name    string
+		api     decisions.API
+		catalog string
+	}{
+		{"native", decisions.SystemOneAPI, `{"models":[{"name":"other"},{"name":"gpt-6-luna"}]}`},
+		{"openai", decisions.DecisionAPI, `{"data":[{"id":"other"},{"id":"gpt-6-luna"}]}`},
+		{"gemini", decisions.GeminiDecisionAPI, `{"models":[{"name":"models/other"},{"name":"models/gpt-6-luna"},{"name":"models/chat","supportedGenerationMethods":["generateContent"]}]}`},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			transport := testRoundTripper(func(request *http.Request) (*http.Response, error) {
+				if request.Method != http.MethodGet || request.URL.Path != "/v1/models" {
+					t.Fatalf("unexpected upstream request: %s %s", request.Method, request.URL.Path)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(fixture.catalog))}, nil
+			})
+			for _, filter := range []struct {
+				pattern string
+				want    []string
+			}{
+				{"", []string{"other", "gpt-6-luna"}},
+				{`^gpt-6-luna$`, []string{"gpt-6-luna"}},
+				{`^$`, nil},
+			} {
+				client, err := New(Config{API: fixture.api, BaseURL: "https://api.openai.com/v1", ModelFilterRegex: filter.pattern, HTTPClient: &http.Client{Transport: transport}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				catalog, err := client.ListModels(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				got := make([]string, 0, len(catalog.Models))
+				for _, model := range catalog.Models {
+					got = append(got, model.Name)
+				}
+				if !slices.Equal(got, filter.want) {
+					t.Fatalf("models with %q = %v, want %v", filter.pattern, got, filter.want)
+				}
+			}
+		})
+	}
+}
+
+type testRoundTripper func(*http.Request) (*http.Response, error)
+
+func (transport testRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport(request)
+}
 
 func TestEvaluateSendsNativeQuestionsAndReadsAnswers(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

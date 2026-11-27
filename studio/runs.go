@@ -23,6 +23,7 @@ import (
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
@@ -35,10 +36,17 @@ const (
 	maximumRunEventPage  = 256
 	maximumRunModelCalls = 32
 	maximumRunWait       = 30 * time.Second
+	compactionRunKind    = "compaction"
 )
+
+var errSessionRunActive = errors.New("the selected session already has a running turn")
 
 type controlledSessionRunner interface {
 	RunControlled(context.Context, workspace.Store, string, string, app.SessionEventSink, *app.SessionRunControl) error
+}
+
+type sessionOptionsRunner interface {
+	RunWithOptions(context.Context, workspace.Store, string, string, app.SessionOptions, app.SessionEventSink) error
 }
 
 type studioRunQuestion struct {
@@ -54,6 +62,9 @@ type studioRunSnapshot struct {
 	ID              string             `json:"id"`
 	SessionID       string             `json:"session_id"`
 	RequestID       string             `json:"request_id,omitempty"`
+	ProviderKind    string             `json:"provider_kind,omitempty"`
+	Kind            string             `json:"kind,omitempty"`
+	StatusDetail    string             `json:"status_detail,omitempty"`
 	Status          string             `json:"status"`
 	Outcome         string             `json:"outcome,omitempty"`
 	Error           string             `json:"error,omitempty"`
@@ -165,6 +176,26 @@ func (service *sessionRunService) start(root, sessionID, prompt string, causes .
 }
 
 func (service *sessionRunService) startOperation(root, sessionID, prompt, operationID string, causes ...context.Context) (*studioRun, error) {
+	return service.startTurn(root, sessionID, prompt, operationID, nil, 0, causes...)
+}
+
+func (service *sessionRunService) startTurn(root, sessionID, prompt, operationID string, images []app.ImageInput, imageMaxEdge int, causes ...context.Context) (*studioRun, error) {
+	return service.startRun(root, sessionID, studioRunInput{prompt: prompt, operationID: operationID, images: images, imageMaxEdge: imageMaxEdge}, causes...)
+}
+
+func (service *sessionRunService) startCompaction(root, sessionID string, cause context.Context) (*studioRun, error) {
+	return service.startRun(root, sessionID, studioRunInput{kind: compactionRunKind}, cause)
+}
+
+type studioRunInput struct {
+	prompt, operationID string
+	images              []app.ImageInput
+	imageMaxEdge        int
+	kind                string
+	responseChange      *app.SessionResponseChange
+}
+
+func (service *sessionRunService) startRun(root, sessionID string, input studioRunInput, causes ...context.Context) (*studioRun, error) {
 	if err := (workspace.Store{Root: root, SessionID: sessionID}).RequireInteraction(); err != nil {
 		return nil, err
 	}
@@ -178,23 +209,32 @@ func (service *sessionRunService) startOperation(root, sessionID, prompt, operat
 	if _, err := store.Load(); err != nil {
 		return nil, err
 	}
-	prompt = strings.TrimSpace(prompt)
-	if prompt == "" {
+	input.prompt = strings.TrimSpace(input.prompt)
+	if len(input.images) != 0 {
+		if _, ok := service.runner.(sessionOptionsRunner); !ok {
+			return nil, errors.New("session runtime does not accept images")
+		}
+	}
+	if input.kind == "" && input.prompt == "" && len(input.images) == 0 {
 		return nil, errors.New("content is required")
 	}
-	if len(prompt) > subagent.MaximumDelegatePromptBytes {
+	if len(input.prompt) > subagent.MaximumDelegatePromptBytes {
 		return nil, fmt.Errorf("content must not exceed %d bytes", subagent.MaximumDelegatePromptBytes)
 	}
 
 	key := sessionRunKey(root, sessionID)
 	service.mu.Lock()
 	if activeID := service.active[key]; activeID != "" {
-		if existing := service.runs[studioRunKey(root, sessionID, activeID)]; operationID != "" && existing != nil && existing.snapshotCopy().OperationID == operationID {
-			service.mu.Unlock()
-			return existing, nil
+		if existing := service.runs[studioRunKey(root, sessionID, activeID)]; existing != nil {
+			snapshot := existing.snapshotCopy()
+			if input.kind == compactionRunKind && snapshot.Kind == compactionRunKind ||
+				input.operationID != "" && snapshot.OperationID == input.operationID {
+				service.mu.Unlock()
+				return existing, nil
+			}
 		}
 		service.mu.Unlock()
-		return nil, errors.New("the selected session already has a running turn")
+		return nil, errSessionRunActive
 	}
 	select {
 	case <-service.ctx.Done():
@@ -208,8 +248,10 @@ func (service *sessionRunService) startOperation(root, sessionID, prompt, operat
 		return nil, err
 	}
 	cause := service.ctx
+	var review workitemtools.ReviewAssignment
 	if len(causes) > 0 {
 		cause = diagnostics.Inherit(cause, causes[0])
+		review = workitemtools.AssignedReview(causes[0])
 	}
 	if diagnostics.RequestID(cause) == "" {
 		cause = diagnostics.WithRequestID(cause, "")
@@ -219,34 +261,39 @@ func (service *sessionRunService) startOperation(root, sessionID, prompt, operat
 		service.mu.Unlock()
 		return nil, err
 	}
-	run.snapshot.OperationID = operationID
+	run.snapshot.OperationID = input.operationID
+	run.snapshot.Kind = input.kind
+	if input.kind != "" {
+		run.control = nil
+	}
 	if err := run.persistSnapshotLocked(); err != nil {
 		service.mu.Unlock()
 		_ = run.close()
 		return nil, err
 	}
+	runContext, cancel := context.WithCancel(service.ctx)
+	run.cancel = cancel
 	service.runs[studioRunKey(root, sessionID, runID)] = run
 	service.active[key] = runID
 	service.latestIDs[key] = runID
 	service.wg.Add(1)
 	service.mu.Unlock()
-	go service.execute(run, prompt)
+	go service.execute(runContext, run, input, review)
 	return run, nil
 }
 
-func (service *sessionRunService) execute(run *studioRun, prompt string) {
+func (service *sessionRunService) execute(runContext context.Context, run *studioRun, input studioRunInput, review workitemtools.ReviewAssignment) {
 	defer service.wg.Done()
+	defer run.cancel()
 	started := time.Now()
 	logger := service.logger.With("session_id", run.store.SessionID, "run_id", run.snapshot.ID)
-	runContext := diagnostics.WithRequestID(service.ctx, run.snapshot.RequestID)
+	runContext = diagnostics.WithRequestID(runContext, run.snapshot.RequestID)
+	if review.Active() && review.OperationID == run.snapshot.OperationID {
+		runContext = workitemtools.WithReviewAssignment(runContext, review)
+	}
 	runContext = diagnostics.WithLogger(runContext, logger)
 	logger = diagnostics.Logger(runContext)
 	logger.Info("studio.run.started")
-	runContext, cancel := context.WithCancel(runContext)
-	run.mu.Lock()
-	run.cancel = cancel
-	run.mu.Unlock()
-	defer cancel()
 	runContext = client.WithModelCallObserver(runContext, func(timing client.ModelCallTiming) {
 		event := app.SessionEvent{Type: "model_call", RunID: run.snapshot.ID, ModelCall: &timing}
 		if err := run.append(event); err != nil {
@@ -288,14 +335,17 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 		return nil
 	}
 	var runErr error
-	if withOptions, ok := service.runner.(interface {
-		RunWithOptions(context.Context, workspace.Store, string, string, app.SessionOptions, app.SessionEventSink) error
-	}); ok && run.snapshot.OperationID != "" {
-		runErr = withOptions.RunWithOptions(runContext, run.store, run.store.SessionID, prompt, app.SessionOptions{OperationID: run.snapshot.OperationID, Control: run.control}, emit)
+	if input.kind == compactionRunKind {
+		runErr = service.executeCompaction(runContext, run, emit)
+	} else if input.responseChange != nil {
+		runErr = service.executeResponseChange(runContext, run.store, *input.responseChange, emit)
+	} else if withOptions, ok := service.runner.(sessionOptionsRunner); ok && (input.operationID != "" || len(input.images) != 0) {
+		options := app.SessionOptions{OperationID: input.operationID, Control: run.control, Images: input.images, ImageMaxEdge: input.imageMaxEdge}
+		runErr = withOptions.RunWithOptions(runContext, run.store, run.store.SessionID, input.prompt, options, emit)
 	} else if controlled, ok := service.runner.(controlledSessionRunner); ok {
-		runErr = controlled.RunControlled(runContext, run.store, run.store.SessionID, prompt, emit, run.control)
+		runErr = controlled.RunControlled(runContext, run.store, run.store.SessionID, input.prompt, emit, run.control)
 	} else {
-		runErr = service.runner.Run(runContext, run.store, run.store.SessionID, prompt, emit)
+		runErr = service.runner.Run(runContext, run.store, run.store.SessionID, input.prompt, emit)
 	}
 	// Keep persistence failures even if the runner only returns its resulting
 	// cancellation. Cancellation alone does not mean Studio is shutting down.
@@ -312,6 +362,13 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 		if service.ctx.Err() != nil {
 			typeName = "cancelled"
 			detail = "Turn stopped because studio is shutting down: " + detail
+		} else if input.kind != "" && errors.Is(runContext.Err(), context.Canceled) {
+			typeName = "cancelled"
+			if input.kind == compactionRunKind {
+				detail = "Context compaction was stopped"
+			} else {
+				detail = "Response change was stopped"
+			}
 		}
 		if err := run.append(app.SessionEvent{Type: typeName, RunID: run.snapshot.ID, Detail: detail}); err != nil {
 			logger.Error("studio.persistence.failed", "event_type", typeName, "error", err)
@@ -358,6 +415,24 @@ func (service *sessionRunService) execute(run *studioRun, prompt string) {
 		return
 	}
 	_ = run.reopenAndAppend(app.SessionEvent{Type: "redirect", RunID: next.snapshot.ID, Detail: "Continued with user guidance"})
+}
+
+func (service *sessionRunService) executeCompaction(ctx context.Context, run *studioRun, emit app.SessionEventSink) error {
+	compactor, ok := service.runner.(sessionCompactor)
+	if !ok {
+		return app.ErrSessionRuntimeUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := emit(app.SessionEvent{Type: "session", SessionID: run.store.SessionID}); err != nil {
+		return err
+	}
+	status, err := compactor.Compact(ctx, workspace.Store{Root: run.root}, run.store.SessionID)
+	if err != nil {
+		return err
+	}
+	return emit(app.SessionEvent{Type: "result", Outcome: "succeeded", Detail: status})
 }
 
 func (service *sessionRunService) latest(root, sessionID string) (*studioRun, error) {
@@ -652,6 +727,7 @@ func (run *studioRun) applyEventLocked(event app.SessionEvent, now time.Time) {
 	switch event.Type {
 	case "session":
 		run.snapshot.Status = "running"
+		run.snapshot.ProviderKind = event.Kind
 	case "question":
 		run.snapshot.Status = "waiting"
 		run.snapshot.PendingQuestion = &studioRunQuestion{
@@ -681,6 +757,9 @@ func (run *studioRun) applyEventLocked(event app.SessionEvent, now time.Time) {
 		}
 	case "result":
 		run.snapshot.Outcome = event.Outcome
+		if run.snapshot.Kind != "" {
+			run.snapshot.StatusDetail = event.Detail
+		}
 		run.snapshot.PendingQuestion = nil
 		if run.guidance != "" {
 			run.snapshot.Status = "redirecting"
@@ -955,7 +1034,17 @@ func (service *sessionsService) serveRunCommand(writer http.ResponseWriter, requ
 		writeAPIError(writer, http.StatusNotFound, errors.New("studio run does not exist"))
 		return
 	}
-	if run.control == nil || terminalRunStatus(run.snapshotCopy().Status) {
+	snapshot := run.snapshotCopy()
+	if (snapshot.Kind == compactionRunKind || snapshot.Kind == responseChangeRunKind) && !terminalRunStatus(snapshot.Status) && run.cancel != nil {
+		if strings.TrimSpace(input.Action) != "cancel" {
+			writeAPIError(writer, http.StatusConflict, errors.New("this operation only supports cancellation"))
+			return
+		}
+		run.cancel()
+		writeJSON(writer, http.StatusOK, run.snapshotCopy())
+		return
+	}
+	if run.control == nil || terminalRunStatus(snapshot.Status) {
 		writeAPIError(writer, http.StatusConflict, errors.New("studio run is no longer active"))
 		return
 	}

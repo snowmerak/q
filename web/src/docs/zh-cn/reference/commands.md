@@ -24,7 +24,7 @@ toc:
 | `/learn [on\|off\|status]` | 检查点或控制此工作区的持久学习。 |
 | `/model` | 分配模型并配置回退组。 |
 | `/gateway` | 配置提供商和 Gateway 监听设置。 |
-| `/systemone` | 配置 System One 提供商、decision 模型、密钥和监听设置。 |
+| `/decisions` | 配置 Decisions 提供商、decision 模型、密钥和监听设置。 |
 | `/library` | 配置全局 Library 监听设置。 |
 | `/loom` | 查看 Loom 存储并配置垃圾回收。 |
 | `/ignore` | 编辑 `.qignore` 中的工作区发现规则。 |
@@ -43,8 +43,8 @@ toc:
 | `q studio [--host <ip>] [--port <port>] [--no-open]` | 启动内置 Studio Web 界面。默认使用 `127.0.0.1` 和随机端口。 |
 | `q gateway` | 在 Studio 中打开 Gateway 提供商和监听设置。 |
 | `q gateway start` | 启动兼容 OpenAI 的 Gateway。 |
-| `q systemone` | 在 Studio 中打开 System One 提供商、decision 模型和密钥。 |
-| `q systemone start [--host <ip>] [--port <port>]` | 启动 System One decision API。 |
+| `q decisions` | 在 Studio 中打开 Decisions 提供商、decision 模型和密钥。 |
+| `q decisions start [--host <ip>] [--port <port>]` | 启动 Decisions API。 |
 | `q library` | 在 Studio 中打开全局 Library 监听设置。 |
 | `q library start` | 让全局 Library 作为前台服务持续运行。 |
 | `q memory` | 让 Workspace Memory 独立运行。 |

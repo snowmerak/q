@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/library"
 )
 
@@ -35,13 +36,13 @@ func TestNPMACPLibraryLookupIntegration(t *testing.T) {
 			var calls atomic.Int32
 			const marker = "Q_LIBRARY_LOOKUP_7d6b3"
 			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				if request.Method != http.MethodPost || request.URL.Path != "/v1/skills/search" {
+				if request.Method != http.MethodPost || request.URL.Path != "/v1/work/search" {
 					http.NotFound(writer, request)
 					return
 				}
 				calls.Add(1)
 				writer.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(writer).Encode(library.SkillSearchResponse{Total: 1, Hits: []library.SkillSearchHit{{ID: "global/integration", Title: "Integration skill", Scope: "global", Description: marker}}})
+				_ = json.NewEncoder(writer).Encode(library.WorkSearchResponse{Total: 1, Mode: "lexical", Hits: []library.WorkSearchHit{{WorkspaceID: "project", ItemID: "integration", Kind: "issue", Title: "Integration issue", Snippet: marker}}})
 			}))
 			defer server.Close()
 			address, _ := url.Parse(server.URL)
@@ -50,7 +51,7 @@ func TestNPMACPLibraryLookupIntegration(t *testing.T) {
 			if err := (library.ConfigStore{Dir: dir}).Save(library.Config{Host: "127.0.0.1", Port: port}); err != nil {
 				t.Fatal(err)
 			}
-			command.mcpServers, err = acpLibraryServers(dir)
+			command.mcpServers, err = acpLibraryServers(dir, &workitemtools.Binding{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -78,7 +79,7 @@ func TestNPMACPLibraryLookupIntegration(t *testing.T) {
 					break
 				}
 			}
-			answer, err := remote.promptText(ctx, "Use the q-library MCP search_skills tool with query 'library integration'. Reply with only the description of its first result. Do not read files, execute commands, or call other tools.")
+			answer, err := remote.promptText(ctx, "Use the q-library MCP search_work tool with query 'library integration', mode 'lexical' and all:true. Reply with only the snippet of its first result. Do not read files, execute commands, or call other tools.")
 			if err != nil {
 				t.Fatal(err)
 			}

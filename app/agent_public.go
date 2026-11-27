@@ -3,6 +3,7 @@ package app
 import (
 	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/workspace"
 )
 
@@ -75,6 +76,14 @@ func (e AgentEvent) Compaction() (AgentContextCompaction, bool) {
 	return *e.compaction, true
 }
 
+// PromptUsage reports a model call's input count before subsequent history changes.
+func (e AgentEvent) PromptUsage() (memory.PromptUsage, bool) {
+	if e.promptUsage == nil {
+		return memory.PromptUsage{}, false
+	}
+	return *e.promptUsage, true
+}
+
 // ContextReplacement reports a repaired message that the host should use when
 // it persists the transcript.
 func (e AgentEvent) ContextReplacement() (AgentContextReplacement, bool) {
@@ -83,6 +92,9 @@ func (e AgentEvent) ContextReplacement() (AgentContextReplacement, bool) {
 	}
 	return *e.contextReplace, true
 }
+
+// ToolTokenEstimate reports the estimated cost of the active tool catalog before a request.
+func (e AgentEvent) ToolTokenEstimate() int { return e.toolTokenEstimate }
 
 // StreamDelta reports a partial thinking or response fragment.
 func (e AgentEvent) StreamDelta() (AgentStreamDelta, bool) {

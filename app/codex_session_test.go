@@ -19,8 +19,8 @@ import (
 	"github.com/snowmerak/q/workspace"
 )
 
-// This subprocess speaks the actual app-server stdio protocol. Its rollout
-// files survive a provider restart; no external Codex account or model is used.
+// This subprocess speaks the app-server stdio protocol and keeps ephemeral
+// threads in memory. It uses no external Codex account or model.
 func TestCodexSessionServerProcess(t *testing.T) {
 	directory := os.Getenv("Q_TEST_CODEX_SESSION_SERVER")
 	if directory == "" {
@@ -29,6 +29,7 @@ func TestCodexSessionServerProcess(t *testing.T) {
 	encoder := json.NewEncoder(os.Stdout)
 	decoder := json.NewDecoder(os.Stdin)
 	turn := 0
+	threads := make(map[string]bool)
 	for {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
@@ -63,20 +64,15 @@ func TestCodexSessionServerProcess(t *testing.T) {
 		case "config/read":
 			result = map[string]any{"config": map[string]any{}}
 		case "thread/start":
-			if request.Params["ephemeral"] != false {
-				t.Fatal("thread/start must be durable")
+			if request.Params["ephemeral"] != true {
+				t.Fatal("thread/start must be ephemeral")
 			}
-			file, err := os.CreateTemp(directory, "thread-")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := file.Close(); err != nil {
-				t.Fatal(err)
-			}
-			result = map[string]any{"thread": map[string]any{"id": filepath.Base(file.Name())}}
+			id := fmt.Sprintf("thread-%d-%d", os.Getpid(), len(threads)+1)
+			threads[id] = true
+			result = map[string]any{"thread": map[string]any{"id": id}}
 		case "thread/resume":
 			id := request.Params["threadId"].(string)
-			if _, err := os.Stat(filepath.Join(directory, id)); err != nil {
+			if !threads[id] {
 				rpcError = map[string]any{"code": -32600, "message": "no rollout found for thread id " + id}
 			} else {
 				result = map[string]any{"thread": map[string]any{"id": id}}
@@ -116,7 +112,7 @@ func TestCodexSessionServerProcess(t *testing.T) {
 
 type codexChatOnlyClient struct{ chatClient }
 
-func TestCodexSessionResumesAcrossRestartsAndReplacesMissingThread(t *testing.T) {
+func TestCodexEphemeralSessionReusesLoadedThreadAndRebuildsAcrossRestarts(t *testing.T) {
 	for _, streaming := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stream=%v", streaming), func(t *testing.T) {
 			executable, err := os.Executable()
@@ -171,23 +167,25 @@ func TestCodexSessionResumesAcrossRestartsAndReplacesMissingThread(t *testing.T)
 			m, closeRuntime := start()
 			m = runTerminalTestTurn(t, m, "first question")
 			first := assertSaved(m)
+			m = runTerminalTestTurn(t, m, "same process question")
+			if assertSaved(m) != first {
+				t.Fatal("loaded ephemeral thread was replaced")
+			}
 			closeRuntime()
 			m, closeRuntime = start()
 			if m.conversationID != first {
 				t.Fatalf("restored %q, want %q", m.conversationID, first)
 			}
 			m = runTerminalTestTurn(t, m, "second question")
-			if assertSaved(m) != first {
-				t.Fatal("restart replaced a live thread")
+			second := assertSaved(m)
+			if second == first {
+				t.Fatal("restart retained a lost ephemeral thread")
 			}
 			closeRuntime()
-			if err := os.Remove(filepath.Join(directory, first)); err != nil {
-				t.Fatal(err)
-			}
 			m, closeRuntime = start()
 			m = runTerminalTestTurn(t, m, "third question")
 			replacement := assertSaved(m)
-			if replacement == first {
+			if replacement == second {
 				t.Fatal("missing thread was not replaced")
 			}
 			closeRuntime()
@@ -196,8 +194,8 @@ func TestCodexSessionResumesAcrossRestartsAndReplacesMissingThread(t *testing.T)
 				t.Fatal("replacement ID was not restored")
 			}
 			m = runTerminalTestTurn(t, m, "fourth question")
-			if assertSaved(m) != replacement {
-				t.Fatal("replacement thread was not reused")
+			if assertSaved(m) == replacement {
+				t.Fatal("replacement ephemeral thread survived a restart")
 			}
 			closeRuntime()
 			trace, err := os.ReadFile(filepath.Join(directory, "requests.jsonl"))
@@ -220,12 +218,12 @@ func TestCodexSessionResumesAcrossRestartsAndReplacesMissingThread(t *testing.T)
 					resumes++
 				case "thread/inject_items":
 					injections++
-					if !strings.Contains(string(request.Params["items"]), "first question") || !strings.Contains(string(request.Params["items"]), "second question") {
+					if !strings.Contains(string(request.Params["items"]), "first question") || !strings.Contains(string(request.Params["items"]), "same process question") {
 						t.Fatal("recreated thread lost prior history")
 					}
 				}
 			}
-			if starts != 2 || resumes != 3 || injections != 1 {
+			if starts != 4 || resumes != 3 || injections != 3 {
 				t.Fatalf("starts=%d resumes=%d injections=%d", starts, resumes, injections)
 			}
 		})

@@ -36,6 +36,12 @@ type Request struct {
 	UpdatedAt      time.Time `json:"updated_at"`
 }
 
+// MergeCandidate identifies the exact merge computed for an approved attempt.
+type MergeCandidate struct {
+	Target string `json:"target"`
+	Commit string `json:"commit"`
+}
+
 func (r Request) Final() bool {
 	return r.Status == StatusMerged || r.Status == StatusClosed
 }

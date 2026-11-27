@@ -21,10 +21,10 @@ Open **Settings → Subagents** in Studio to inspect built-in definitions and ma
 
 The public built-in IDs are:
 
-- `builtin/interviewer`
 - `builtin/manager`
 - `builtin/senior-developer`
 - `builtin/junior-developer`
+- `builtin/code-reviewer`
 - `builtin/research`
 - `builtin/web-search`
 - `builtin/web-tester`

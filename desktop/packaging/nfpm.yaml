@@ -1,0 +1,35 @@
+# desktopbuild resolves these inputs; Wails packages this complete template.
+name: q-studio
+arch: ${GOARCH}
+platform: linux
+version: 0.4.1
+maintainer: Q contributors
+description: Workspace coding agent
+homepage: https://github.com/snowmerak/q
+license: Unspecified
+contents:
+  - src: ./bin/q-studio
+    dst: /usr/lib/q-studio/q-studio
+    file_info:
+      mode: 0755
+  - src: ./bin/q-engine
+    dst: /usr/lib/q-studio/q-engine
+    file_info:
+      mode: 0755
+  - src: /usr/lib/q-studio/q-studio
+    dst: /usr/bin/q-studio
+    type: symlink
+  - src: ./assets/appicon.png
+    dst: /usr/share/icons/hicolor/64x64/apps/q-studio.png
+  - src: ./assets/q-studio.desktop
+    dst: /usr/share/applications/ne.saturday.q-studio.desktop
+  - src: ./assets/q-studio-legacy.desktop
+    dst: /usr/share/applications/q-studio.desktop
+depends:
+  - libgtk-4-1
+  - libwebkitgtk-6.0-4
+overrides:
+  rpm:
+    depends:
+      - gtk4
+      - webkitgtk6.0

@@ -1,13 +1,18 @@
 <script lang="ts">
   import Markdown from '../Markdown.svelte';
+  import { assetURL } from './images';
 
   export let result: unknown;
+  export let workspaceID: string;
+
+  type VerificationFile = { id: string; name: string; mime: string };
 
   const fields = [
     { key: 'summary', label: 'Summary' },
     { key: 'report', label: 'Report' },
     { key: 'findings', label: 'Findings' },
     { key: 'verification', label: 'Verification' },
+    { key: 'artifacts', label: 'Reported artifacts' },
     { key: 'blocker', label: 'Blocker' }
   ];
 
@@ -22,9 +27,22 @@
     }
     return [];
   });
+  $: files = Array.isArray(record.verification_files)
+    ? record.verification_files.filter((file): file is VerificationFile => !!file && typeof file.name === 'string' && typeof file.mime === 'string' && /^[0-9a-f]{64}$/.test(file.id))
+    : [];
 </script>
 
 <div class="attempt-result">
+  {#if files.length}
+    <section class="result-section" aria-label="Verification files">
+      <h4>Verification files</h4>
+      <ul>{#each files as file}
+        <li><a href={assetURL(workspaceID, file.id)} target="_blank" rel="noreferrer">{file.name}</a>
+          {#if file.mime.startsWith('image/')}<img src={assetURL(workspaceID, file.id)} alt={file.name} loading="lazy" />{/if}
+        </li>
+      {/each}</ul>
+    </section>
+  {/if}
   {#if typeof result === 'string'}
     <Markdown content={result} />
   {:else if sections.length}
@@ -45,6 +63,7 @@
 </div>
 
 <style>
+  img { display: block; max-width: min(100%, 460px); max-height: 360px; object-fit: contain; }
   .attempt-result { display: grid; min-width: 0; gap: 16px; }
   .result-section { min-width: 0; overflow-x: auto; }
   h4 { margin: 0 0 8px; color: var(--muted); font-size: var(--type-small); font-weight: 600; }

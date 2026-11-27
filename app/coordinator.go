@@ -15,14 +15,15 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/archiveembed"
-	"github.com/snowmerak/q/browsercontrol"
 	"github.com/snowmerak/q/change"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/coordinator"
 	"github.com/snowmerak/q/gitwork"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/librarymcp"
 	"github.com/snowmerak/q/internal/workitemtools"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/sessionstore"
@@ -101,17 +102,18 @@ func (host *SessionHost) coordinatorCandidates(ctx context.Context, project work
 		if !found {
 			continue
 		}
+		targets, err := (workspace.Store{Root: member.DefinitionRoot}).LoadSubagentTargets()
+		if err != nil {
+			return nil, err
+		}
+		definition = subagent.ExecutionDefinition(value, definition, targets)
+		if item.RequestedRole != "" && config.CanonicalAgentRole(definition.Info.Role) != item.RequestedRole {
+			continue
+		}
 		if item.ExecutionMode == "report" && definition.Info.MutatesWorkspace {
 			continue
 		}
 		var assignment any
-		workspaceModels, err := (workspace.Store{Root: member.DefinitionRoot}).LoadModelConfig()
-		if err != nil {
-			return nil, err
-		}
-		effective := model{conversationState: conversationState{config: value}}
-		effective.workspaceModel = workspaceModels
-		memberConfig := effective.activeConfig()
 		if definition.Info.Kind == subagent.AgentKindExternal {
 			if definition.Connection == "" {
 				id, _, available := value.ExternalAgentConnection(definition.Info.Role)
@@ -125,7 +127,32 @@ func (host *SessionHost) coordinatorCandidates(ctx context.Context, project work
 				continue
 			}
 			assignment = connection
+		} else if definition.Target != nil {
+			memberConfig, err := ticketDefaultConfig(value, member.DefinitionRoot, definition.Target)
+			if err != nil {
+				return nil, err
+			}
+			selected := definition.Target.ModelConfig(memberConfig.Provider.Model)
+			candidates, err := memberConfig.ModelCandidates(definition.Info.Name, selected)
+			if err != nil {
+				continue
+			}
+			provider := memberConfig.Provider
+			provider.Model, provider.ReasoningEffort, provider.ContextWindow = selected.Model, selected.ReasoningEffort, 0
+			modes := make(map[string]string, len(candidates))
+			for _, candidate := range candidates {
+				modes[candidate.Model] = memberConfig.ModelAPIMode(candidate.Model)
+			}
+			assignment = struct {
+				Provider   config.ProviderConfig
+				Candidates []config.ModelCandidateConfig
+				APIModes   map[string]string
+			}{provider, candidates, modes}
 		} else {
+			memberConfig, err := ticketRoleConfig(value, member.DefinitionRoot)
+			if err != nil {
+				return nil, err
+			}
 			role, err := memberConfig.EffectiveAgent(definition.Info.Role)
 			if err != nil {
 				continue
@@ -146,6 +173,31 @@ func (host *SessionHost) coordinatorCandidates(ctx context.Context, project work
 	return out, ctx.Err()
 }
 
+func ticketRoleConfig(value config.Config, root string) (config.Config, error) {
+	overrides, err := (workspace.Store{Root: root}).LoadModelConfig()
+	if err != nil {
+		return config.Config{}, err
+	}
+	effective := model{conversationState: conversationState{config: value}}
+	effective.workspaceModel = overrides
+	return effective.activeConfig(), nil
+}
+
+func ticketDefaultConfig(value config.Config, root string, target *config.SubagentTarget) (config.Config, error) {
+	if !target.Default {
+		return value, nil
+	}
+	settings, err := (workspace.Store{Root: root}).LoadModelConfig()
+	if err != nil {
+		return config.Config{}, err
+	}
+	if override, found := settings.Overrides["default"]; found {
+		value.Provider.Model = override.Model
+		value.Provider.ContextWindow = 0
+	}
+	return value, nil
+}
+
 func ticketWorkerStore(directory string, a workitems.Attempt) workspace.Store {
 	return workspace.Store{Root: filepath.Join(directory, "workspaces", a.WorkspaceID, "workers"), SessionID: a.WorkerSessionID}
 }
@@ -153,6 +205,7 @@ func ticketWorkerStore(directory string, a workitems.Attempt) workspace.Store {
 // runTicket uses GeneralRunner and the existing delegation runtime. The worker
 // owns a separate durable session; the manager receives only its final handoff.
 func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, project workitems.Workspace, item workitems.Item, candidate coordinator.Candidate, a workitems.Attempt, prompt string) (result subagent.TaskResult, returnErr error) {
+	ctx = client.WithUsageProject(ctx, project.ID, project.Name)
 	// Settings/profile changes between selection and execution invalidate the
 	// reservation rather than switching capabilities beneath the chosen agent.
 	current, err := host.coordinatorCandidates(ctx, project, item, []workitems.Member{candidate.Member})
@@ -161,6 +214,10 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 	}
 	if len(current) != 1 || current[0].Digest != a.DefinitionDigest {
 		return result, errors.New("assigned profile or model configuration changed")
+	}
+	images, err := ticketImages(ctx, c, item, a)
+	if err != nil {
+		return result, err
 	}
 	worker := ticketWorkerStore(host.store.Dir, a)
 	if err := os.MkdirAll(worker.Root, 0o700); err != nil {
@@ -171,6 +228,14 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 		return result, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, lock.Close()) }()
+	if a.ResumeParent || a.PreviousAnswer != nil {
+		if _, err := worker.Load(); err != nil {
+			return result, fmt.Errorf("resume parent conversation: %w; select a handoff member if the checkpoint is unavailable", err)
+		}
+		if _, err := worker.LoadDelegationState(); err != nil {
+			return result, fmt.Errorf("resume parent execution: %w; select a handoff member if the checkpoint is unavailable", err)
+		}
+	}
 	root := candidate.Member.ExecutionRoot
 	if err := (workspace.Store{Root: root}).EnsureQGitLocallyIgnored(ctx); err != nil {
 		return result, err
@@ -186,7 +251,27 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 	}
 	if item.ExecutionMode == "git" {
 		if request == nil {
-			prepared, err := worktrees.Prepare(ctx, root, a.WorktreeID)
+			parentRoot := root
+			if item.ParentTicketID != "" {
+				parent, err := c.GetItem(ctx, item.ParentTicketID)
+				if err != nil {
+					return result, err
+				}
+				owner, err := c.GetAttempt(ctx, parent.ActiveAttemptID)
+				if err != nil {
+					return result, err
+				}
+				if owner.WorktreeID != item.ParentWorktreeID || owner.ChangeRequest == nil || owner.ChangeRequest.Status != change.StatusWorking || owner.StopRequested {
+					return result, errors.New("parent Git worktree is no longer available")
+				}
+				parentRoot = owner.ChangeRequest.WorktreePath
+				if same, err := gitwork.SameRepository(ctx, root, parentRoot); err != nil {
+					return result, err
+				} else if !same {
+					return result, errors.New("parent and child belong to different Git repositories")
+				}
+			}
+			prepared, err := worktrees.Prepare(ctx, parentRoot, a.WorktreeID)
 			if err != nil {
 				return result, err
 			}
@@ -217,37 +302,115 @@ func (host *SessionHost) runTicket(ctx context.Context, c *library.Client, proje
 	if err := worker.SaveDelegationState(state); err != nil {
 		return result, err
 	}
-	if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running", ChangeRequest: request}); err != nil {
+	workerKind := "native"
+	if candidate.Definition.Info.Kind == subagent.AgentKindExternal {
+		workerKind = "acp"
+	}
+	if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running", ChangeRequest: request, WorkerKind: workerKind}); err != nil {
 		return result, err
 	}
+	var reviewHead string
+	if a.ReviewChildAttemptID != "" {
+		if err := gitwork.Clean(ctx, root); err != nil {
+			return result, err
+		}
+		reviewHead, err = gitwork.CheckoutHead(ctx, root)
+		if err != nil {
+			return result, err
+		}
+	}
 	if candidate.Definition.Info.Kind == subagent.AgentKindExternal {
-		result, returnErr = host.runACPTicket(ctx, c, worker, candidate, a, prompt, root)
+		result, returnErr = host.runACPTicket(ctx, c, worker, candidate, a, prompt, root, images)
 	} else {
-		result, returnErr = host.runNativeTicket(ctx, c, worker, candidate, a, prompt, root, &state)
+		result, returnErr = host.runNativeTicket(ctx, c, worker, candidate, a, prompt, root, &state, images)
 	}
 	if request != nil {
 		if returnErr == nil && result.Outcome == "succeeded" {
-			submitted, err := worktrees.Submit(ctx, *request, result.Summary)
-			request = &submitted
-			returnErr = errors.Join(returnErr, err)
-		} else {
+			park, err := parentMustWait(ctx, c, a)
+			if err == nil && reviewHead != "" {
+				if head, headErr := gitwork.CheckoutHead(ctx, root); headErr != nil {
+					err = headErr
+				} else if head != reviewHead {
+					err = errors.New("parent checkout changed during a review turn; inspect it before retrying")
+				} else {
+					err = worktrees.Resume(ctx, *request)
+				}
+			}
+			if err != nil {
+				returnErr = err
+			} else if park {
+				if err := gitwork.Clean(ctx, root); err != nil {
+					returnErr = fmt.Errorf("park parent with a clean committed worktree: %w", err)
+				} else {
+					result.Outcome = workitems.WaitingChildren
+				}
+			} else {
+				if a.RepairBase != "" {
+					rebased, err := gitwork.RepairReviewBase(ctx, *request, a.RepairBase)
+					if err != nil {
+						returnErr = err
+					} else {
+						request = &rebased
+					}
+				}
+				if returnErr == nil {
+					submitted, err := worktrees.Submit(ctx, *request, result.Summary)
+					request, returnErr = &submitted, err
+				}
+			}
+		} else if returnErr != nil || result.Outcome != workitems.WaitingUser {
 			blocked := worktrees.MarkBlocked(*request)
 			request = &blocked
 		}
 		result.ChangeRequest = request
 		state.ChangeRequest = request
 	}
+	if returnErr == nil && (result.Outcome == "succeeded" || result.Outcome == "blocked") {
+		returnErr = saveTicketVerification(ctx, c, a, worker, root, &result)
+	}
 	raw, _ := json.Marshal(result)
 	state.Result = &client.ToolResult{Content: string(raw), IsError: returnErr != nil}
 	state.Status = "completed"
-	if returnErr != nil {
+	if returnErr != nil || result.Outcome == workitems.WaitingUser {
 		state.Status = "blocked"
 	}
 	returnErr = errors.Join(returnErr, worker.SaveDelegationState(state))
 	return result, returnErr
 }
 
-func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client, worker workspace.Store, candidate coordinator.Candidate, a workitems.Attempt, prompt, root string, state *workspace.DelegationState) (result subagent.TaskResult, returnErr error) {
+func parentMustWait(ctx context.Context, c *library.Client, a workitems.Attempt) (bool, error) {
+	if a.ReviewChildAttemptID != "" {
+		child, err := c.GetAttempt(ctx, a.ReviewChildAttemptID)
+		if err != nil {
+			return false, err
+		}
+		switch child.Status {
+		case "awaiting_review", "failed", "blocked", "unknown", "merge_failed", "close_failed":
+			return false, errors.New("parent review ended without recording a child decision; retry the parent ticket")
+		}
+		return true, nil
+	}
+	page, err := c.ListChildren(ctx, a.TicketID, a.WorktreeID)
+	if err != nil {
+		return false, err
+	}
+	for _, child := range page.Items {
+		if child.State != "done" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func ticketWorkBinding(a workitems.Attempt, bridge string) workitemtools.Binding {
+	worker := a.Binding()
+	return workitemtools.Binding{
+		WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridge, Worker: &worker,
+		Review: workitemtools.ReviewAssignment{AttemptID: a.ReviewChildAttemptID, OperationID: a.ID},
+	}
+}
+
+func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client, worker workspace.Store, candidate coordinator.Candidate, a workitems.Attempt, prompt, root string, state *workspace.DelegationState, images []ImageInput) (result subagent.TaskResult, returnErr error) {
 	ctx = context.WithValue(ctx, delegationHostKey{}, host)
 	value, err := host.store.Load()
 	if err != nil {
@@ -266,14 +429,15 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 	if err != nil {
 		return result, err
 	}
-	workspaceModels, err := (workspace.Store{Root: candidate.Member.DefinitionRoot}).LoadModelConfig()
+	if candidate.Definition.Target == nil {
+		value, err = ticketRoleConfig(value, candidate.Member.DefinitionRoot)
+	} else {
+		value, err = ticketDefaultConfig(value, candidate.Member.DefinitionRoot, candidate.Definition.Target)
+	}
 	if err != nil {
 		return result, err
 	}
-	effective := model{conversationState: conversationState{config: value}}
-	effective.workspaceModel = workspaceModels
-	value = effective.activeConfig()
-	spec, err := subagent.Resolve(value, candidate.Definition.Info.Role, models)
+	spec, err := subagent.ResolveDefinition(value, candidate.Definition, models)
 	if err != nil {
 		return result, err
 	}
@@ -309,7 +473,7 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 	if err != nil {
 		return result, err
 	}
-	base, err := qtools.NewRuntimeWithRoots(ctx, qtools.RuntimeRoots{WorkspaceStateRoot: candidate.Member.ExecutionRoot, CheckoutRoot: root}, archive, value.LoomStoreOptions(nil), value.LSP, lsp, c, qtools.WithWorkspaceWork(c, a.WorkspaceID, a.WorkerSessionID, false), qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: host.store.Dir}), qtools.WithSystemOneArchiveRanking(systemoneconfig.Store{Dir: host.store.Dir}))
+	base, err := qtools.NewRuntimeWithRoots(ctx, qtools.RuntimeRoots{WorkspaceStateRoot: candidate.Member.ExecutionRoot, CheckoutRoot: root}, archive, value.LoomStoreOptions(nil), value.LSP, lsp, c, qtools.WithWorkspaceWorkBinding(c, ticketWorkBinding(a, "")), qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: host.store.Dir}), qtools.WithSystemOneArchiveRanking(systemoneconfig.Store{Dir: host.store.Dir}))
 	if err != nil {
 		return result, err
 	}
@@ -333,6 +497,9 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 	}
 	var resume *subagent.GeneralRunState
 	if saved, err := worker.Load(); err == nil {
+		if a.ResumeParent && state.Model == "" {
+			return result, errors.New("parent worker model checkpoint is missing; select a handoff member to continue")
+		}
 		if state.Model != "" {
 			if state.APIMode != value.ModelAPIMode(state.Model) {
 				return result, errors.New("saved worker model API mode changed")
@@ -364,10 +531,36 @@ func (host *SessionHost) runNativeTicket(ctx context.Context, c *library.Client,
 		return worker.SaveDelegationState(*state)
 	}
 	followup := ""
-	if resume != nil {
+	if a.PreviousAnswer != nil {
+		followup = ticketAnswerPrompt(a.PreviousAnswer)
+	} else if resume != nil && !subagent.PendingTicketQuestion(resume.Transcript) {
 		followup = prompt
 	}
-	return (subagent.GeneralRunner{Client: configuredClient, Tools: runtime, Spec: spec, Definition: candidate.Definition, WorkingDirectory: root, Environment: fmt.Sprintf("%+v", base.Environment()), RunID: a.ID, TaskID: a.WorktreeID, ParentID: itemParent(a), Resume: resume, Checkpoint: checkpoint, Followup: followup, Sink: writer}).Run(ctx, state.Prompt)
+	definition := candidate.Definition
+	if a.ReviewChildAttemptID != "" {
+		definition.StrictTools = true
+		definition.Tools = []string{"read_file", "list_directory", "ticket_get", "post_get", "ticket_attempt_get", "ticket_change_read", "ticket_worker_read", "ticket_review"}
+		definition.Delegates = nil
+	}
+	guidance := &subagent.TicketGuidanceControl{
+		Pending: func(ctx context.Context, seal bool) (*workitems.TicketGuidance, error) {
+			if seal {
+				current, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{
+					Owner: a.Owner, Token: a.Token, Generation: a.Generation, SealGuidance: true,
+				})
+				return current.Guidance, err
+			}
+			current, err := c.GetAttempt(ctx, a.ID)
+			return current.Guidance, err
+		},
+		Acknowledge: func(ctx context.Context, id string) error {
+			_, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{
+				Owner: a.Owner, Token: a.Token, Generation: a.Generation, GuidanceAck: id,
+			})
+			return err
+		},
+	}
+	return (subagent.GeneralRunner{Client: configuredClient, Tools: runtime, Spec: spec, Definition: definition, WorkingDirectory: root, Environment: fmt.Sprintf("%+v", base.Environment()), RunID: a.ID, TaskID: a.WorktreeID, ParentID: itemParent(a), Resume: resume, Checkpoint: checkpoint, Followup: followup, Sink: writer, PromptImages: images, TicketQuestions: a.ReviewChildAttemptID == "", TicketGuidance: guidance}).Run(ctx, state.Prompt)
 }
 func itemParent(a workitems.Attempt) string { return "ticket/" + a.TicketID }
 
@@ -376,9 +569,11 @@ type ticketACPCheckpoint struct {
 	Started, Completed                        bool
 	Answer                                    string
 	BrowserPreference                         string
+	CanAsk                                    bool
+	CompactionStatus                          string
 }
 
-func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, worker workspace.Store, candidate coordinator.Candidate, a workitems.Attempt, prompt, root string) (result subagent.TaskResult, returnErr error) {
+func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, worker workspace.Store, candidate coordinator.Candidate, a workitems.Attempt, prompt, root string, images []ImageInput) (result subagent.TaskResult, returnErr error) {
 	value, err := host.store.Load()
 	if err != nil {
 		return result, err
@@ -391,18 +586,20 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	if err != nil {
 		return result, err
 	}
+	command.ticketCompaction = true
 	bridgePath, err := host.workEmbeddingConnection()
 	if err != nil {
 		return result, err
 	}
-	command.mcpServers, err = acpLibraryServers(host.store.Dir, workitemtools.Binding{WorkspaceID: a.WorkspaceID, SessionID: a.WorkerSessionID, EmbeddingConnection: bridgePath})
-	command.browserStore = &host.store
+	binding := ticketWorkBinding(a, bridgePath)
+	command.mcpServers, err = acpLibraryServers(host.store.Dir, &binding)
 	if err != nil {
 		return result, err
 	}
 	path := filepath.Join(worker.SessionDir(), "ticket-acp.json")
 	saved := ticketACPCheckpoint{Agent: candidate.Definition.Connection, Root: root, Digest: a.DefinitionDigest}
 	recovering := false
+	finishSavedDecision := false
 	if raw, err := os.ReadFile(path); err == nil {
 		if err := json.Unmarshal(raw, &saved); err != nil {
 			return result, err
@@ -411,41 +608,55 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 			return result, errors.New("ACP worker checkpoint configuration changed")
 		}
 		if saved.Started && !saved.Completed {
-			if saved.AttemptID == a.ID || a.PreviousAttemptID != saved.AttemptID || strings.TrimSpace(a.Feedback) == "" {
+			if saved.AttemptID == a.ID || a.PreviousAttemptID != saved.AttemptID || (strings.TrimSpace(a.Feedback) == "" && a.PreviousStatus != workitems.WaitingChildren) {
 				return result, errors.New("ACP worker prompt has an unknown outcome; manager feedback and real session resume are required")
 			}
 			recovering = true
 		}
-		if saved.AttemptID == a.ID && saved.Completed {
-			return subagent.TaskResult{Outcome: "succeeded", Summary: "ACP worker completed", Report: saved.Answer}, nil
+		if saved.Completed && (saved.AttemptID == a.ID || saved.AttemptID == a.CompactionAttemptID) {
+			savedResult := acpTicketResult(saved.Answer, saved.CanAsk, saved.CompactionStatus)
+			if !savedResult.PendingCompaction {
+				return savedResult, nil
+			}
+			finishSavedDecision = true
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return result, err
+	}
+	if a.CompactionAttemptID != "" && !finishSavedDecision {
+		return result, errors.New("the ACP worker decision checkpoint is missing or incomplete")
+	}
+	if (a.ResumeParent || a.PreviousAnswer != nil || finishSavedDecision) && saved.SessionID == "" {
+		return result, errors.New("parent ACP session checkpoint is missing; select a handoff member to continue")
 	}
 	remote, err := startACPRemoteClientWithResume(ctx, command, root, saved.SessionID, connection.AuthMethod, io.Discard, false)
 	if err != nil {
 		return result, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, remote.Close()) }()
+	if err := remote.applyModelSelection(ctx, candidate.Definition.ACPOptions()); err != nil {
+		return result, err
+	}
+	remote.libraryInstructions = librarymcp.InstructionsFor(&binding)
+	remote.projectLibrary = true
 	remote.permissions = acpPermissionReadOnly
-	if candidate.Definition.Info.MutatesWorkspace {
+	if candidate.Definition.Info.MutatesWorkspace && a.ReviewChildAttemptID == "" {
 		remote.permissions = acpPermissionAutomatic
 	}
 	remote.requireCompletedText = true
 	if remote.resumed {
 		remote.lastBrowserPreference = saved.BrowserPreference
 	}
-	// Keep possible active guidance across an unknown prompt outcome. A
-	// successful prompt below records the exact delivered preference.
-	if preference := browsercontrol.Prompt(value.BrowserControl); preference != "" {
-		saved.BrowserPreference = preference
+	if finishSavedDecision {
+		return finishACPTicketDecision(ctx, remote, path, saved)
 	}
 	saved.SessionID = string(remote.sessionID)
+	saved.CanAsk = a.ReviewChildAttemptID == "" && (remote.capabilities.LoadSession || remote.capabilities.SessionCapabilities.Resume != nil)
 	saved.AttemptID = a.ID
 	saved.Started = true
 	saved.Completed = false
-	raw, _ := json.Marshal(saved)
-	if err := fsreplace.WriteFile(path, raw, 0o600); err != nil {
+	saved.CompactionStatus = ""
+	if err := saveTicketACPCheckpoint(path, saved); err != nil {
 		return result, err
 	}
 	if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running"}); err != nil {
@@ -454,34 +665,85 @@ func (host *SessionHost) runACPTicket(ctx context.Context, c *library.Client, wo
 	if !remote.resumed {
 		prompt = externalSubagentPrompt(candidate.Definition.SystemPrompt, prompt)
 	}
+	if a.PreviousAnswer != nil {
+		prompt = ticketAnswerPrompt(a.PreviousAnswer)
+	}
 	if recovering {
-		prompt = "The previous prompt has an unknown outcome. Do not replay it or assume its effects failed. Inspect the persisted agent state and current files first. Continue only according to this manager feedback, and report any remaining uncertainty.\nTicket ID: " + a.TicketID + "\n\nManager feedback:\n" + a.Feedback
+		if a.PreviousStatus == workitems.WaitingChildren {
+			prompt = "The previous review turn was interrupted after Q recorded the decision. Inspect saved ticket results before acting on this follow-up.\n\n" + prompt
+		} else {
+			prompt = "The previous prompt has an unknown outcome. Do not replay it or assume its effects failed. Inspect the persisted agent state and current files first. Continue only according to this manager feedback, and report any remaining uncertainty.\nTicket ID: " + a.TicketID + "\n\nManager feedback:\n" + a.Feedback
+		}
 	}
-	answer, err := remote.promptText(ctx, prompt)
-	if err != nil {
-		return result, err
+	prompt += "\n\nReport checks actually run. To attach verification files, finish with a fenced q-verification JSON block with keys verification (array of observed checks) and artifacts (array of project-relative PNG, JPEG, WebP, GIF, or UTF-8 log paths)."
+	if saved.CanAsk {
+		prompt += "\nBefore making changes, check the ticket's scope, prerequisites, and acceptance criteria. If only the user can make a material early decision, finish this turn without making the dependent change. End with a fenced q-user-decision JSON block containing question, context (evidence, recommendation, and what waits), and optionally choices (array of strings). Q will save this session and return the answer. For a decision discovered after changes, set late:true and include the relevant work and evidence. Q will request and verify compaction before posting the question."
 	}
-	saved.Completed = true
-	saved.BrowserPreference = remote.lastBrowserPreference
-	saved.Answer = answer
-	raw, _ = json.Marshal(saved)
-	if err := fsreplace.WriteFile(path, raw, 0o600); err != nil {
-		return result, err
-	}
-	user := client.Message{Role: client.RoleUser, Content: prompt}
-	assistant := client.Message{Role: client.RoleAssistant, Content: answer}
+	user := workmedia.Message(prompt, images)
 	session, err := worker.Load()
 	if errors.Is(err, workspace.ErrNotFound) {
 		session = workspace.Session{}
 	} else if err != nil {
 		return result, err
 	}
+	activity := ticketACPActivity{snapshot: library.WorkerACPActivity{AttemptID: a.ID, TranscriptLength: len(session.Transcript)}}
+	stopActivity := activity.publish(ctx, filepath.Join(worker.SessionDir(), library.WorkerACPActivityFile))
+	answer, err := remote.promptTextWithUpdates(ctx, prompt, activity.observe, workmedia.URLs(user)...)
+	stopActivity()
+	if err != nil {
+		return result, err
+	}
+	saved.Completed = true
+	saved.BrowserPreference = remote.lastBrowserPreference
+	saved.Answer = answer
+	result = acpTicketResult(answer, saved.CanAsk, "")
+	if result.PendingCompaction {
+		if _, err := c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: "running", PendingCompaction: true}); err != nil {
+			return result, err
+		}
+	}
+	if err := saveTicketACPCheckpoint(path, saved); err != nil {
+		return result, err
+	}
+	assistant := client.Message{Role: client.RoleAssistant, Content: answer}
+	session.RunID = a.ID
 	session.Transcript = append(session.Transcript, user, assistant)
 	session.Context = append(session.Context, user, assistant)
 	if err := worker.Save(session); err != nil {
 		return result, err
 	}
-	return subagent.TaskResult{Outcome: "succeeded", Summary: "ACP worker completed", Report: strings.TrimSpace(answer)}, nil
+	if result.PendingCompaction {
+		return finishACPTicketDecision(ctx, remote, path, saved)
+	}
+	return result, nil
+}
+
+func saveTicketACPCheckpoint(path string, saved ticketACPCheckpoint) error {
+	raw, err := json.Marshal(saved)
+	if err != nil {
+		return err
+	}
+	return fsreplace.WriteFile(path, raw, 0o600)
+}
+
+func finishACPTicketDecision(ctx context.Context, remote *acpRemoteClient, path string, saved ticketACPCheckpoint) (subagent.TaskResult, error) {
+	result := acpTicketResult(saved.Answer, saved.CanAsk, saved.CompactionStatus)
+	if !result.PendingCompaction {
+		return result, nil
+	}
+	status, err := remote.compactTicketContext(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		result.Blocker = err.Error()
+		return result, nil
+	}
+	saved.CompactionStatus = status
+	if err := saveTicketACPCheckpoint(path, saved); err != nil {
+		return result, err
+	}
+	return acpTicketResult(saved.Answer, saved.CanAsk, status), nil
 }
 
 func (host *SessionHost) deliverTicketReview(ctx context.Context, project workitems.Workspace, entry workitems.InboxEntry, a workitems.Attempt) error {
@@ -490,6 +752,7 @@ func (host *SessionHost) deliverTicketReview(ctx context.Context, project workit
 		return err
 	}
 	prompt := fmt.Sprintf("Ticket result ready for manager review.\nTicket ID: %s\nAttempt ID: %s\nWorker session: %s\nStatus: %s\n\nUse ticket_attempt_get and ticket_change_read to inspect the durable result and pinned diff. Review against the ticket acceptance criteria. Use ticket_review with accept, request_changes (include feedback), or reject. A Git accept queues the actual pinned merge; the ticket is done only after it succeeds.\n\nResult excerpt:\n%s", entry.TicketID, a.ID, a.WorkerSessionID, a.Status, truncateTicketResult(string(a.Result)))
+	ctx = workitemtools.WithReviewAssignment(ctx, workitemtools.ReviewAssignment{AttemptID: a.ID, OperationID: entry.OperationID})
 	host.coordinatorMu.Lock()
 	deliver := host.coordinatorDelivery
 	host.coordinatorMu.Unlock()

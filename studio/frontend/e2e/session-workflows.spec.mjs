@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('Sessions preserves the Interaction panel across workflow selection and protects artifact edits', async ({ page, request }, testInfo) => {
   const errors = [];

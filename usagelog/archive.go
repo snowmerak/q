@@ -42,6 +42,8 @@ func (s *Store) ArchiveBefore(ctx context.Context, cutoff time.Time) (int, error
 	if s == nil || s.db == nil {
 		return 0, errors.New("usage: store is unavailable")
 	}
+	s.archiveMu.Lock()
+	defer s.archiveMu.Unlock()
 	cutoffDay := cutoff.UTC().Format("2006-01-02")
 	rows, err := s.db.QueryContext(ctx, `
 SELECT DISTINCT strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch')
@@ -70,7 +72,80 @@ ORDER BY 1`, cutoff.UTC().UnixMilli(), cutoffDay)
 		}
 		archived++
 	}
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM model_calls WHERE occurred_at_ms < ?", floorUTCDay(cutoff).UnixMilli()); err != nil {
+		return archived, err
+	}
 	return archived, nil
+}
+
+// Daily rollups cover whole UTC days. Read the two partial days from their
+// archives when needed so adjacent periods cannot share a boundary day.
+func (s *Store) mergeArchivedBoundaries(ctx context.Context, filter Filter, view *UsageView) error {
+	var boundaries []string
+	for _, bound := range []time.Time{filter.From, filter.To} {
+		day := bound.Format("2006-01-02")
+		if !bound.Equal(floorUTCDay(bound)) && (len(boundaries) == 0 || boundaries[0] != day) {
+			boundaries = append(boundaries, day)
+		}
+	}
+	for _, day := range boundaries {
+		if _, err := s.archiveManifest(ctx, day); errors.Is(err, sql.ErrNoRows) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		rows, err := readArchiveIfPresent(s.archivePath(day))
+		if err != nil {
+			return fmt.Errorf("usage: read archive for %s: %w", day, err)
+		}
+		if rows == nil {
+			return fmt.Errorf("usage: archive for %s is missing", day)
+		}
+		// An interrupted publication may leave some rows in both places.
+		raw, err := s.rawRowsForDay(ctx, day)
+		if err != nil {
+			return err
+		}
+		rawIDs := make(map[string]bool, len(raw))
+		for _, row := range raw {
+			rawIDs[row.EventID] = true
+		}
+		mergeArchivedUsage(view, filter, day, rows, rawIDs)
+	}
+	return nil
+}
+
+func mergeArchivedUsage(view *UsageView, filter Filter, day string, rows []archiveRow, rawIDs map[string]bool) {
+	models := make(map[string]Totals, len(view.Models))
+	roles := make(map[string]Totals, len(view.Roles))
+	series := make(map[string]Totals, len(view.Series))
+	for _, item := range view.Models {
+		models[item.Name] = item.Totals
+	}
+	for _, item := range view.Roles {
+		roles[item.Name] = item.Totals
+	}
+	for _, item := range view.Series {
+		series[item.Bucket] = item.Totals
+	}
+	from, to := filter.From.UnixMilli(), filter.To.UnixMilli()
+	for _, row := range rows {
+		if row.OccurredAtMillis < from || row.OccurredAtMillis >= to || rawIDs[row.EventID] ||
+			(filter.Model != "" && filter.Model != row.Model) || (filter.Role != "" && filter.Role != row.Role) {
+			continue
+		}
+		totals := Totals{Calls: 1, PromptTokens: row.PromptTokens, CompletionTokens: row.CompletionTokens,
+			TotalTokens: row.TotalTokens, CachedTokens: row.CachedTokens, CacheWriteTokens: row.CacheWriteTokens,
+			EstimatedCalls: int64(boolInt(row.Estimated)), CacheEstimatedCalls: int64(boolInt(row.CacheEstimated))}
+		if filter.Details && !row.CacheEstimated {
+			totals.CacheHitSamples, totals.CacheHitCalls = 1, int64(boolInt(row.CachedTokens > 0))
+		}
+		addTotals(&view.Totals, totals)
+		addGroupedTotals(models, row.Model, totals)
+		addGroupedTotals(roles, row.Role, totals)
+		addGroupedTotals(series, day, totals)
+	}
+	view.Models, view.Roles, view.Series = sortedDimensions(models), sortedDimensions(roles), sortedSeries(series)
 }
 
 func (s *Store) archiveDay(ctx context.Context, day string) error {

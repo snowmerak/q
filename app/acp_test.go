@@ -1424,7 +1424,7 @@ func TestACPAgentAcceptsImagesForCompatibleRoutes(t *testing.T) {
 				t.Fatalf("image capability = %#v, err = %v", initialized.AgentCapabilities.PromptCapabilities, err)
 			}
 			sessionID := openTestACPSession(t, agent, workspaceStore.Root)
-			imageData := "iVBORw0KGgo="
+			imageData := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aip0AAAAASUVORK5CYII="
 			if _, err := agent.Prompt(t.Context(), acp.PromptRequest{
 				SessionId: sessionID,
 				Prompt: []acp.ContentBlock{

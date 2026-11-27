@@ -22,10 +22,10 @@ Studio の **Settings → Subagents** で組み込み定義を確認し、カス
 
 公開されている組み込み ID は次のとおりです。
 
-- `builtin/interviewer`
 - `builtin/manager`
 - `builtin/senior-developer`
 - `builtin/junior-developer`
+- `builtin/code-reviewer`
 - `builtin/research`
 - `builtin/web-search`
 - `builtin/web-tester`

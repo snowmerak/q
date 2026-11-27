@@ -22,10 +22,10 @@ toc:
 
 公开的内置 ID 包括：
 
-- `builtin/interviewer`
 - `builtin/manager`
 - `builtin/senior-developer`
 - `builtin/junior-developer`
+- `builtin/code-reviewer`
 - `builtin/research`
 - `builtin/web-search`
 - `builtin/web-tester`

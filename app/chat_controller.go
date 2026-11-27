@@ -1,18 +1,22 @@
 package app
 
 import (
-	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
 	"github.com/snowmerak/q/agentinstructions"
 	"github.com/snowmerak/q/agentloop"
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/diagnostics"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
 	"golang.org/x/text/unicode/norm"
-	"strings"
-	"time"
 )
 
 func (m model) updateChatKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -168,7 +172,7 @@ func (m model) submitChat() (tea.Model, tea.Cmd) {
 		case "/model":
 			m.resetChatInput()
 			return m.discoverCurrentModels()
-		case "/systemone":
+		case "/decisions", "/systemone":
 			m.resetChatInput()
 			return m.enterSystemOne()
 		case "/gateway":
@@ -218,13 +222,13 @@ func retiredLoopModeCommand(command string) bool {
 	return command == "/mode" || strings.HasPrefix(command, "/mode ")
 }
 
-func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) {
+func (m model) startChatTurn(content string, compact bool, images ...ImageInput) (tea.Model, tea.Cmd) {
 	content = strings.TrimSpace(norm.NFC.String(content))
 	if m.delegationRecoveryPending && !m.waiting {
 		command := m.startDelegationRecovery()
 		return m, command
 	}
-	if m.waiting || content == "" || m.client == nil {
+	if m.waiting || (content == "" && len(images) == 0) || m.client == nil {
 		return m, nil
 	}
 	m.clearAgentActivities()
@@ -232,7 +236,7 @@ func (m model) startChatTurn(content string, compact bool) (tea.Model, tea.Cmd) 
 	m.beginTurn()
 	m.turnMessageStart = len(m.messages)
 	m.touchSessionMetadata(content)
-	userMessage := client.Message{Role: client.RoleUser, Content: content}
+	userMessage := workmedia.Message(content, images)
 	m.archiveMessage(userMessage, sessionstore.StatusSubmitted, false)
 	m.messages = append(m.messages, userMessage)
 
@@ -477,18 +481,20 @@ func hasCompactionHistory(messages []client.Message) bool {
 	return false
 }
 
+const nothingToCompactStatus = "Nothing to compact"
+
 // startManualCompaction uses the automatic checkpoint path without adding a user turn.
 func (m model) startManualCompaction() (tea.Model, tea.Cmd) {
 	m.resetChatInput()
 	m.turnErr = nil
 	if m.memory == nil || !hasCompactionHistory(m.memory.Messages()) {
-		m.status = "Nothing to compact"
+		m.status = nothingToCompactStatus
 		return m, m.focusChatInput()
 	}
 	plan, err := m.memory.Plan()
 	if err != nil {
 		if errors.Is(err, memory.ErrNothingToCompact) {
-			m.status = "Nothing to compact"
+			m.status = nothingToCompactStatus
 		} else {
 			m.turnErr = err
 			m.status = "compact context: " + err.Error()
@@ -513,11 +519,22 @@ func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 	turnContext := m.activeTurnContext()
 	turnID := m.turnID
 	return func() tea.Msg {
+		if err := turnContext.Err(); err != nil {
+			return compactionResultMsg{turnID: turnID, plan: plan, err: err, manual: manual}
+		}
 		if checkpoint, ready := plan.CheckpointWithoutModel(); ready {
 			return compactionResultMsg{turnID: turnID, checkpoint: checkpoint, plan: plan, err: turnContext.Err(), manual: manual}
 		}
+		messages := plan.RequestMessages()
+		if manual {
+			logger := diagnostics.Logger(turnContext)
+			if logger.Enabled(turnContext, slog.LevelInfo) {
+				logger.InfoContext(turnContext, "studio.compact.model_input", "requested_model", modelID,
+					"input_tokens_estimate", memory.CountMessages(messages))
+			}
+		}
 		response, err := chatWithEmptyResponseRecovery(turnContext, configuredClient, client.ChatRequest{
-			Model: modelID, Messages: plan.RequestMessages(),
+			Model: modelID, Messages: messages,
 			ReasoningEffort: reasoningEffort, Extra: requestExtra,
 		})
 		return compactionResultMsg{turnID: turnID, response: response, plan: plan, err: err, manual: manual}
@@ -526,6 +543,7 @@ func (m model) compactContext(plan memory.Plan, manual bool) tea.Cmd {
 
 func (m *model) sendChatRequest() tea.Cmd {
 	history := m.memory.Messages()
+	promptUsage := m.memory.PromptUsage()
 	m.requestEstimate = memory.CountMessages(history)
 	conversationID := m.conversationID
 	configuredClient := m.client
@@ -538,8 +556,9 @@ func (m *model) sendChatRequest() tea.Cmd {
 	events := make(chan agentEvent)
 	if remote, ok := configuredClient.(*acpRemoteClient); ok {
 		content := m.pendingMessage.TextContent()
+		images := workmedia.URLs(m.pendingMessage)
 		return func() tea.Msg {
-			go remote.runPrompt(turnContext, content, events)
+			go remote.runPrompt(turnContext, content, events, images...)
 			return waitAgentEvent(events, turnID)()
 		}
 	}
@@ -590,6 +609,7 @@ func (m *model) sendChatRequest() tea.Cmd {
 				AuxiliaryDirectories: auxiliaryDirectories,
 				ActiveTask:           activeTask, Stream: streamEnabled, CoalesceInstructions: coalesceInstructions,
 				ContextPolicy:     memoryPolicy(m.activeConfig()),
+				PromptUsage:       promptUsage,
 				BrowserPreference: m.browserPreference(),
 				AllowedTools:      allowedTools,
 			}, events)

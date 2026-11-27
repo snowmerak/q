@@ -47,7 +47,7 @@ func runAgentLoop(ctx context.Context, request AgentLoopRequest, events chan<- A
 }
 
 func projectAgentLoopEvent(source agentloop.Event) agentEvent {
-	event := agentEvent{err: source.Err()}
+	event := agentEvent{err: source.Err(), toolTokenEstimate: source.ToolTokenEstimate()}
 	event.status, _ = source.Status()
 	event.conversationID, _ = source.ConversationID()
 	if attempt, ok := source.Generation(); ok {
@@ -63,6 +63,9 @@ func projectAgentLoopEvent(source agentloop.Event) agentEvent {
 	}
 	if usage, ok := source.Usage(); ok {
 		event.usage = &usage
+	}
+	if usage, ok := source.PromptUsage(); ok {
+		event.promptUsage = &usage
 	}
 	if call, ok := source.ToolCall(); ok {
 		event.call = &call
@@ -90,6 +93,7 @@ func projectAgentLoopEvent(source agentloop.Event) agentEvent {
 		event.responseContext = result.ContextMessage
 		event.replyAlreadyEmitted = result.ReplyAlreadyEmitted
 		event.complete = true
+		event.promptUsageManaged = true
 		event.outcome = result.Outcome
 		event.requestEstimate = result.RequestEstimate
 		event.toolCalls = result.ToolCalls

@@ -1,7 +1,7 @@
 export const transferSections = [
   { id: 'models', label: 'Models' },
   { id: 'providers', label: 'Providers' },
-  { id: 'system-one', label: 'System One' },
+  { id: 'system-one', label: 'Decisions' },
   { id: 'runtime', label: 'Runtime' },
   { id: 'services', label: 'Services' },
   { id: 'subagents', label: 'Subagents' },
@@ -67,7 +67,7 @@ export function transferLabel(section: TransferSection, id: string): string {
     'models:default': 'Default chat model', 'models:embedding': 'Embedding model',
     'system-one:default': 'Default decision model', 'runtime:parallel-agents': 'Maximum parallel agents',
     'runtime:context': 'Context compaction', 'runtime:loom': 'Loom storage', 'runtime:system-prompt': 'System prompt', 'runtime:browser-control': 'Browser control',
-    'services:gateway': 'Gateway listener', 'services:system-one': 'System One listener',
+    'services:gateway': 'Gateway listener', 'services:system-one': 'Decisions listener',
     'services:library': 'Library listener', 'services:workspace-memory': 'Workspace Memory listener', 'services:usage': 'Usage listener'
   };
   if (names[`${section}:${id}`]) return names[`${section}:${id}`];

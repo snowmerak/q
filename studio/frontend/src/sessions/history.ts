@@ -5,7 +5,7 @@ export const historyPageSize = 80;
 // Replace an overlapping tail, or prepend an adjacent earlier page. Thought
 // anchors are relative to each page; keep them aligned with the merged messages.
 export function mergeHistory(earlier: SessionDetail, later: SessionDetail): SessionDetail {
-  if (!earlier.history || !later.history || earlier.history.start > later.history.start || earlier.history.end < later.history.start || earlier.history.end > later.history.total) return later;
+  if (earlier.history_revision !== later.history_revision || !earlier.history || !later.history || earlier.history.start > later.history.start || earlier.history.end < later.history.start || earlier.history.end > later.history.total) return later;
   const prefix = later.history.start - earlier.history.start;
   return {
     ...later,

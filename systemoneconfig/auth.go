@@ -49,7 +49,7 @@ func (a *Authenticator) OptionalHandler(next http.Handler) http.Handler {
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(writer).Encode(map[string]any{"error": map[string]string{
-			"message": "invalid System One API key",
+			"message": "invalid Decisions API key",
 		}})
 	})
 }

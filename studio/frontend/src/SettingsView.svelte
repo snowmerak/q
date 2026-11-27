@@ -24,10 +24,10 @@
     { id: 'models' as const, label: 'Models', description: 'Chat, embedding, and role assignments', icon: Cpu },
     { id: 'embeddings' as const, label: 'Embeddings', description: 'Coverage and model consistency', icon: Database },
     { id: 'providers' as const, label: 'Providers', description: 'API providers and ACP agents', icon: Network },
-    { id: 'system-one' as const, label: 'System One', description: 'Decision API and access keys', icon: BrainCircuit },
+    { id: 'decisions' as const, label: 'Decisions', description: 'Providers, role models and access keys', icon: BrainCircuit },
     { id: 'runtime' as const, label: 'Runtime', description: 'Execution, context, and storage', icon: SlidersHorizontal },
     { id: 'browser-control' as const, label: 'Browser control', description: 'Preferred browser CLI and executable paths', icon: Globe },
-    { id: 'services' as const, label: 'Services', description: 'Gateway and System One', icon: Server },
+    { id: 'services' as const, label: 'Services', description: 'Gateway and Decisions', icon: Server },
     { id: 'subagents' as const, label: 'Subagents', description: 'Profiles and role bindings', icon: Bot },
     { id: 'integrations' as const, label: 'Integrations', description: 'MCP and language servers', icon: Unplug },
     { id: 'import-export' as const, label: 'Import / Export', description: 'Move selected settings', icon: ArrowLeftRight }
@@ -76,7 +76,7 @@
       preserveProviderDrafts(snapshot.gateway_providers.items, settings.gateway_providers.items, savedProviders,
         ['id', 'type', 'kind', 'api_mode', 'prefix', 'enabled', 'base_url', 'api_key_env', 'api_key', 'model_filter_regex']);
       preserveProviderDrafts(snapshot.system_one.providers, settings.system_one.providers, savedSystemOneProviders,
-        ['id', 'uri', 'api_key_env']);
+        ['id', 'uri', 'api_key_env', 'model_filter_regex']);
     }
     savedProviders = nextSavedProviders;
     savedSystemOneProviders = nextSavedSystemOneProviders;
@@ -85,6 +85,7 @@
 
   function sectionFromLocation(): SettingsSection {
     const section = new URL(window.location.href).searchParams.get('section');
+    if (section === 'system-one') return 'decisions';
     return settingsSections.some((candidate) => candidate.id === section) ? section as SettingsSection : 'models';
   }
 
@@ -172,7 +173,7 @@
       {:else}
         <div hidden={activeSection !== 'models'}><ModelsPanel bind:settings {queueSave} active={active && activeSection === 'models'} /></div>
         <div hidden={activeSection !== 'providers'}><ProvidersView bind:settings {queueSave} active={active && activeSection === 'providers'} /></div>
-        <div hidden={activeSection !== 'system-one'}><SystemOnePanel bind:settings {queueSave} active={active && activeSection === 'system-one'} /></div>
+        <div hidden={activeSection !== 'decisions'}><SystemOnePanel bind:settings {queueSave} active={active && activeSection === 'decisions'} /></div>
         <div hidden={activeSection !== 'runtime'}><RuntimePanel bind:settings {queueSave} active={active && activeSection === 'runtime'} /></div>
         {#if settings.browser_control}<div hidden={activeSection !== 'browser-control'}><BrowserControlPanel bind:settings {queueSave} /></div>{/if}
         <div hidden={activeSection !== 'services'}><ServicesPanel bind:settings {queueSave} /></div>

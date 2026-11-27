@@ -280,6 +280,34 @@ func TestACPReadOnlyPermissionAllowsSearchAndRejectsMutation(t *testing.T) {
 	}
 }
 
+func TestACPReadOnlyWorkerAllowsQualifiedProjectCollaboration(t *testing.T) {
+	remote := &acpRemoteClient{turn: &acpRemoteTurn{}, permissions: acpPermissionReadOnly, projectLibrary: true}
+	edit := acp.ToolKindEdit
+	allow := acp.PermissionOption{OptionId: "once", Name: "Once", Kind: acp.PermissionOptionKindAllowOnce}
+	for _, test := range []struct {
+		title string
+		args  map[string]any
+		allow bool
+	}{
+		{"mcp__q-library__issue_reply", map[string]any{"id": "issue", "content": "Evidence"}, true},
+		{"q-library/ticket_create", map[string]any{"title": "Verify", "content": "Evidence"}, true},
+		{"q-library/post_update", map[string]any{"id": "post", "content": "Correction"}, true},
+		{"Run mcp_q-library_issue_reply", map[string]any{"id": "issue", "content": "Evidence"}, true},
+		{"Run mcp_q-library_issue_reply", map[string]any{"command": "mcp_q-library_issue_reply"}, false},
+		{"q-library/ticket_cancel", map[string]any{"id": "ticket"}, false},
+		{"mcp__other__issue_reply", map[string]any{"id": "issue", "content": "Evidence"}, false},
+		{"Edit file named mcp__q-library__issue_reply", map[string]any{"path": "notes.txt"}, false},
+	} {
+		result, err := remote.RequestPermission(t.Context(), acp.RequestPermissionRequest{
+			ToolCall: acp.ToolCallUpdate{ToolCallId: "call", Kind: &edit, Title: &test.title, RawInput: test.args},
+			Options:  []acp.PermissionOption{allow},
+		})
+		if err != nil || (result.Outcome.Selected != nil) != test.allow {
+			t.Fatalf("%s: %+v %v", test.title, result, err)
+		}
+	}
+}
+
 func TestACPAutomaticPermissionPrefersOnceThenAlwaysAndFailsClosed(t *testing.T) {
 	options := []acp.PermissionOption{
 		{OptionId: "always", Name: "Always", Kind: acp.PermissionOptionKindAllowAlways},

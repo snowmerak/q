@@ -23,7 +23,7 @@ toc:
 | `/learn [on\|off\|status]` | Checkpoint or control durable learning for this workspace. |
 | `/model` | Assign models and configure fallback groups. |
 | `/gateway` | Configure providers and Gateway listener settings. |
-| `/systemone` | Configure System One providers, decision models, keys, and listener settings. |
+| `/decisions` | Configure Decisions providers, decision models, keys, and listener settings. |
 | `/library` | Configure the global Library listener. |
 | `/loom` | Inspect Loom storage and configure garbage collection. |
 | `/ignore` | Edit workspace discovery rules in `.qignore`. |
@@ -42,8 +42,8 @@ toc:
 | `q studio [--host <ip>] [--port <port>] [--no-open]` | Start the embedded Studio web interface. Defaults to `127.0.0.1` and a random port. |
 | `q gateway` | Open Gateway providers and listener settings in Studio. |
 | `q gateway start` | Start the OpenAI-compatible Gateway. |
-| `q systemone` | Open System One providers, decision models, and keys in Studio. |
-| `q systemone start [--host <ip>] [--port <port>]` | Start the System One decision API. |
+| `q decisions` | Open Decisions providers, decision models, and keys in Studio. |
+| `q decisions start [--host <ip>] [--port <port>]` | Start the Decisions API. |
 | `q library` | Open global Library listener settings in Studio. |
 | `q library start` | Keep the global Library running as a foreground service. |
 | `q memory` | Keep Workspace Memory running independently. |

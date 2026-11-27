@@ -7,12 +7,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/coordinator"
+	"github.com/snowmerak/q/internal/workitemtools"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/providerhost"
 	"github.com/snowmerak/q/workitems"
@@ -129,6 +131,85 @@ func TestManagerNativeContextAndRootChanges(t *testing.T) {
 	}
 }
 
+func TestManagerACPOperationHonorsSelectedAgent(t *testing.T) {
+	host, _, project, store := testManagerHost(t)
+	if err := store.SaveSessionModelConfig(workspace.SessionModelConfig{Agent: "wire"}); err != nil {
+		t.Fatal(err)
+	}
+	host.factory = func(config.Config) (chatClient, error) {
+		return nil, fmt.Errorf("selected ACP agent was bypassed")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var answer string
+	options := SessionOptions{OperationID: "review-one", Control: NewSessionRunControl()}
+	review := workitemtools.ReviewAssignment{AttemptID: "test-attempt", OperationID: options.OperationID}
+	reviewCtx := workitemtools.WithReviewAssignment(ctx, review)
+	if err := host.RunWithOptions(reviewCtx, store, store.SessionID, "review the worker result", options, func(event SessionEvent) error {
+		if event.Type == "result" {
+			answer = event.Content
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(answer, project.WorkspaceRoots[0]) || !strings.Contains(answer, "role="+coordinator.RoleIntegrator) || !strings.Contains(answer, "review=test-attempt/review-one review-guidance=true") {
+		t.Fatalf("ACP operation lost project role or directory: %s", answer)
+	}
+	live := host.liveSessions[liveSessionKey(store, store.SessionID)]
+	if _, ok := live.prepared.client.(*acpRemoteClient); !ok {
+		t.Fatal("manager operation did not use ACP")
+	}
+	if err := host.Run(ctx, store, store.SessionID, "continue the conversation", func(event SessionEvent) error {
+		if event.Type == "result" {
+			answer = event.Content
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(answer, "resumed=true") || !strings.Contains(answer, "role="+coordinator.RoleIntegrator) || !strings.Contains(answer, "review=/ review-guidance=false") {
+		t.Fatalf("ACP did not resume with manual review tools: %s", answer)
+	}
+}
+
+func TestInteractiveACPReceivesSkillsWithoutWorkTools(t *testing.T) {
+	host, _, _, _ := testManagerHost(t)
+	value, err := host.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.BrowserControl.Enabled = true
+	value.BrowserControl.Preferred = "ego-browser"
+	if err := host.store.Save(value); err != nil {
+		t.Fatal(err)
+	}
+	store, lock, err := workspace.CreateSession(t.TempDir(), "test ACP skills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSessionModelConfig(workspace.SessionModelConfig{Agent: "wire"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var answer string
+	if err := host.Run(ctx, store, store.SessionID, "find an applicable skill", func(event SessionEvent) error {
+		if event.Type == "result" {
+			answer = event.Content
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(answer, "skills=true work-tools=false skill-guidance=true browser-guidance=false") {
+		t.Fatalf("external agent received the wrong MCP capabilities or prompt: %s", answer)
+	}
+}
+
 func TestManagerACPUsesProjectCWDAndResumesUntilClear(t *testing.T) {
 	for _, role := range []string{coordinator.RoleCoordinator, coordinator.RoleIntegrator} {
 		t.Run(role, func(t *testing.T) {
@@ -187,7 +268,7 @@ func TestManagerACPUsesProjectCWDAndResumesUntilClear(t *testing.T) {
 			if err := json.Unmarshal(body, &old); err != nil {
 				t.Fatal(err)
 			}
-			old.LibraryInstructionsVersion = 5
+			old.LibraryInstructionsVersion = acpLibraryInstructionsVersion - 1
 			body, err = json.Marshal(old)
 			if err != nil {
 				t.Fatal(err)
@@ -251,20 +332,61 @@ func TestManagerRequiresLibraryBindingAndAvailableExecutionRoot(t *testing.T) {
 // A deterministic ACP peer exercises the real stdio transport without sending
 // a prompt to a paid provider. It verifies both process CWD and ACP's Cwd field.
 func TestManagerACPHelperProcess(t *testing.T) {
-	if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "manager-acp-helper" {
+	mode := os.Args[len(os.Args)-1]
+	compaction := mode == "compaction-acp-helper"
+	activity := mode == "activity-acp-helper"
+	if mode != "manager-acp-helper" && mode != "subagent-acp-helper" && !compaction && !activity {
 		return
 	}
 	decoder, encoder := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
 	cwd, _ := os.Getwd()
-	resumed := false
+	resumed, skills, workTools := false, false, false
+	reviewAttempt, reviewOperation := "", ""
+	model, effort := "base", "medium"
+	update := func(session string, value map[string]any) {
+		_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": session, "update": value}})
+	}
+	compact := func(session, id, status string) {
+		update(session, map[string]any{"sessionUpdate": "compaction_update", "compactionId": id, "status": status})
+	}
+	efforts := func() []string {
+		if model == "deep" {
+			return []string{"high", "max"}
+		}
+		return []string{"low", "medium"}
+	}
+	options := func() []map[string]any {
+		selectOption := func(id, category, current string, choices []string) map[string]any {
+			values := make([]map[string]string, 0, len(choices))
+			for _, choice := range choices {
+				values = append(values, map[string]string{"value": choice, "name": choice})
+			}
+			return map[string]any{"id": id, "type": "select", "name": category, "category": category, "currentValue": current, "options": values}
+		}
+		return []map[string]any{
+			selectOption("selected-model", "model", model, []string{"base", "fast", "deep"}),
+			selectOption("depth", "thought_level", effort, efforts()),
+		}
+	}
 	for {
 		var request struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
 			Params struct {
-				Cwd       string `json:"cwd"`
-				SessionID string `json:"sessionId"`
-				Prompt    []struct {
+				Cwd                string `json:"cwd"`
+				SessionID          string `json:"sessionId"`
+				ConfigID           string `json:"configId"`
+				Value              string `json:"value"`
+				ClientCapabilities struct {
+					Session struct {
+						Compaction *struct{} `json:"compaction"`
+					} `json:"session"`
+				} `json:"clientCapabilities"`
+				MCPServers []struct {
+					Name string   `json:"name"`
+					Args []string `json:"args"`
+				} `json:"mcpServers"`
+				Prompt []struct {
 					Text string `json:"text"`
 				} `json:"prompt"`
 			} `json:"params"`
@@ -275,25 +397,132 @@ func TestManagerACPHelperProcess(t *testing.T) {
 		var result any = map[string]any{}
 		switch request.Method {
 		case "initialize":
+			if compaction && request.Params.ClientCapabilities.Session.Compaction == nil {
+				os.Exit(6)
+			}
 			result = map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true}}
 		case "session/new", "session/load":
 			if filepath.Clean(request.Params.Cwd) != filepath.Clean(cwd) {
 				os.Exit(2)
 			}
 			resumed = request.Method == "session/load"
-			if !resumed {
-				result = map[string]any{"sessionId": fmt.Sprintf("remote-%d", os.Getpid())}
+			servers := request.Params.MCPServers
+			if mode == "manager-acp-helper" && (len(servers) != 1 || servers[0].Name != "q-library") {
+				fmt.Fprintf(os.Stderr, "expected one q-library server, got %+v\n", servers)
+				os.Exit(3)
 			}
+			if len(servers) != 0 {
+				skills = true
+				workTools = !slices.Contains(servers[0].Args, "--skills-only")
+				for i, arg := range servers[0].Args[:len(servers[0].Args)-1] {
+					switch arg {
+					case "--review-attempt":
+						reviewAttempt = servers[0].Args[i+1]
+					case "--review-operation":
+						reviewOperation = servers[0].Args[i+1]
+					}
+				}
+			}
+			setup := map[string]any{"configOptions": options()}
+			if !resumed {
+				setup["sessionId"] = fmt.Sprintf("remote-%d", os.Getpid())
+			}
+			if compaction {
+				session := request.Params.SessionID
+				if !resumed {
+					session = setup["sessionId"].(string)
+				} else {
+					compact(session, "prior", "completed")
+				}
+				update(session, map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": []map[string]string{{"name": "compact", "description": "Compact older context"}}})
+			}
+			result = setup
+		case "session/set_config_option":
+			switch request.Params.ConfigID {
+			case "selected-model":
+				model = request.Params.Value
+				effort = "medium"
+				if model == "deep" {
+					effort = "high"
+				}
+			case "depth":
+				if !slices.Contains(efforts(), request.Params.Value) {
+					os.Exit(4)
+				}
+				effort = request.Params.Value
+			default:
+				os.Exit(5)
+			}
+			result = map[string]any{"configOptions": options()}
 		case "session/prompt":
-			role := "none"
+			if activity {
+				session := request.Params.SessionID
+				update(session, map[string]any{"sessionUpdate": "plan", "entries": []map[string]string{
+					{"content": "Check evidence", "priority": "medium", "status": "in_progress"},
+				}})
+				update(session, map[string]any{"sessionUpdate": "tool_call", "toolCallId": "read-1", "title": "Inspect notes", "status": "in_progress"})
+				update(session, map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]string{"type": "text", "text": "private trace"}})
+				update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": "Found evidence"}})
+				deadline := time.Now().Add(20 * time.Second)
+				for {
+					if _, err := os.Stat(filepath.Join(cwd, "allow-acp-result")); err == nil {
+						break
+					}
+					if time.Now().After(deadline) {
+						os.Exit(7)
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
+				update(session, map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "read-1", "status": "completed"})
+				update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": " in notes."}})
+				result = map[string]any{"stopReason": "end_turn"}
+				break
+			}
+			if compaction {
+				session := request.Params.SessionID
+				text := request.Params.Prompt[0].Text
+				switch {
+				case text == "/compact":
+					if resumed {
+						compact(session, "current", "in_progress")
+						compact(session, "current", "completed")
+						text = ""
+					} else {
+						compact(session, "prior", "completed")
+						compact(session+"-other", "different-session", "completed")
+						text = "Context compacted."
+					}
+				case strings.Contains(text, `"answer":"Keep compatibility"`):
+					text = "Applied Keep compatibility in " + session
+				default:
+					compact(session, "prior", "completed")
+					text = "Compatibility discovered late.\n```q-user-decision\n" + `{"question":"Keep compatibility?","late":true,"choices":["Keep compatibility","Remove compatibility"]}` + "\n```"
+				}
+				if text != "" {
+					update(session, map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}})
+				}
+				result = map[string]any{"stopReason": "end_turn"}
+				break
+			}
+			role, skillGuidance, browserGuidance, reviewGuidance := "none", false, false, false
+			webTester := false
 			for _, block := range request.Params.Prompt {
+				webTester = webTester || strings.Contains(block.Text, "You are q's isolated external Web Tester")
+				skillGuidance = skillGuidance || strings.Contains(block.Text, "search_skills") && strings.Contains(block.Text, "get_skill")
+				browserGuidance = browserGuidance || strings.Contains(block.Text, "<q_browser_control>")
+				reviewGuidance = reviewGuidance || strings.Contains(block.Text, workitemtools.AssignedReviewInstructions)
 				for _, candidate := range []string{coordinator.RoleCoordinator, coordinator.RoleIntegrator} {
 					if strings.Contains(block.Text, coordinator.RoleInstructions(candidate)) {
 						role = candidate
 					}
 				}
 			}
-			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": request.Params.SessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": fmt.Sprintf("cwd=%s resumed=%t role=%s", cwd, resumed, role)}}}})
+			text := fmt.Sprintf("cwd=%s resumed=%t role=%s skills=%t work-tools=%t skill-guidance=%t browser-guidance=%t review=%s/%s review-guidance=%t model=%s effort=%s", cwd, resumed, role, skills, workTools, skillGuidance, browserGuidance, reviewAttempt, reviewOperation, reviewGuidance, model, effort)
+			if webTester {
+				body, _ := json.Marshal(map[string]string{"outcome": "succeeded", "summary": text})
+				text = string(body)
+			}
+			_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": request.Params.SessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": text}}}})
 			result = map[string]any{"stopReason": "end_turn"}
 		}
 		if len(request.ID) != 0 {

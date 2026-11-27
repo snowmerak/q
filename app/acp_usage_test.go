@@ -256,8 +256,9 @@ func TestACPAgentEmitsUsageAfterPrompt(t *testing.T) {
 	if got.SessionId != sessionID || got.Update.UsageUpdate == nil {
 		t.Fatalf("usage notification = %#v", got)
 	}
-	if first.Update.UsageUpdate.Used >= got.Update.UsageUpdate.Used {
-		t.Fatalf("usage did not increase after assistant response: first=%d final=%d", first.Update.UsageUpdate.Used, got.Update.UsageUpdate.Used)
+	if used := got.Update.UsageUpdate.Used; used >= first.Update.UsageUpdate.Used || used <= configuredClient.usage.PromptTokens {
+		t.Fatalf("final usage = %d, want reported input %d plus the reply estimate below the initial estimate %d",
+			used, configuredClient.usage.PromptTokens, first.Update.UsageUpdate.Used)
 	}
 	if got.Update.UsageUpdate.Used != stats.PredictedTokens || got.Update.UsageUpdate.Size != stats.ContextWindow {
 		t.Fatalf(

@@ -355,13 +355,17 @@ func TestSystemOneModelPickerCancelIgnoresLateResult(t *testing.T) {
 	}
 }
 
-func TestSystemOneSlashCommandOpensSettings(t *testing.T) {
-	m := newModel(context.Background(), config.Store{Dir: t.TempDir()}, nil)
-	m.enterChat(config.Default(), &fakeClient{})
-	m.input.SetValue("/systemone")
-	updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	if updated.(model).screen != screenSystemOne {
-		t.Fatal("/systemone did not open settings")
+func TestDecisionsSlashCommandsOpenSettings(t *testing.T) {
+	for _, command := range []string{"/decisions", "/systemone"} {
+		t.Run(command, func(t *testing.T) {
+			m := newModel(t.Context(), config.Store{Dir: t.TempDir()}, nil)
+			m.enterChat(config.Default(), &fakeClient{})
+			m.input.SetValue(command)
+			updated, _ := m.updateChatKey(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+			if got := updated.(model); got.screen != screenSystemOne || !strings.Contains(ansi.Strip(got.viewSystemOne()), "q · Decisions") {
+				t.Fatalf("%s did not open Decisions settings", command)
+			}
+		})
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/snowmerak/q/config"
 )
 
 const (
@@ -22,34 +23,40 @@ const (
 
 // Item contains thread metadata; its body lives only in the referenced Post.
 type Item struct {
-	DependsOn         []string        `json:"depends_on,omitempty"`
-	WaitingOn         []string        `json:"waiting_on,omitempty"`
-	ID                string          `json:"id"`
-	WorkspaceID       string          `json:"workspace_id"`
-	Kind              string          `json:"kind"`
-	Number            int64           `json:"number"`
-	Title             string          `json:"title"`
-	BodyPostID        string          `json:"body_post_id"`
-	State             string          `json:"state"`
-	Labels            []string        `json:"labels"`
-	Schedule          *TicketSchedule `json:"schedule,omitempty"`
-	ScheduleID        string          `json:"schedule_id,omitempty"`
-	ScheduledFor      time.Time       `json:"scheduled_for,omitempty"`
-	NextScheduledAt   time.Time       `json:"next_scheduled_at,omitempty"`
-	Acceptance        []string        `json:"acceptance,omitempty"`
-	ExecutionMode     string          `json:"execution_mode,omitempty"`
-	RequestedMemberID string          `json:"requested_member_id,omitempty"`
-	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
-	ExecutionState    string          `json:"execution_state,omitempty"`
-	ExecutionReason   string          `json:"execution_reason,omitempty"`
-	ActiveAttemptID   string          `json:"active_attempt_id,omitempty"`
-	AssignedMemberID  string          `json:"assigned_member_id,omitempty"`
-	NextAssignmentAt  time.Time       `json:"next_assignment_at,omitempty"`
-	Revision          int64           `json:"revision"`
-	SourceRevision    int64           `json:"source_revision"`
-	Deleted           bool            `json:"deleted"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
+	ParentTicketID        string          `json:"parent_ticket_id,omitempty"`
+	ParentWorktreeID      string          `json:"parent_worktree_id,omitempty"`
+	HandoffMemberID       string          `json:"handoff_member_id,omitempty"`
+	DependsOn             []string        `json:"depends_on,omitempty"`
+	WaitingOn             []string        `json:"waiting_on,omitempty"`
+	ID                    string          `json:"id"`
+	WorkspaceID           string          `json:"workspace_id"`
+	Kind                  string          `json:"kind"`
+	Number                int64           `json:"number"`
+	Title                 string          `json:"title"`
+	BodyPostID            string          `json:"body_post_id"`
+	State                 string          `json:"state"`
+	Labels                []string        `json:"labels"`
+	Schedule              *TicketSchedule `json:"schedule,omitempty"`
+	ScheduleID            string          `json:"schedule_id,omitempty"`
+	ScheduledFor          time.Time       `json:"scheduled_for,omitempty"`
+	NextScheduledAt       time.Time       `json:"next_scheduled_at,omitempty"`
+	Acceptance            []string        `json:"acceptance,omitempty"`
+	ExecutionMode         string          `json:"execution_mode,omitempty"`
+	RequestedMemberID     string          `json:"requested_member_id,omitempty"`
+	RequestedRole         string          `json:"requested_role,omitempty"`
+	LinkedIssueID         string          `json:"linked_issue_id,omitempty"`
+	RequireStartApproval  bool            `json:"require_start_approval,omitempty"`
+	ApprovedStartContract string          `json:"approved_start_contract,omitempty"`
+	ExecutionState        string          `json:"execution_state,omitempty"`
+	ExecutionReason       string          `json:"execution_reason,omitempty"`
+	ActiveAttemptID       string          `json:"active_attempt_id,omitempty"`
+	AssignedMemberID      string          `json:"assigned_member_id,omitempty"`
+	NextAssignmentAt      time.Time       `json:"next_assignment_at,omitempty"`
+	Revision              int64           `json:"revision"`
+	SourceRevision        int64           `json:"source_revision"`
+	Deleted               bool            `json:"deleted"`
+	CreatedAt             time.Time       `json:"created_at"`
+	UpdatedAt             time.Time       `json:"updated_at"`
 }
 
 type Post struct {
@@ -70,20 +77,23 @@ type Post struct {
 }
 
 type CreateInput struct {
-	DependsOn         []string        `json:"depends_on,omitempty"`
-	Schedule          *TicketSchedule `json:"schedule,omitempty"`
-	WorkspaceID       string          `json:"workspace_id"`
-	Kind              string          `json:"kind"`
-	Title             string          `json:"title"`
-	Content           string          `json:"content"`
-	Labels            []string        `json:"labels,omitempty"`
-	Acceptance        []string        `json:"acceptance,omitempty"`
-	ExecutionMode     string          `json:"execution_mode,omitempty"`
-	RequestedMemberID string          `json:"requested_member_id,omitempty"`
-	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
-	Author            string          `json:"author"`
-	Refs              []string        `json:"refs,omitempty"`
-	RequestID         string          `json:"request_id,omitempty"`
+	RequireStartApproval bool            `json:"require_start_approval,omitempty"`
+	ParentWorker         *WorkerBinding  `json:"parent_worker,omitempty"`
+	DependsOn            []string        `json:"depends_on,omitempty"`
+	Schedule             *TicketSchedule `json:"schedule,omitempty"`
+	WorkspaceID          string          `json:"workspace_id"`
+	Kind                 string          `json:"kind"`
+	Title                string          `json:"title"`
+	Content              string          `json:"content"`
+	Labels               []string        `json:"labels,omitempty"`
+	Acceptance           []string        `json:"acceptance,omitempty"`
+	ExecutionMode        string          `json:"execution_mode,omitempty"`
+	RequestedMemberID    string          `json:"requested_member_id,omitempty"`
+	RequestedRole        string          `json:"requested_role,omitempty"`
+	LinkedIssueID        string          `json:"linked_issue_id,omitempty"`
+	Author               string          `json:"author"`
+	Refs                 []string        `json:"refs,omitempty"`
+	RequestID            string          `json:"request_id,omitempty"`
 }
 
 type UpdateInput struct {
@@ -95,6 +105,7 @@ type UpdateInput struct {
 	Labels            []string        `json:"labels"`
 	Acceptance        []string        `json:"acceptance,omitempty"`
 	RequestedMemberID string          `json:"requested_member_id,omitempty"`
+	RequestedRole     *string         `json:"requested_role,omitempty"`
 	LinkedIssueID     string          `json:"linked_issue_id,omitempty"`
 	ExecutionMode     string          `json:"execution_mode,omitempty"`
 	Deleted           bool            `json:"deleted"`
@@ -102,13 +113,14 @@ type UpdateInput struct {
 }
 
 type PostInput struct {
-	Content       string   `json:"content"`
-	Author        string   `json:"author"`
-	Refs          []string `json:"refs,omitempty"`
-	ReplyToPostID string   `json:"reply_to_post_id,omitempty"`
-	Revision      int64    `json:"revision,omitempty"`
-	Deleted       bool     `json:"deleted,omitempty"`
-	RequestID     string   `json:"request_id,omitempty"`
+	Worker        *WorkerBinding `json:"worker,omitempty"`
+	Content       string         `json:"content"`
+	Author        string         `json:"author"`
+	Refs          []string       `json:"refs,omitempty"`
+	ReplyToPostID string         `json:"reply_to_post_id,omitempty"`
+	Revision      int64          `json:"revision,omitempty"`
+	Deleted       bool           `json:"deleted,omitempty"`
+	RequestID     string         `json:"request_id,omitempty"`
 }
 
 type Thread struct {
@@ -133,6 +145,12 @@ type Change struct {
 	PostID      string `json:"post_id,omitempty"`
 }
 
+const (
+	visibleBoardTicket = `kind='ticket' AND coalesce(json_extract(payload,'$.deleted'),0)=0`
+	activeBoardTickets = visibleBoardTicket + ` AND json_extract(payload,'$.state') IN ('todo','in_progress')`
+	doneBoardTickets   = visibleBoardTicket + ` AND json_extract(payload,'$.state')='done'`
+)
+
 func (s *Store) initializeItems(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS items (
@@ -141,6 +159,8 @@ CREATE TABLE IF NOT EXISTS items (
  number INTEGER NOT NULL, payload BLOB NOT NULL, UNIQUE(workspace_id,kind,number)
 );
 CREATE INDEX IF NOT EXISTS items_workspace ON items(workspace_id,kind,seq);
+CREATE INDEX IF NOT EXISTS items_ticket_board_active ON items(workspace_id,seq) WHERE `+activeBoardTickets+`;
+CREATE INDEX IF NOT EXISTS items_ticket_board_done ON items(workspace_id,seq) WHERE `+doneBoardTickets+`;
 CREATE TABLE IF NOT EXISTS posts (
  id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id), item_id TEXT NOT NULL REFERENCES items(id),
  seq INTEGER NOT NULL, revision INTEGER NOT NULL, payload BLOB NOT NULL, UNIQUE(item_id,seq)
@@ -309,13 +329,46 @@ func (s *Store) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 		return Item{}, ErrInvalidInput
 	}
 	var err error
+	in.RequestedRole, err = normalizeRequestedRole(in.Kind, in.RequestedRole)
+	if err != nil {
+		return Item{}, err
+	}
+	if in.RequestedRole != "" && in.RequestedMemberID != "" {
+		return Item{}, fmt.Errorf("%w: choose a requested role or a specific member", ErrInvalidInput)
+	}
 	in.Schedule, err = normalizeTicketSchedule(in.Kind, in.Schedule)
 	if err != nil {
 		return Item{}, err
 	}
-	return mutate(ctx, s, in.WorkspaceID, "create", in.RequestID, in, func(tx *sql.Tx) (Item, error) {
+	operation, receiptInput := "create", in
+	if in.ParentWorker != nil {
+		a, err := s.GetAttempt(ctx, in.ParentWorker.AttemptID)
+		if err != nil {
+			return Item{}, err
+		}
+		if in.ParentWorker.Token == "" || a.Binding() != *in.ParentWorker || a.WorkspaceID != in.WorkspaceID {
+			return Item{}, ErrConflict
+		}
+		// The request ID names the same child after a parent session resumes
+		// with a new lease or a selected member takes over the same worktree.
+		operation = "create-child:" + a.WorktreeID
+		receiptInput.ParentWorker = nil
+		receiptInput.Author = "agent"
+	}
+	return mutate(ctx, s, in.WorkspaceID, operation, in.RequestID, receiptInput, func(tx *sql.Tx) (Item, error) {
 		return createItemTx(ctx, tx, in, "", time.Time{})
 	})
+}
+
+func normalizeRequestedRole(kind, role string) (string, error) {
+	role = config.CanonicalAgentRole(strings.TrimSpace(role))
+	if role == "" {
+		return "", nil
+	}
+	if kind != Ticket || (!config.IsAgentRole(role) && !config.IsExternalAgentRole(role) && !config.ValidCustomRoleName(role)) {
+		return "", fmt.Errorf("%w: invalid requested ticket role %q", ErrInvalidInput, role)
+	}
+	return role, nil
 }
 
 func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID string, scheduledFor time.Time) (Item, error) {
@@ -324,15 +377,38 @@ func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID st
 	if item.Labels == nil {
 		item.Labels = []string{}
 	}
+	if in.ParentWorker != nil {
+		if in.Kind != Ticket || in.ExecutionMode != "git" || in.Schedule != nil || in.RequestID == "" {
+			return Item{}, fmt.Errorf("%w: child creation requires a Git ticket and a request ID", ErrInvalidInput)
+		}
+		parent, err := boundWorker(ctx, tx, *in.ParentWorker)
+		if err != nil {
+			return Item{}, err
+		}
+		if parent.WorkspaceID != in.WorkspaceID || parent.ChangeRequest == nil || parent.ChangeRequest.Status != "working" || parent.ReviewChildAttemptID != "" {
+			return Item{}, fmt.Errorf("%w: child creation requires an active parent Git worktree", ErrConflict)
+		}
+		item.ParentTicketID, item.ParentWorktreeID = parent.TicketID, parent.WorktreeID
+		in.Author = "agent/" + parent.WorkerSessionID
+	}
 	if in.Kind == Ticket {
 		item.State = "todo"
 		item.ExecutionState = "queued"
 		item.Acceptance = in.Acceptance
 		item.ExecutionMode = in.ExecutionMode
 		item.RequestedMemberID = in.RequestedMemberID
+		item.RequestedRole = in.RequestedRole
 		item.LinkedIssueID = in.LinkedIssueID
 		if err := applyTicketSchedule(&item, in.Schedule, now); err != nil {
 			return Item{}, err
+		}
+		required, err := projectRequiresStartApproval(ctx, tx, item.WorkspaceID)
+		if err != nil {
+			return Item{}, err
+		}
+		item.RequireStartApproval = in.RequireStartApproval || required
+		if requiresFreshStartApproval(item) {
+			resetStartApproval(&item)
 		}
 	}
 	if in.LinkedIssueID != "" {
@@ -377,6 +453,16 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 		if item.Revision != in.Revision {
 			return Item{}, ErrConflict
 		}
+		if item.Kind == Ticket {
+			waiting, err := awaitingTicketDecision(ctx, tx, item)
+			if err != nil {
+				return Item{}, err
+			}
+			if waiting {
+				return Item{}, fmt.Errorf("%w: cancel the pending execution before changing its scope", ErrConflict)
+			}
+		}
+		originalContract := ticketContract(item, 0)
 		if strings.TrimSpace(in.Title) == "" || len(in.Title) > 512 || !validItemText(in.Labels, in.Acceptance) {
 			return Item{}, ErrInvalidInput
 		}
@@ -393,6 +479,9 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 			return Item{}, fmt.Errorf("%w: use the ticket execution/review operations to move columns", ErrInvalidInput)
 		}
 		if item.Kind == Ticket && in.ExecutionMode != "" && in.ExecutionMode != item.ExecutionMode {
+			if item.ParentTicketID != "" {
+				return Item{}, fmt.Errorf("%w: child tickets use Git execution", ErrConflict)
+			}
 			if in.ExecutionMode != "git" && in.ExecutionMode != "report" {
 				return Item{}, ErrInvalidInput
 			}
@@ -442,12 +531,35 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 			}
 		}
 		if item.Kind == Ticket && in.Deleted && item.State != "done" {
+			if item.ParentTicketID != "" && item.ExecutionState != "cancelled" && item.ExecutionState != "rejected" {
+				return Item{}, fmt.Errorf("%w: resolve the child ticket before removing it", ErrConflict)
+			}
 			if err := requireNoUnfinishedDependents(ctx, tx, item); err != nil {
 				return Item{}, err
 			}
 		}
+		if in.RequestedRole != nil {
+			role, err := normalizeRequestedRole(item.Kind, *in.RequestedRole)
+			if err != nil {
+				return Item{}, err
+			}
+			if item.ActiveAttemptID != "" {
+				return Item{}, fmt.Errorf("%w: the requested role can change before the first execution", ErrConflict)
+			}
+			if role != "" && in.RequestedMemberID != "" {
+				return Item{}, fmt.Errorf("%w: choose a requested role or a specific member", ErrInvalidInput)
+			}
+			item.RequestedRole = role
+		} else if in.RequestedMemberID != "" && in.RequestedMemberID != item.RequestedMemberID {
+			item.RequestedRole = ""
+		}
 		item.Title, item.State, item.Labels, item.Deleted = strings.TrimSpace(in.Title), in.State, in.Labels, in.Deleted
 		item.Acceptance, item.RequestedMemberID, item.LinkedIssueID = in.Acceptance, in.RequestedMemberID, in.LinkedIssueID
+		if requiresFreshStartApproval(item) && (item.ApprovedStartContract == "" || originalContract != ticketContract(item, 0)) {
+			resetStartApproval(&item)
+		} else if item.RequireStartApproval && item.ActiveAttemptID == "" && originalContract != ticketContract(item, 0) {
+			item.ApprovedStartContract = ""
+		}
 		item.Revision++
 		item.SourceRevision++
 		item.UpdatedAt = time.Now().UTC()
@@ -555,11 +667,21 @@ func (s *Store) UpdatePost(ctx context.Context, id string, in PostInput) (Post, 
 		if post.Revision != in.Revision {
 			return Post{}, ErrConflict
 		}
+		if in.Worker != nil {
+			worker, err := boundWorker(ctx, tx, *in.Worker)
+			if err != nil {
+				return Post{}, err
+			}
+			if post.Kind != "body" || post.ItemID != worker.TicketID || post.Deleted != in.Deleted {
+				return Post{}, fmt.Errorf("%w: a worker can edit only its assigned ticket body", ErrConflict)
+			}
+		}
 		post.Revision++
 		post.UpdatedAt = time.Now().UTC()
 		post.Deleted = in.Deleted
 		if !in.Deleted {
-			post.Content, post.Author, post.Refs = in.Content, in.Author, in.Refs
+			// Keep the original author as the owner across revisions.
+			post.Content, post.Refs = in.Content, in.Refs
 		}
 		if err := savePost(ctx, tx, post, false); err != nil {
 			return Post{}, err
@@ -567,6 +689,20 @@ func (s *Store) UpdatePost(ctx context.Context, id string, in PostInput) (Post, 
 		item, err := decodeRow[Item](tx.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=?`, post.ItemID))
 		if err != nil {
 			return Post{}, err
+		}
+		if item.Kind == Ticket && post.Kind == "body" {
+			waiting, err := awaitingTicketDecision(ctx, tx, item)
+			if err != nil {
+				return Post{}, err
+			}
+			if waiting {
+				return Post{}, fmt.Errorf("%w: cancel the pending execution before changing its scope", ErrConflict)
+			}
+			if requiresFreshStartApproval(item) {
+				resetStartApproval(&item)
+			} else if item.RequireStartApproval && item.ActiveAttemptID == "" {
+				item.ApprovedStartContract = ""
+			}
 		}
 		item.UpdatedAt = post.UpdatedAt
 		item.Revision++
@@ -632,6 +768,40 @@ func (s *Store) ListItems(ctx context.Context, workspaceID, kind, token string, 
 	}
 	query += ` ORDER BY seq LIMIT ?`
 	args = append(args, limit+1)
+	return s.readItemPage(ctx, c, limit, query, args...)
+}
+
+// ListBoardTickets gives active work and completed history separate cursors.
+// Completed history is ordered newest ticket number first.
+func (s *Store) ListBoardTickets(ctx context.Context, workspaceID, view, token string, limit int) (ItemPage, error) {
+	if workspaceID == "" || (view != "active" && view != "done") {
+		return ItemPage{}, ErrInvalidInput
+	}
+	c, err := readCursor(token, "ticket-board:"+workspaceID+":"+view)
+	if err != nil {
+		return ItemPage{}, err
+	}
+	if token == "" {
+		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(max(seq),0) FROM items`).Scan(&c.Upper); err != nil {
+			return ItemPage{}, err
+		}
+	}
+	limit = pageLimit(limit)
+	prefix := `SELECT seq,` + itemReadPayload + ` FROM items WHERE workspace_id=? AND seq<=? AND `
+	if view == "active" {
+		query := prefix + activeBoardTickets + ` AND seq>? ORDER BY seq LIMIT ?`
+		return s.readItemPage(ctx, c, limit, query, workspaceID, c.Upper, c.After, limit+1)
+	}
+	query := prefix + doneBoardTickets
+	args := []any{workspaceID, c.Upper}
+	if c.After > 0 {
+		query += ` AND seq<?`
+		args = append(args, c.After)
+	}
+	return s.readItemPage(ctx, c, limit, query+` ORDER BY seq DESC LIMIT ?`, append(args, limit+1)...)
+}
+
+func (s *Store) readItemPage(ctx context.Context, c pageCursor, limit int, query string, args ...any) (ItemPage, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return ItemPage{}, err

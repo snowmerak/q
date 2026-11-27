@@ -48,6 +48,8 @@ type Request struct {
 	Stream               bool
 	CoalesceInstructions bool
 	ContextPolicy        memory.Policy
+	// PromptUsage is the most recent observation for this retained history.
+	PromptUsage memory.PromptUsage
 	// BrowserPreference is host guidance for runtimes that expose run_command.
 	BrowserPreference string
 	// AllowedTools filters the complete catalog, including loop-owned tools.
@@ -101,6 +103,7 @@ type Event struct {
 	responseContext     *client.Message
 	replyAlreadyEmitted bool
 	usage               *client.Usage
+	promptUsage         *memory.PromptUsage
 	call                *client.ToolCall
 	question            *AgentQuestion
 	answer              chan AgentAnswer
@@ -112,12 +115,13 @@ type Event struct {
 	requestEstimate     int
 	toolCalls           int
 
-	streamDelta    *AgentStreamDelta
-	taskStarted    *workspace.ActiveTask
-	taskCompleted  bool
-	generation     *client.GenerationAttempt
-	contextReplace *ContextReplacement
-	err            error
+	streamDelta       *AgentStreamDelta
+	taskStarted       *workspace.ActiveTask
+	taskCompleted     bool
+	generation        *client.GenerationAttempt
+	contextReplace    *ContextReplacement
+	toolTokenEstimate int
+	err               error
 }
 
 func (e Event) Status() (string, bool) { return e.status, e.status != "" }
@@ -154,6 +158,14 @@ func (e Event) Usage() (client.Usage, bool) {
 	return *e.usage, true
 }
 
+// PromptUsage reports a model call's input count before subsequent history changes.
+func (e Event) PromptUsage() (memory.PromptUsage, bool) {
+	if e.promptUsage == nil {
+		return memory.PromptUsage{}, false
+	}
+	return *e.promptUsage, true
+}
+
 func (e Event) ToolCall() (client.ToolCall, bool) {
 	if e.call == nil {
 		return client.ToolCall{}, false
@@ -182,6 +194,9 @@ func (e Event) ContextReplacement() (ContextReplacement, bool) {
 	}
 	return *e.contextReplace, true
 }
+
+// ToolTokenEstimate reports the estimated cost of the active tool catalog before a request.
+func (e Event) ToolTokenEstimate() int { return e.toolTokenEstimate }
 
 func (e Event) StreamDelta() (AgentStreamDelta, bool) {
 	if e.streamDelta == nil {

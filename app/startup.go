@@ -12,6 +12,7 @@ import (
 	"github.com/snowmerak/q/archiveembed"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/workitemtools"
 	qlibrary "github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/providerhost"
@@ -150,6 +151,8 @@ type startupRequest struct {
 	projectID          string
 	sessionID          string
 	projectManager     bool
+	projectCoordinator bool
+	review             workitemtools.ReviewAssignment
 	auxiliaryRoots     []string
 	loaded             config.Config
 	configErr          error
@@ -298,7 +301,9 @@ func (request startupRequest) run(modelReady chan<- struct{}) (result runtimeIni
 			}, toolArchive, loaded.LoomStoreOptions(nil), loaded.LSP, workspaceLSP, libraryClient,
 			qtools.WithSystemOneSkillRanking(systemoneconfig.Store{Dir: request.store.Dir}),
 			qtools.WithSystemOneArchiveRanking(systemoneconfig.Store{Dir: request.store.Dir}),
-			qtools.WithWorkspaceWork(libraryClient, request.projectID, request.sessionID, request.projectManager),
+			qtools.WithWorkspaceWorkBinding(libraryClient, workitemtools.Binding{
+				WorkspaceID: request.projectID, SessionID: request.sessionID, Manager: request.projectManager, Coordinator: request.projectCoordinator, Review: request.review,
+			}),
 		)
 		result.tools = tools
 		result.library = libraryClient

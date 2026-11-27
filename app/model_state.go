@@ -89,6 +89,7 @@ type sessionState struct {
 	runID                  string
 	sessionTitle           string
 	sessionUpdatedAt       time.Time
+	historyRevision        string
 	responseUsage          []workspace.ResponseUsage
 	standalone             bool
 	standaloneRoot         screen
@@ -163,7 +164,7 @@ type systemOneState struct {
 	systemOnePage           systemOnePage
 	systemOneListCursor     int
 	systemOnePending        bool
-	systemOneInputs         [8]textinput.Model
+	systemOneInputs         [systemOneFieldCount]textinput.Model
 	systemOneFocus          int
 	systemOneModelTarget    int
 	systemOneModels         []systemone.Model

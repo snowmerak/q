@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStorage } from '../uiStorage';
   import { RefreshCw, Search, RotateCw } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestJSON } from '../api';
@@ -9,7 +10,7 @@
   let error = '';
   let partial = false;
   let received = 0;
-  let workspaceRoot = localStorage.getItem('q-studio-workspace-root') || '';
+  let workspaceRoot = uiStorage.getItem('q-studio-workspace-root') || '';
   let inspectedRoot = workspaceRoot;
   let generation = 0;
   let controller: AbortController | undefined;

@@ -41,9 +41,9 @@
     gatewayKeyCopied = true;
   }
 
-  function saveService(name: 'gateway' | 'system-one' | 'library') {
+  function saveService(name: 'gateway' | 'decisions' | 'library') {
     if (!settings) return;
-    const service = name === 'system-one' ? settings.services.system_one : settings.services[name];
+    const service = name === 'decisions' ? settings.services.system_one : settings.services[name];
     const payload = JSON.stringify({
       host: service.host,
       port: service.port
@@ -72,8 +72,8 @@
       </div>
     </article>
     <article class="settings-card service-card">
-      <div class="card-heading"><div><h3>System One</h3><p>{settings.services.system_one.provider_count} providers · {settings.services.system_one.default_model}</p></div><span class="count-badge">{settings.services.system_one.active_api_keys} keys</span></div>
-      <label><span>Host</span><input bind:value={settings.services.system_one.host} onchange={() => saveService('system-one')} /></label><label><span>Port</span><input type="number" min="0" max="65535" bind:value={settings.services.system_one.port} onchange={() => saveService('system-one')} /></label><code>{settings.services.system_one.config_path}</code>
+      <div class="card-heading"><div><h3>Decisions</h3><p>{settings.services.system_one.provider_count} providers · {settings.services.system_one.default_model}</p></div><span class="count-badge">{settings.services.system_one.active_api_keys} keys</span></div>
+      <label><span>Host</span><input bind:value={settings.services.system_one.host} onchange={() => saveService('decisions')} /></label><label><span>Port</span><input type="number" min="0" max="65535" bind:value={settings.services.system_one.port} onchange={() => saveService('decisions')} /></label><code>{settings.services.system_one.config_path}</code>
     </article>
     <article class="settings-card service-card">
       <div class="card-heading"><div><h3>Library</h3><p>Global skills and workspace issue/ticket service.</p></div><span class="count-badge">local</span></div>

@@ -25,7 +25,12 @@ func (c *Client) GetItem(ctx context.Context, id string) (workitems.Item, error)
 	return output, err
 }
 func (c *Client) ListItems(ctx context.Context, workspaceID, kind, cursor string, limit int) (workitems.ItemPage, error) {
-	query := url.Values{"workspace_id": {workspaceID}, "kind": {kind}, "cursor": {cursor}, "limit": {strconv.Itoa(limit)}}
+	return c.listItems(ctx, url.Values{"workspace_id": {workspaceID}, "kind": {kind}, "cursor": {cursor}, "limit": {strconv.Itoa(limit)}})
+}
+func (c *Client) ListBoardTickets(ctx context.Context, workspaceID, view, cursor string, limit int) (workitems.ItemPage, error) {
+	return c.listItems(ctx, url.Values{"workspace_id": {workspaceID}, "kind": {workitems.Ticket}, "board": {view}, "cursor": {cursor}, "limit": {strconv.Itoa(limit)}})
+}
+func (c *Client) listItems(ctx context.Context, query url.Values) (workitems.ItemPage, error) {
 	var output workitems.ItemPage
 	err := c.doJSON(ctx, http.MethodGet, "/items?"+query.Encode(), nil, &output)
 	return output, err
@@ -47,6 +52,12 @@ func (c *Client) ReadContent(ctx context.Context, id, cursor string, limit int) 
 	err := c.doJSON(ctx, http.MethodGet, "/posts/"+url.PathEscape(id)+"?"+query.Encode(), nil, &output)
 	return output, err
 }
+
+func (c *Client) ReadPostRevision(ctx context.Context, id string, revision int64) (workitems.Post, error) {
+	var out workitems.Post
+	err := c.doJSON(ctx, http.MethodGet, "/posts/"+url.PathEscape(id)+"/revision/"+strconv.FormatInt(revision, 10), nil, &out)
+	return out, err
+}
 func (c *Client) UpdatePost(ctx context.Context, id string, input workitems.PostInput) (workitems.Post, error) {
 	var output workitems.Post
 	err := c.doJSON(ctx, http.MethodPut, "/posts/"+url.PathEscape(id), input, &output)
@@ -66,13 +77,36 @@ func queryLimit(r *http.Request) (int, error) {
 }
 
 func registerItemRoutes(mux *http.ServeMux, store *workitems.Store) {
+	mux.HandleFunc("GET /v1/posts/{post}/revision/{revision}", func(w http.ResponseWriter, r *http.Request) {
+		revision, err := strconv.ParseInt(r.PathValue("revision"), 10, 64)
+		if err != nil || revision < 0 {
+			workspaceError(w, workitems.ErrInvalidInput)
+			return
+		}
+		post, err := store.GetPost(r.Context(), r.PathValue("post"), revision)
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, post)
+	})
 	mux.HandleFunc("GET /v1/items", func(w http.ResponseWriter, r *http.Request) {
 		limit, err := queryLimit(r)
 		if err != nil {
 			workspaceError(w, err)
 			return
 		}
-		out, err := store.ListItems(r.Context(), r.URL.Query().Get("workspace_id"), r.URL.Query().Get("kind"), r.URL.Query().Get("cursor"), limit)
+		query := r.URL.Query()
+		var out workitems.ItemPage
+		if board := query.Get("board"); board != "" {
+			if query.Get("kind") != workitems.Ticket {
+				workspaceError(w, workitems.ErrInvalidInput)
+				return
+			}
+			out, err = store.ListBoardTickets(r.Context(), query.Get("workspace_id"), board, query.Get("cursor"), limit)
+		} else {
+			out, err = store.ListItems(r.Context(), query.Get("workspace_id"), query.Get("kind"), query.Get("cursor"), limit)
+		}
 		if err != nil {
 			workspaceError(w, err)
 			return

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 test('completed sessions open at the latest history and prepend earlier turns without moving the viewport', async ({ page, request }, testInfo) => {
   const chat = await (await request.post('/api/v1/chats', { data: {} })).json();

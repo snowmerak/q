@@ -1,6 +1,132 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+const referenceImage = {
+  name: 'reference.png', mimeType: 'image/png',
+  buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aip0AAAAASUVORK5CYII=', 'base64'),
+};
+
+test('manual compaction uses a background run and survives reload', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const session = await (await request.post('/api/v1/registered-sessions', {
+    data: { workspace_root: fixture.root, create: true },
+  })).json();
+  await page.goto(`/sessions/${session.registration_id}`);
+  await page.getByLabel('More session actions', { exact: true }).click();
+  const acknowledged = page.waitForResponse(response => response.url().endsWith('/compact') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Compact context' }).click();
+  const response = await acknowledged;
+  expect(response.status()).toBe(202);
+  expect((await response.json()).kind).toBe('compaction');
+  await page.reload();
+  await expect(page.getByText('Nothing to compact', { exact: true })).toBeVisible();
+  await expect(page.locator('.transcript .chat-message')).toHaveCount(0);
+});
+
+test('chat image survives a completed turn and reload', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const session = await (await request.post('/api/v1/registered-sessions', {
+    data: { workspace_root: fixture.root, create: true },
+  })).json();
+  await page.goto(`/sessions/${session.registration_id}`);
+  const composer = page.getByRole('textbox', { name: 'Message Q' });
+  await composer.fill('Inspect this reference and write the requested file');
+  await page.locator('.image-picker input[type=file]').setInputFiles(referenceImage);
+  const resolution = page.getByLabel('Image resolution');
+  await expect(resolution).toHaveValue('2048');
+  await resolution.selectOption({ label: 'Smaller · 1,600 px' });
+  const submitted = page.waitForRequest(value => value.method() === 'POST' && value.url().endsWith('/messages'));
+  await composer.press('Enter');
+  expect((await submitted).postDataJSON().image_max_edge).toBe(1600);
+  await expect(page.getByRole('heading', { name: 'Studio result' })).toBeVisible();
+  await page.reload();
+  const image = page.getByRole('img', { name: 'Attached image 1' });
+  await expect(image).toBeVisible();
+  await expect.poll(() => image.evaluate(value => value.naturalWidth)).toBe(1);
+});
+
+test('ticket image persists and the inbox opens its start approval', async ({ page, request }) => {
+  const { projects } = await (await request.get('/api/v1/projects')).json();
+  const project = projects.find(value => value.name === 'Integration');
+  await page.goto(`/tickets?workspace_id=${project.id}`);
+  await page.getByRole('button', { name: 'New ticket', exact: true }).click();
+  const title = 'Confirm the attached design';
+  await page.getByRole('textbox', { name: 'Work item title' }).fill(title);
+  await page.getByRole('textbox', { name: 'Work item body' }).fill('Check the attached reference image.');
+  await page.getByRole('checkbox', { name: 'Require approval before this ticket starts' }).check();
+  await page.locator('.work-create input[type=file]').setInputFiles(referenceImage);
+  await page.getByRole('button', { name: 'Create ticket', exact: true }).click();
+  await expect(page.getByRole('img', { name: 'Attached image 1' })).toBeVisible();
+  const id = new URL(page.url()).searchParams.get('item_id');
+  await page.getByRole('button', { name: 'Inbox', exact: true }).click();
+  const row = page.getByRole('article').filter({ hasText: title });
+  await expect(row).toContainText('Start approval requested');
+  await row.getByRole('button', { name: 'Open ticket' }).click();
+  await expect(page.getByRole('img', { name: 'Attached image 1' })).toBeVisible();
+  await page.getByRole('button', { name: 'Approve and queue', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Approve and queue', exact: true })).toHaveCount(0);
+  const item = await (await request.get(`/api/v1/work/items/${id}`)).json();
+  expect(item.require_start_approval).toBe(true);
+  expect(item.execution_state).not.toBe('waiting_approval');
+});
+
+for (const kind of ['native', 'acp']) {
+  test(`ticket shows ${kind === 'native' ? 'guidance status' : 'live ACP activity'} in the worker conversation`, async ({ page, request }) => {
+    const { projects } = await (await request.get('/api/v1/projects')).json();
+    const project = projects.find(value => value.name === 'Integration');
+    const created = await request.post('/api/v1/work/items', { data: {
+      workspace_id: project.id, kind: 'ticket', title: `Inspect files with ${kind}`, content: 'Inspect the relevant files',
+      execution_mode: 'report', require_start_approval: true,
+    } });
+    expect(created.status()).toBe(201);
+    const item = await created.json();
+    const attempt = {
+      id: `worker-${kind}`, ticket_id: item.id, status: 'running', worker_session_id: `session-${kind}`,
+    };
+    const worker = { messages: [], worker_kind: kind, attempt_status: attempt.status, accepts_guidance: kind === 'native' };
+    await page.route(`**/api/v1/work/items/${item.id}/attempts`, route => route.fulfill({ json: { attempts: [attempt] } }));
+    await page.route(`**/api/v1/work/attempts/${attempt.id}/worker?*`, route => route.fulfill({ json: worker }));
+
+    if (kind === 'native') {
+      await page.route(`**/api/v1/work/attempts/${attempt.id}/guidance`, async route => {
+        const input = route.request().postDataJSON();
+        expect(input.request_id).toBeTruthy();
+        worker.pending_guidance = { id: 'guidance-1', content: input.content };
+        await route.fulfill({ status: 202, json: worker.pending_guidance });
+      });
+    } else {
+      worker.acp_activity = {
+        plan: [{ id: 'plan-1', title: 'Inspect inputs', status: 'in_progress' }],
+        tools: [{ id: 'read-1', title: 'Read notes', status: 'running' }],
+        response: 'Draft findings',
+      };
+    }
+
+    await page.goto(`/tickets?workspace_id=${project.id}&item_id=${item.id}&attempt_id=${attempt.id}`);
+    const panel = page.getByRole('region', { name: 'Worker conversation' });
+    if (kind === 'native') {
+      await panel.getByRole('textbox', { name: 'Guide this worker' }).fill('Keep the API stable.');
+      await panel.getByRole('button', { name: 'Send guidance' }).click();
+      await expect(panel.getByText('Guidance pending', { exact: true })).toBeVisible();
+      worker.messages = [{ index: 0, role: 'user', name: 'q_ticket_guidance_guidance-1', content: worker.pending_guidance.content }];
+      delete worker.pending_guidance;
+      await expect(panel.getByText('Guidance applied', { exact: false })).toBeVisible();
+      await expect(panel.getByText('Keep the API stable.', { exact: true })).toHaveCount(1);
+    } else {
+      await expect(panel.getByLabel('ACP plan')).toContainText('Inspect inputs');
+      await expect(panel.getByLabel('ACP tools')).toContainText('Read notes');
+      await expect(panel.getByLabel('ACP response in progress')).toContainText('Draft findings');
+      await expect(panel.getByRole('button', { name: 'Send guidance' })).toHaveCount(0);
+      worker.messages = [{ index: 0, role: 'assistant', content: 'Final findings.' }];
+      delete worker.acp_activity;
+      attempt.status = 'awaiting_review';
+      worker.attempt_status = attempt.status;
+      await expect(panel.getByText('Final findings.', { exact: true })).toHaveCount(1);
+      await expect(panel.getByLabel('ACP response in progress')).toHaveCount(0);
+    }
+  });
+}
 
 test('issues and tickets keep readable controls at desktop, mobile and larger text sizes', async ({ page }) => {
   for (const route of ['issues', 'tickets']) {
@@ -110,8 +236,6 @@ test('issuing a ticket automatically requests assignment without a start action'
   await page.getByRole('link', { name: 'Project settings', exact: true }).click();
   await page.locator('.project-tabs').getByRole('button', { name: 'Subagents', exact: true }).click();
   const members = page.locator('.members-list');
-  await page.getByRole('combobox', { name: 'Join subagent' }).selectOption('builtin/research');
-  await page.getByRole('button', { name: 'Join project', exact: true }).click();
   await expect(members).toContainText('builtin/research');
   await expect(members.getByRole('button', { name: 'Disable member' }).first()).toBeVisible();
   await page.goto(`/tickets?workspace_id=${project.id}`);
@@ -135,7 +259,7 @@ test('issuing a ticket automatically requests assignment without a start action'
   await expect(board.getByRole('heading', { name: 'Done', exact: true })).toBeVisible();
   await page.screenshot({ path: join(tmpdir(), 'q-work-ticket-populated.png') });
   await expect(execution).toContainText('Waiting for a suitable agent', { timeout: 20000 });
-  await expect(execution).toContainText('System One');
+  await expect(execution).toContainText('Decisions');
   await execution.screenshot({ path: join(tmpdir(), 'q-ticket-without-start-stop.png') });
   const itemID = new URL(page.url()).searchParams.get('item_id');
   const ticket = await (await request.get(`/api/v1/work/items/${itemID}`)).json();
@@ -165,7 +289,7 @@ test.afterEach(async ({ page }) => {
   expect(page.testErrors, 'browser runtime errors').toEqual([]);
 });
 
-test('appearance choices persist across pages and keep the current text size as the minimum', async ({ page }) => {
+test('appearance choices persist across pages at the minimum text size', async ({ page }) => {
   await page.goto('/settings?section=appearance');
   const theme = page.getByRole('group', { name: 'Theme' });
   const textSize = page.getByRole('group', { name: 'Text size' });
@@ -173,17 +297,17 @@ test('appearance choices persist across pages and keep the current text size as 
   await expect(textSize.getByRole('radio', { name: '100%' })).toBeChecked();
 
   await theme.getByRole('radio', { name: /^Light/ }).check();
-  await textSize.getByRole('radio', { name: '130%' }).check();
+  await textSize.getByRole('radio', { name: '60%' }).check();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  await expect.poll(() => page.locator('body').evaluate((body) => getComputedStyle(body).fontSize)).toBe('20.8px');
+  await expect.poll(() => page.locator('body').evaluate((body) => getComputedStyle(body).fontSize)).toBe('9.6px');
 
   await page.goto('/help');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  await expect.poll(() => page.locator('body').evaluate((body) => getComputedStyle(body).fontSize)).toBe('20.8px');
+  await expect.poll(() => page.locator('body').evaluate((body) => getComputedStyle(body).fontSize)).toBe('9.6px');
   await page.goto('/settings?section=appearance');
   await expect(theme.getByRole('radio', { name: /^Light/ })).toBeChecked();
-  await expect(textSize.getByRole('radio', { name: '130%' })).toBeChecked();
+  await expect(textSize.getByRole('radio', { name: '60%' })).toBeChecked();
 
   await theme.getByRole('radio', { name: /^Night/ }).check();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'night');
@@ -302,7 +426,11 @@ test('Projects manages defaults, atomic initial members, limits, bindings and ar
   await expect(page.getByRole('button', { name: 'Create project', exact: true })).toHaveCount(0);
   const before = (await (await request.get('/api/v1/projects')).json()).projects;
   await page.goto('/projects?defaults=1');
-  await page.getByRole('checkbox', { name: /^builtin\/research/ }).check();
+  await expect(page.locator('.agent-options').getByRole('checkbox', { checked: true })).toHaveCount(5);
+  await expect(page.getByRole('checkbox', { name: /^builtin\/research/ })).toBeChecked();
+  for (const id of ['manager', 'senior-developer', 'junior-developer', 'code-reviewer']) {
+    await page.getByRole('checkbox', { name: new RegExp(`^builtin/${id}`) }).uncheck();
+  }
   await page.getByRole('button', { name: 'Save defaults', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Default subagents saved');
   await page.getByRole('button', { name: 'New project', exact: true }).click();
@@ -394,7 +522,7 @@ test('Projects manages defaults, atomic initial members, limits, bindings and ar
   expect((await (await request.get('/api/v1/projects')).json()).projects.find(p => p.id === saved.id)).toBeUndefined();
 });
 
-test('Coordinator and Integrator stay independent and protected after clear', async ({ page, request }) => {
+test('Integrator stays hidden in the session tree and accessible from tickets', async ({ page, request }) => {
   const { projects, sessions } = await (await request.get('/api/v1/registered-sessions')).json();
   const project = projects.find((item) => item.name === 'Integration');
   const group = page.locator(`[id="session-group-${project.id}"]`);
@@ -408,9 +536,14 @@ test('Coordinator and Integrator stay independent and protected after clear', as
     identities.push(sessionID);
     await page.getByRole('textbox', { name: 'Search sessions', exact: true }).fill('');
     const row = group.locator('.session-root').filter({ has: page.getByText(description, { exact: true }) });
-    await expect(row).toHaveCount(1);
-    await expect(row.locator('.session-delete')).toHaveCount(0);
-    await row.locator('.session-select').click();
+    if (role === 'coordinator') {
+      await expect(row).toHaveCount(1);
+      await expect(row.locator('.session-delete')).toHaveCount(0);
+      await row.locator('.session-select').click();
+    } else {
+      await expect(row).toHaveCount(0);
+      await page.goto('/sessions/' + registration.registration_id);
+    }
     await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
     await expect(page.locator('.composer textarea')).toBeEnabled();
     await page.getByLabel('More session actions', { exact: true }).click();
@@ -423,7 +556,8 @@ test('Coordinator and Integrator stay independent and protected after clear', as
     expect(current.session.session_id).toBe(sessionID);
     await page.reload();
     await page.getByRole('textbox', { name: 'Search sessions', exact: true }).fill(title);
-    await expect(row).toBeVisible();
+    if (role === 'coordinator') await expect(row).toBeVisible();
+    else await expect(row).toHaveCount(0);
     await page.screenshot({ path: join(tmpdir(), `q-workspace-${role}.png`) });
   }
   expect(new Set(identities).size).toBe(2);
@@ -434,6 +568,41 @@ test('Coordinator and Integrator stay independent and protected after clear', as
     await page.getByRole('button', { name: role === 'coordinator' ? 'Coordinator' : 'Integrator', exact: true }).click();
     await expect(page.getByRole('heading', { name: role === 'coordinator' ? 'Coordinator' : 'Integrator', exact: true })).toBeVisible();
   }
+});
+
+test('saved responses can be edited, regenerated and deleted in place', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const registration = await (await request.post('/api/v1/registered-sessions', {
+    data: { workspace_root: fixture.root, create: true },
+  })).json();
+  await page.goto('/sessions/' + registration.registration_id);
+  const composer = page.getByRole('textbox', { name: 'Message Q' });
+  const first = page.locator('.chat-message').filter({ has: page.getByRole('heading', { name: 'Studio result' }) }).first();
+  await composer.fill('Produce a first answer');
+  await composer.press('Enter');
+  await expect(first.getByRole('button', { name: 'Edit response' })).toBeEnabled();
+  await composer.fill('Produce a later answer');
+  await composer.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Studio result' })).toHaveCount(2);
+  await expect(first.getByRole('button', { name: 'Edit response' })).toBeEnabled();
+  await first.getByRole('button', { name: 'Edit response' }).click();
+  await page.getByRole('textbox', { name: 'Response text' }).fill('My edited response.');
+  await page.getByRole('button', { name: 'Save response' }).click();
+  const edited = page.locator('.chat-message').filter({ hasText: 'My edited response.' });
+  await expect(edited.getByRole('button', { name: 'Regenerate response' })).toBeEnabled();
+  await edited.getByRole('button', { name: 'Regenerate response' }).click();
+  const regenerated = page.locator('.chat-message').filter({ hasText: 'Regenerated Studio reply.' });
+  await expect(regenerated.getByRole('button', { name: 'Delete response' })).toBeEnabled();
+  await expect(page.getByRole('heading', { name: 'Studio result' })).toHaveCount(1);
+  page.once('dialog', dialog => dialog.accept());
+  await regenerated.getByRole('button', { name: 'Delete response' }).click();
+  await expect(regenerated).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Studio result' })).toHaveCount(1);
+  const prompts = page.locator('.transcript .user-message');
+  await expect(prompts.getByText('Produce a first answer', { exact: true })).toBeVisible();
+  await expect(prompts.getByText('Produce a later answer', { exact: true })).toBeVisible();
+  await expect(regenerated).toHaveCount(0);
 });
 
 test('folder browser closes before registration and registers the selected workspace', async ({ page, request }) => {
@@ -597,6 +766,42 @@ test('guidance redirects a real run without refresh and renders markdown and cod
   const detail = await request.get(`/api/v1/sessions/${session.session.session_id}?workspace_root=${encodeURIComponent(fixture.root)}`);
   const transcript = (await detail.json()).transcript;
   expect(transcript.some((message) => message.role === 'user' && message.content.includes('write the requested file'))).toBe(true);
+});
+
+test('guidance keeps the newer run complete when the command response arrives late', async ({ page, request }) => {
+  const fixture = await (await request.get('/_test/fixture')).json();
+  const session = await (await request.post('/api/v1/registered-sessions', {
+    data: { workspace_root: fixture.root, create: true },
+  })).json();
+  let releaseResponse;
+  let receiveResponse;
+  const held = new Promise(resolve => { releaseResponse = resolve; });
+  const received = new Promise(resolve => { receiveResponse = resolve; });
+  await page.route('**/runs/*/commands', async route => {
+    if (route.request().postDataJSON().action !== 'guidance') return route.continue();
+    const response = await route.fetch();
+    receiveResponse(response.status());
+    await held;
+    await route.fulfill({ response });
+  });
+  try {
+    await page.goto('/sessions/' + session.registration_id);
+    const composer = page.getByRole('textbox', { name: 'Message Q' });
+    await composer.fill('wait for guidance');
+    await composer.press('Enter');
+    await expect(page.getByRole('heading', { name: 'Which direction?' })).toBeVisible();
+    await composer.fill('write the requested file');
+    await composer.press('Enter');
+    expect(await received).toBe(200);
+    await expect(page.getByRole('heading', { name: 'Studio result' })).toBeVisible();
+    await expect(composer).toHaveAttribute('placeholder', 'Ask Q to work in this repository…');
+    releaseResponse();
+    await expect(composer).toBeEnabled();
+    await expect(composer).toHaveAttribute('placeholder', 'Ask Q to work in this repository…');
+    await expect(page.getByRole('button', { name: 'Stop turn' })).toHaveCount(0);
+  } finally {
+    releaseResponse();
+  }
 });
 
 for (const cache of [
@@ -873,9 +1078,7 @@ test('global subagent profiles save roles, permissions, prompts, and deletion', 
   await page.getByRole('button', { name: 'Add profile', exact: true }).click();
   expect((await saved).ok()).toBe(true);
   const card = page.locator('.subagent-profile').filter({ has: page.getByRole('heading', { name: 'ui-inspector', exact: true }) });
-  saved = save('PUT');
-  await card.getByRole('combobox', { name: 'Model role', exact: true }).selectOption('reviewer');
-  expect((await saved).ok()).toBe(true);
+  await expect(card.getByRole('combobox', { name: 'Run with', exact: true })).toHaveValue('');
   saved = save('PUT');
   await card.getByRole('textbox', { name: 'System prompt', exact: true }).fill('Review the code and report evidence.');
   await card.getByRole('textbox', { name: 'System prompt', exact: true }).press('Tab');
@@ -889,7 +1092,7 @@ test('global subagent profiles save roles, permissions, prompts, and deletion', 
   await card.getByRole('checkbox', { name: /^builtin\/research / }).check();
   expect((await saved).ok()).toBe(true);
   await page.reload();
-  await expect(card.getByRole('combobox', { name: 'Model role', exact: true })).toHaveValue('reviewer');
+  await expect(card.getByRole('combobox', { name: 'Run with', exact: true })).toHaveValue('');
   await expect(card.getByRole('textbox', { name: 'System prompt', exact: true })).toHaveValue('Review the code and report evidence.');
   await expect(card.getByRole('checkbox', { name: 'read_file', exact: true })).toBeChecked();
   await expect(card.getByRole('checkbox', { name: /^builtin\/research / })).toBeChecked();
@@ -897,6 +1100,14 @@ test('global subagent profiles save roles, permissions, prompts, and deletion', 
   const profile = snapshot.profiles.find((entry) => entry.profile.name === 'ui-inspector').profile;
   expect(profile.tools).toContain('read_file');
   expect(profile.delegates).toContain('builtin/research');
+  const models = (await (await request.get('/api/v1/settings/models')).json()).models;
+  const model = models.find((candidate) => !candidate.group).id;
+  saved = save('PUT');
+  await card.getByRole('combobox', { name: 'Run with', exact: true }).selectOption(`model:${model}`);
+  expect((await saved).ok()).toBe(true);
+  await page.reload();
+  await expect(card.getByRole('combobox', { name: 'Run with', exact: true })).toHaveValue(`model:${model}`);
+  await expect(card.getByRole('checkbox', { name: 'read_file', exact: true })).toBeChecked();
   page.once('dialog', (dialog) => dialog.accept());
   saved = save('DELETE');
   await card.getByTitle('Delete profile', { exact: true }).click();
@@ -928,7 +1139,8 @@ test('queued profile edits preserve revisions, scope migration, and the original
     await card.getByRole('textbox', { name: 'Description', exact: true }).fill('First draft');
     await card.getByRole('textbox', { name: 'Description', exact: true }).press('Tab');
     await held;
-    await card.getByRole('combobox', { name: 'Model role', exact: true }).selectOption('reviewer');
+    await card.getByRole('textbox', { name: 'System prompt', exact: true }).fill('Preserve the queued prompt.');
+    await card.getByRole('textbox', { name: 'System prompt', exact: true }).press('Tab');
     await card.getByRole('combobox', { name: 'Scope', exact: true }).selectOption('workspace');
     await card.getByRole('textbox', { name: 'Description', exact: true }).fill('Final draft');
     await card.getByRole('textbox', { name: 'Description', exact: true }).press('Tab');
@@ -947,7 +1159,7 @@ test('queued profile edits preserve revisions, scope migration, and the original
     const entry = snapshot.profiles.find((entry) => entry.profile.name === 'ui-queued');
     expect(entry.scope).toBe('workspace');
     expect(entry.profile.description).toBe('Final draft');
-    expect(entry.profile.role).toBe('reviewer');
+    expect(entry.profile.system_prompt).toBe('Preserve the queued prompt.');
     await expect(card).toHaveCount(0);
   } finally { release(); }
 });
@@ -976,16 +1188,74 @@ test('ACP connections preserve secret mappings, enabled state, and role bindings
   await card.getByRole('checkbox', { name: /^Connection state/ }).check();
   expect((await saved).ok()).toBe(true);
   await page.goto('/settings?section=subagents');
-  await page.getByRole('button', { name: /^External role bindings/ }).click();
+  await page.getByRole('button', { name: /^Built in/ }).click();
   await expect(page.getByRole('textbox', { name: 'Connection ID', exact: true })).toHaveCount(0);
-  endpoint = '/api/v1/settings/subagents';
-  const binding = page.locator('.binding-grid select').first();
+  endpoint = '/api/v1/settings/subagents/target';
+  const webSearch = page.locator('.agent-definition').filter({ hasText: 'builtin/web-search' });
+  const binding = webSearch.getByRole('combobox', { name: 'Run with', exact: true });
+  await webSearch.locator('summary').click();
   saved = save();
-  await binding.selectOption('ui-acp');
+  await binding.selectOption('acp:ui-acp');
   expect((await saved).ok()).toBe(true);
   await page.reload();
-  await page.getByRole('button', { name: /^External role bindings/ }).click();
-  await expect(binding).toHaveValue('ui-acp');
+  await page.getByRole('button', { name: /^Built in/ }).click();
+  await webSearch.locator('summary').click();
+  await expect(binding).toHaveValue('acp:ui-acp');
+  await page.route('**/api/v1/settings/subagents/probe', route => {
+    const input = route.request().postDataJSON();
+    expect(input.connection_id).toBe('ui-acp');
+    expect(input.include_model_settings).toBe(true);
+    const model = input.model || 'fast';
+    return route.fulfill({ json: {
+      supported: true,
+      current_model: model,
+      models: [{ id: 'fast', name: 'Fast' }, { id: 'deep', name: 'Deep' }],
+      reasoning_supported: true,
+      current_reasoning_effort: model === 'deep' ? 'max' : 'low',
+      reasoning_efforts: model === 'deep' ? [{ id: 'max', name: 'Max' }] : [{ id: 'low', name: 'Low' }]
+    } });
+  });
+  await webSearch.getByRole('button', { name: 'Load ACP options', exact: true }).click();
+  const acpModel = webSearch.getByRole('combobox', { name: 'ACP model', exact: true });
+  const acpEffort = webSearch.getByRole('combobox', { name: 'ACP reasoning effort', exact: true });
+  await expect(acpEffort.locator('option[value="low"]')).toHaveCount(1);
+  saved = save();
+  await acpEffort.selectOption('low');
+  expect((await saved).ok()).toBe(true);
+  await expect(acpEffort).toHaveValue('low');
+  saved = save();
+  await acpModel.selectOption('deep');
+  expect((await saved).ok()).toBe(true);
+  await expect(acpModel).toHaveValue('deep');
+  await expect(acpEffort).toHaveValue('');
+  await expect(acpEffort.locator('option[value="low"]')).toHaveCount(0);
+  saved = save();
+  await acpEffort.selectOption('max');
+  expect((await saved).ok()).toBe(true);
+  await page.reload();
+  await page.getByRole('button', { name: /^Built in/ }).click();
+  await webSearch.locator('summary').click();
+  await expect(acpModel).toHaveValue('deep');
+  await expect(acpEffort).toHaveValue('max');
+  const research = page.locator('.agent-definition').filter({ hasText: 'builtin/research' });
+  await research.locator('summary').click();
+  const target = research.getByRole('combobox', { name: 'Run with', exact: true });
+  saved = save();
+  await target.selectOption('acp:ui-acp');
+  expect((await saved).ok()).toBe(true);
+  await expect(target).toHaveValue('acp:ui-acp');
+  await expect(research.getByText('external', { exact: true })).toBeVisible();
+  const models = (await (await request.get('/api/v1/settings/models')).json()).models;
+  const model = models.find((candidate) => !candidate.group).id;
+  saved = save();
+  await target.selectOption(`model:${model}`);
+  expect((await saved).ok()).toBe(true);
+  await expect(target).toHaveValue(`model:${model}`);
+  await expect(research.getByText('inner', { exact: true })).toBeVisible();
+  saved = save();
+  await target.selectOption('');
+  expect((await saved).ok()).toBe(true);
+  await expect(target).toHaveValue('');
   await page.goto('/settings?section=providers&provider_tab=acp');
   endpoint = '/api/v1/settings/acp';
   await expect(env).toHaveValue('{"Q_STUDIO_TEST_TOKEN":"********"}');
@@ -1223,7 +1493,7 @@ test('tool results align with tool calls across wide and narrow viewports', asyn
 
 test('model settings scroll inside the content pane at desktop and narrow widths', async ({ page }) => {
   for (const width of [1440, 900]) {
-    await page.setViewportSize({ width, height: 650 });
+    await page.setViewportSize({ width, height: 420 });
     await page.goto('/settings?section=models');
     const pane = page.locator('.settings-content');
     await expect(pane.getByRole('heading', { name: 'Models', exact: true })).toBeVisible();
@@ -1357,13 +1627,13 @@ test('operations keep the selected period and stop polling on navigation', async
   await page.goto('/operations');
   await held;
   await page.getByRole('combobox', { name: 'Usage period', exact: true }).selectOption('7');
-  await expect(page.locator('.usage-card')).toContainText('7 day window');
+  await expect(page.locator('.usage-card')).toContainText('Last 7 days');
   await expect(page.getByRole('heading', { name: 'Services', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Retention', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Runtime logs', exact: true })).toBeVisible();
   await expect.poll(() => aborted).toBe(true);
   release();
-  await expect(page.locator('.usage-card')).not.toContainText('30 day window');
+  await expect(page.locator('.usage-card')).not.toContainText('Last 30 days');
   const before = reads;
   await page.clock.fastForward('00:00:16');
   await expect.poll(() => reads).toBeGreaterThan(before);
@@ -1375,15 +1645,137 @@ test('operations keep the selected period and stop polling on navigation', async
 });
 
 
+test('operations show token and cache totals with missing cache reports', async ({ page }) => {
+  const usage = (calls, input, output, read, write, missing = 0) => ({
+    calls, prompt_tokens: input, completion_tokens: output, total_tokens: input + output,
+    cached_tokens: read, cache_write_tokens: write, estimated_calls: 0, cache_estimated_calls: missing,
+  });
+  const totals = { ...usage(4, 400, 70, 80, 40, 1), cache_hit_calls: 2, cache_hit_samples: 3 };
+  const received = [];
+  await page.route('**/api/v1/operations?**', async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    const query = new URL(route.request().url()).searchParams;
+    const filtered = query.has('model') && query.has('role');
+    received.push([query.get('days'), query.get('model'), query.get('role')]);
+    const current = filtered ? usage(1, 80, 36, 20, 10) : totals;
+    await route.fulfill({ response, json: { ...snapshot, previous_usage: usage(2, 200, 40, 20, 10), usage: {
+      resolution: 'day', totals: current, series: [{ bucket: '2026-11-23', ...current }],
+      models: [
+        { name: 'provider/chat', ...usage(2, 200, 60, 80, 40) },
+        { name: 'provider/embedding', ...usage(1, 150, 0, 0, 0, 1) },
+        { name: 'provider/review', ...usage(1, 50, 10, 0, 0) },
+      ],
+      roles: [
+        { name: 'main', ...usage(1, 120, 24, 60, 30) },
+        { name: 'coder', ...usage(1, 80, 36, 20, 10) },
+        { name: 'reviewer', ...usage(1, 50, 10, 0, 0) },
+        { name: 'embedding', ...usage(1, 150, 0, 0, 0, 1) },
+      ],
+      projects: [{ id: 'project-1', name: 'Studio project', ...usage(2, 200, 60, 80, 40) }],
+      subagents: [{ name: 'builtin/junior-developer', ...usage(1, 80, 36, 20, 10) }],
+      performance: [{
+        name: 'provider/chat', completed: 3, failed: 1, stopped: 1, retried: 1,
+        ttft_p50_ms: 125, ttft_p95_ms: 230, duration_p50_ms: 1000, duration_p95_ms: 1600, output_rate_p50: 23.5,
+      }],
+    } } });
+  });
+  await page.goto('/operations');
+  const card = page.locator('.usage-card');
+  const tokenTotals = card.locator('[aria-label="Token volume"]').getByRole('definition');
+  const cacheTotals = card.locator('[aria-label="Prompt cache"]').getByRole('definition');
+  await expect(tokenTotals).toHaveText(['400', '70', '100', '17.5']);
+  await expect(cacheTotals).toHaveText(['80', '40', '20% Cache reads / total input', '66.7% 2 of 3 measured']);
+  await expect(card.locator('[aria-label="Previous period totals and changes"]').getByRole('definition'))
+    .toHaveText(['2 (+100%)', '240 (+95.8%)', '200 (+100%)', '40 (+75%)']);
+  await expect(card).toContainText('Cache data missing for 1 of 4 calls');
+  await expect(card.locator('.usage-column')).toHaveAttribute('title', /Input 400 · Output 70\nCache read 80 · Cache write 40\nCache hit rate 20%/);
+
+  const models = page.getByRole('table', { name: 'Model usage' });
+  await expect(models.getByRole('row', { name: /provider\/chat/ }).getByRole('cell'))
+    .toHaveText(['2', '200', '60', '80', '40', '40%', '260']);
+  await expect(models.getByRole('row', { name: /provider\/embedding/ }).getByRole('cell'))
+    .toHaveText(['1', '150', '0', '—', '—', '— 1 missing', '150']);
+  await expect(models.getByRole('row', { name: /provider\/review/ }).getByRole('cell'))
+    .toHaveText(['1', '50', '10', '0', '0', '0%', '60']);
+  const roles = page.getByRole('table', { name: 'Role usage' });
+  await expect(roles.getByRole('row', { name: /coder/ }).getByRole('cell'))
+    .toHaveText(['1', '80', '36', '20', '10', '25%', '116']);
+  await expect(page.getByRole('table', { name: 'Project usage' })).toContainText('Studio project');
+  await expect(page.getByRole('table', { name: 'Subagent usage' })).toContainText('builtin/junior-developer');
+  await expect(page.getByRole('table', { name: 'Model performance', exact: true }).getByRole('cell'))
+    .toHaveText(['4 1 stopped', '25% 1 failed', '25%', '125 ms / 230 ms', '1 s / 1.6 s', '23.5']);
+  await page.getByText('What are roles?', { exact: true }).press('Enter');
+  await expect(card.getByText('Roles label where Q made a model call.', { exact: false })).toBeVisible();
+
+  await page.getByRole('combobox', { name: 'Model', exact: true }).selectOption('provider/chat');
+  await page.getByRole('combobox', { name: 'Role', exact: true }).selectOption('coder');
+  await expect(tokenTotals).toHaveText(['80', '36', '80', '36']);
+  await expect(cacheTotals).toHaveText(['20', '10', '25% Cache reads / total input', '—']);
+  await page.getByRole('combobox', { name: 'Usage period' }).selectOption('7');
+  await expect(card).toContainText('Last 7 days');
+  expect(received).toContainEqual(['7', 'provider/chat', 'coder']);
+
+  await page.setViewportSize({ width: 390, height: 900 });
+  const modelScroll = page.getByRole('region', { name: 'Model usage table' });
+  await modelScroll.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => modelScroll.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(390);
+});
+
+
+test('operations keeps large token totals whole at different widths and text sizes', async ({ page }) => {
+  const totals = {
+    calls: 3288, prompt_tokens: 291184338, completion_tokens: 1252950, total_tokens: 292437288,
+    cached_tokens: 264737088, cache_write_tokens: 0, estimated_calls: 0,
+    cache_estimated_calls: 191, cache_hit_calls: 2895, cache_hit_samples: 3097,
+  };
+  await page.route('**/api/v1/operations?**', async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    await route.fulfill({ response, json: { ...snapshot, usage: { resolution: 'hour', totals } } });
+  });
+  await page.goto('/operations');
+  await page.getByRole('combobox', { name: 'Usage period', exact: true }).selectOption('1');
+  await expect(page.locator('.usage-card')).toContainText('Last 24 hours · Hourly');
+  const summary = page.locator('.usage-summary').first();
+  await expect(summary).toContainText('291,184,338');
+
+  for (const width of [1440, 1024, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const scale of [1, 1.4]) {
+      await page.evaluate(value => document.documentElement.style.setProperty('--text-scale', String(value)), scale);
+      if (width === 1440 && scale === 1) {
+        await summary.screenshot({ path: join(tmpdir(), 'q-operations-usage-summary.png') });
+      }
+      const clipped = await summary.getByRole('definition').evaluateAll((values) => values.flatMap((element) => {
+        const text = [...element.childNodes].find(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim());
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const rects = [...range.getClientRects()].filter(rect => rect.width > 0);
+        const bounds = element.getBoundingClientRect();
+        const label = element.previousElementSibling.getBoundingClientRect();
+        const onOneLine = rects.length === 1 && rects[0].right <= bounds.right + 1;
+        const belowLabel = bounds.top >= label.bottom && Math.abs(bounds.left - label.left) < 1;
+        return onOneLine && belowLabel ? [] : [text.textContent.trim()];
+      }));
+      expect(clipped, width + ' px at text scale ' + scale).toEqual([]);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+    }
+  }
+});
+
+
 test('global model editors preserve queued drafts across settings panels', async ({ page, request }) => {
   await page.goto('/settings?section=models');
   await expect(page.getByTitle('Refresh Gateway models', { exact: true })).toBeEnabled();
-  await page.getByRole('textbox', { name: 'Role name', exact: true }).fill('ui-model-role');
-  await page.getByRole('button', { name: 'Add role', exact: true }).click();
-  const role = page.locator('.assignment-row').filter({ has: page.getByText('Ui Model Role', { exact: true }) });
+  await expect(page.locator('#model-panel-assignments .assignment-list .assignment-row strong')).toHaveText(['Default', 'Embeddings', 'Commit']);
+  const role = page.locator('.assignment-row').filter({ has: page.getByText('Commit', { exact: true }) });
   await expect(role).toBeVisible();
   const model = page.locator('.primary-assignment').first().getByRole('combobox', { name: 'Model', exact: true });
   const selectedModel = await model.inputValue();
+  const previousCommitModel = await role.getByRole('combobox', { name: 'Model', exact: true }).inputValue();
   await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption(selectedModel);
   await expect(page.locator('.save-state')).toHaveText('Saved');
   await page.getByRole('tab', { name: 'Fallback groups', exact: true }).click();
@@ -1392,6 +1784,45 @@ test('global model editors preserve queued drafts across settings panels', async
   const group = page.locator('.model-group-card').filter({ has: page.getByRole('heading', { name: 'ui-fallback', exact: true }) });
   const timeout = group.getByRole('textbox', { name: 'Timeout', exact: true });
   await expect(timeout).toBeVisible();
+  const catalogResponse = await request.get('/api/v1/settings/models');
+  expect(catalogResponse.ok()).toBe(true);
+  const catalog = await catalogResponse.json();
+  expect(catalog.models.filter(model => model.id === 'group/ui-fallback')).toEqual([
+    expect.objectContaining({ id: 'group/ui-fallback', group: true })
+  ]);
+  const subagents = await page.context().newPage();
+  try {
+    await subagents.route('**/api/v1/settings/models', route => route.fulfill({
+      json: {
+        ...catalog,
+        models: catalog.models.map(model => model.id === 'default/test-model'
+          ? { ...model, reasoning_control: 'effort', reasoning_efforts: ['low', 'high'] }
+          : model)
+      }
+    }));
+    await subagents.goto('/settings?section=subagents');
+    await subagents.getByRole('button', { name: /^Built in/ }).click();
+    const profile = subagents.locator('.agent-definition').filter({ hasText: 'builtin/research' });
+    await profile.locator('summary').click();
+    const picker = profile.getByRole('combobox', { name: 'Run with', exact: true });
+    await expect(picker.locator('optgroup[label="Fallback groups"] option[value="model:group/ui-fallback"]')).toHaveText('group/ui-fallback');
+    await expect(picker.locator('optgroup[label="API Provider"] option[value="model:group/ui-fallback"]')).toHaveCount(0);
+    const previousTarget = await picker.inputValue();
+    const reasoning = profile.getByRole('combobox', { name: 'Reasoning', exact: true });
+    await picker.selectOption('model:group/ui-fallback');
+    await expect(picker).toHaveValue('model:group/ui-fallback');
+    await expect(picker).toBeEnabled();
+    await expect(reasoning).toBeDisabled();
+    await expect(reasoning.locator('option:checked')).toHaveText('Fallback group settings');
+    await picker.selectOption('model:default/test-model');
+    await expect(picker).toHaveValue('model:default/test-model');
+    await expect(reasoning).toBeEnabled();
+    await picker.selectOption(previousTarget);
+    await expect(picker).toHaveValue(previousTarget);
+    await expect(picker).toBeEnabled();
+  } finally {
+    await subagents.close();
+  }
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   let notify;
@@ -1424,10 +1855,8 @@ test('global model editors preserve queued drafts across settings panels', async
   page.once('dialog', (dialog) => dialog.accept());
   await group.getByTitle('Delete model group', { exact: true }).click();
   await expect(group).toHaveCount(0);
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('tab', { name: 'Assignments', exact: true }).click();
-  await role.getByTitle('Delete custom role', { exact: true }).click();
-  await expect(role).toHaveCount(0);
+  await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption(previousCommitModel);
 });
 
 test('gateway provider edits follow an acknowledged rename in the save queue', async ({ page, request }) => {
@@ -1466,13 +1895,13 @@ test('gateway provider edits follow an acknowledged rename in the save queue', a
 });
 
 
-test('system one routing and listener key management persist through native settings panels', async ({ page, request }) => {
+test('Decisions routing and listener key management persist through native settings panels', async ({ page, request }) => {
   const fixture = await (await request.get('/_test/fixture')).json();
-  expect((await request.post('/api/v1/settings/system-one/providers', { data: {
+  expect((await request.post('/api/v1/settings/decisions/providers', { data: {
     id: 'ui-decision', uri: fixture.decision_uri, api_key_env: ''
   } })).ok()).toBe(true);
-  await page.goto('/settings?section=system-one');
-  await expect(page.getByTitle('Refresh System One models', { exact: true })).toBeEnabled();
+  await page.goto('/settings?section=decisions');
+  await expect(page.getByTitle('Refresh Decisions models', { exact: true })).toBeEnabled();
   const role = page.locator('.system-one-assignment').filter({ hasText: 'Agent Skill Decision' });
   await expect(role.getByRole('combobox', { name: 'Model', exact: true }).locator('option[value="ui-decision/decision-test"]')).toHaveCount(1);
   await role.getByRole('combobox', { name: 'Model', exact: true }).selectOption('ui-decision/decision-test');
@@ -1486,7 +1915,7 @@ test('system one routing and listener key management persist through native sett
   let notify;
   const held = new Promise((resolve) => { notify = resolve; });
   const writes = [];
-  await page.route('**/api/v1/settings/system-one/providers/*', async (route) => {
+  await page.route('**/api/v1/settings/decisions/providers/*', async (route) => {
     if (route.request().method() !== 'PUT') return route.continue();
     writes.push(route.request().url());
     const response = await route.fetch();
@@ -1499,7 +1928,7 @@ test('system one routing and listener key management persist through native sett
   await card.getByRole('textbox', { name: 'API key environment', exact: true }).press('Tab');
   release();
   await expect(page.locator('.save-state')).toHaveText('Saved');
-  expect(new URL(writes[1]).pathname).toBe('/api/v1/settings/system-one/providers/ui-decision-renamed');
+  expect(new URL(writes[1]).pathname).toBe('/api/v1/settings/decisions/providers/ui-decision-renamed');
   await expect(role.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
   await expect(archiveRole.getByRole('combobox', { name: 'Model', exact: true })).toHaveValue('ui-decision-renamed/decision-test');
   await page.reload();
@@ -1526,6 +1955,18 @@ test('system one routing and listener key management persist through native sett
   await expect(card).toHaveCount(0);
 
   await page.getByRole('complementary', { name: 'Settings sections' }).getByRole('button', { name: /^Services/ }).click();
+  const decisions = page.locator('.service-card').filter({ has: page.getByRole('heading', { name: 'Decisions', exact: true }) });
+  const port = decisions.getByRole('spinbutton', { name: 'Port', exact: true });
+  const originalPort = await port.inputValue();
+  const temporaryPort = originalPort === '8123' ? '8124' : '8123';
+  await port.fill(temporaryPort);
+  await port.press('Tab');
+  await expect(page.locator('.save-state')).toHaveText('Saved');
+  const saved = await (await request.get('/api/v1/settings')).json();
+  expect(saved.services.system_one.port).toBe(Number(temporaryPort));
+  expect((await request.put('/api/v1/settings/services/system-one', { data: {
+    host: saved.services.system_one.host, port: Number(originalPort)
+  } })).ok()).toBe(true);
   const library = page.locator('.service-card').filter({ has: page.getByRole('heading', { name: 'Library', exact: true }) });
   await library.getByRole('textbox', { name: 'Host', exact: true }).fill('127.0.0.2');
   await library.getByRole('textbox', { name: 'Host', exact: true }).press('Tab');

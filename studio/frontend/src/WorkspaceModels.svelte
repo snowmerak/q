@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { uiStorage } from './uiStorage';
   import { RefreshCw } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestResponse } from './api';
@@ -29,7 +30,7 @@
       const response = await requestResponse(`/api/v1/workspaces/models?workspace_root=${encodeURIComponent(root)}`, { headers: { Accept: 'application/json' } });
       snapshot = await response.json() as Snapshot;
       workspaceRoot = snapshot.workspace_root;
-      localStorage.setItem('q-studio-workspace-root', workspaceRoot);
+      uiStorage.setItem('q-studio-workspace-root', workspaceRoot);
     } catch (reason) {
       error = reason instanceof Error ? reason.message : 'Workspace model settings are unavailable';
     } finally {
@@ -67,13 +68,13 @@
   }
 
   onMount(() => {
-    workspaceRoot = new URL(window.location.href).searchParams.get('workspace_root') || localStorage.getItem('q-studio-workspace-root') || '';
+    workspaceRoot = new URL(window.location.href).searchParams.get('workspace_root') || uiStorage.getItem('q-studio-workspace-root') || '';
     if (workspaceRoot) void load();
   });
 </script>
 
 <div class="workspace-model-heading">
-  <div><h3>Workspace overrides</h3><p>Override the default and occupational role models for one repository.</p></div>
+  <div><h3>Workspace overrides</h3><p>Override the default and commit models for one repository.</p></div>
   <span class:error={!!error}>{loading ? 'Loading…' : error || saved}</span>
 </div>
 <div class="settings-card workspace-model-card">
@@ -84,7 +85,7 @@
   {#if snapshot}
     <code>{snapshot.config_path}</code>
     <div class="workspace-assignments">
-      {#each snapshot.assignments as assignment}
+      {#each snapshot.assignments.filter(item => item.role === 'default' || item.role === 'commit') as assignment}
         <div class="workspace-assignment">
           <div><strong>{label(assignment.role)}</strong><small>{assignment.inherited ? `Inherits ${assignment.effective_model}` : assignment.effective_model}</small></div>
           <label><span>Model</span><select bind:value={assignment.configured_model} onchange={() => save(assignment)} disabled={loading}>

@@ -16,10 +16,11 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/internal/fsopen"
 	"github.com/snowmerak/q/internal/fsreplace"
+	"github.com/snowmerak/q/internal/sessionmessage"
 )
 
 const (
-	CurrentVersion = 3
+	CurrentVersion = sessionmessage.CurrentVersion
 	DirectoryName  = ".q"
 	SessionsName   = "sessions"
 	FileName       = "session.json"
@@ -41,6 +42,7 @@ type Session struct {
 	Title              string              `json:"title,omitempty"`
 	UpdatedAt          *time.Time          `json:"updated_at,omitempty"`
 	Transcript         []client.Message    `json:"transcript,omitempty"`
+	HistoryRevision    string              `json:"history_revision,omitempty"`
 	ResponseUsage      []ResponseUsage     `json:"response_usage,omitempty"`
 	TranscriptThoughts []TranscriptThought `json:"transcript_thoughts,omitempty"`
 	Context            []client.Message    `json:"context,omitempty"`

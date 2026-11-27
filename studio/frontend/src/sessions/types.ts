@@ -10,7 +10,9 @@ export type ToolCall = { id: string; function?: { name?: string; arguments?: str
 export type TokenUsage = { input_tokens: number; cached_tokens?: number; output_tokens: number };
 export type Message = {
   role: string;
+  index?: number;
   content?: string;
+  images?: string[];
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
@@ -18,10 +20,12 @@ export type Message = {
   status?: string;
   error?: string;
 };
+export type ResponseAction = 'regenerate' | 'delete' | 'edit';
 export type SessionDetail = {
   workspace_root: string;
   session: SessionSummary;
   transcript: Message[];
+  history_revision?: string;
   transcript_thoughts?: { before: number; content: string }[];
   active_task?: { objective: string; completion_criteria?: string[]; started_at: string };
   history?: { start: number; end: number; total: number };
@@ -59,12 +63,19 @@ export type ModelCallTiming = {
   ttft_ms?: number;
   after_first_ms?: number;
   max_output_gap_ms?: number;
+  input_tokens?: number;
   output_tokens?: number;
+  total_tokens?: number;
+  cached_tokens?: number;
+  cache_hit_rate?: number;
   output_tokens_per_second?: number;
 };
 export type RunSnapshot = {
   id: string;
   session_id: string;
+  kind?: 'compaction' | 'response_change';
+  status_detail?: string;
+  provider_kind?: 'native' | 'acp';
   status: string;
   outcome?: string;
   error?: string;
@@ -108,7 +119,7 @@ export type RegisteredSessionTree = {
   issue?: string;
 };
 export type StudioProject = {
-  limits: { max_parallel_tickets: number; max_parallel_subagents: number };
+  limits: { max_parallel_tickets: number; max_parallel_subagents: number; require_ticket_approval?: boolean };
   id: string;
   name: string;
   workspace_roots: string[];
@@ -120,6 +131,10 @@ export type StudioProject = {
 
 export function workspaceRoleTitle(kind?: string): string {
   return kind === 'coordinator' ? 'Coordinator' : kind === 'integrator' || kind === 'manager' ? 'Integrator' : '';
+}
+
+export function sessionListVisible(kind?: string): boolean {
+  return kind !== 'integrator' && kind !== 'manager';
 }
 
 export function workspaceRoleDescription(kind?: string): string {

@@ -2,15 +2,14 @@
   import { RefreshCw } from '@lucide/svelte';
   import { onMount, onDestroy } from 'svelte';
   import { requestJSON } from '../api';
+  import type { ACPModelSettings } from '../acpModelSettings';
 
   export let workspaceRoot: string;
   export let sessionID: string;
   export let disabled = false;
   export let saving = false;
 
-  type Option = { id: string; name: string; group?: string };
-  type State = { supported: boolean; current_model: string; models: Option[]; reasoning_supported: boolean; current_reasoning_effort: string; reasoning_efforts: Option[] };
-  let state: State | null = null;
+  let state: ACPModelSettings | null = null;
   let model = '';
   let effort = '';
   let error = '';
@@ -19,7 +18,7 @@
   const endpoint = `/api/v1/sessions/${encodeURIComponent(sessionID)}/acp/model`;
   $: if (mounted && !disabled && !state && !saving && !error) void load();
 
-  function adopt(result: State) {
+  function adopt(result: ACPModelSettings) {
     state = result;
     model = result.current_model;
     effort = result.current_reasoning_effort;
@@ -30,7 +29,7 @@
     saving = true;
     error = '';
     try {
-      const result = await requestJSON<State>('POST', endpoint, { workspace_root: workspaceRoot });
+      const result = await requestJSON<ACPModelSettings>('POST', endpoint, { workspace_root: workspaceRoot });
       if (!disposed) adopt(result);
     } catch (cause) {
       if (!disposed) error = cause instanceof Error ? cause.message : 'Could not load agent models';
@@ -42,7 +41,7 @@
     saving = true;
     error = '';
     try {
-      const result = await requestJSON<State>('PUT', endpoint, { workspace_root: workspaceRoot, [field]: field === 'model' ? model : effort });
+      const result = await requestJSON<ACPModelSettings>('PUT', endpoint, { workspace_root: workspaceRoot, [field]: field === 'model' ? model : effort });
       if (!disposed) adopt(result);
     } catch (cause) {
       if (!disposed) error = cause instanceof Error ? cause.message : 'Could not change the agent model';

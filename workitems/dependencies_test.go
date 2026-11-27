@@ -273,7 +273,7 @@ func TestDependencyCatalogSurvivesVersionEightUpgradeAndReopen(t *testing.T) {
 	}
 	s = openTestStore(t, dir)
 	var version int
-	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 9 {
+	if err := s.db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil || version != 10 {
 		t.Fatalf("version: %d %v", version, err)
 	}
 	current, err := s.GetItem(ctx, b.ID)

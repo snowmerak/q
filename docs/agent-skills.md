@@ -34,8 +34,12 @@ lexical hits only when the semantic branch has a confident candidate; otherwise
 the complete lexical branch remains in the fusion.
 `get_skill` routes the selected ID to the Library or local registry and always
 returns the complete resource text directly in its `content` field, whether or
-not Loom is available. It does not create a Loom artifact. There is no separate
-Library MCP tool.
+not Loom is available. It does not create a Loom artifact.
+
+Interactive ACP sessions and ACP ticket workers can call the read-only
+`search_skills` and `get_skill` tools through `q-library` MCP. These tools use
+the global Library, including bundled skills such as `q-cdp`. Workspace skill
+indexes are available through the native Q tool runtime.
 
 Skills already read in the current context should be reused across tasks and
 turns. Search again only when additional guidance is needed; read again when a
@@ -174,7 +178,7 @@ receive the same instruction after `task_start` for their assigned task. They
 load applicable instructions with `get_skill` and search again when new
 information calls for more guidance.
 
-The normalized query is limited to 4,000 runes. Without System One reranking,
+The normalized query is limited to 4,000 runes. Without Decisions reranking,
 `task_start` requests at most twelve search hits and adds at most six candidates;
 other contextual triggers request at most eight hits and add at most four
 candidates. In the main chat it removes skill
@@ -186,7 +190,7 @@ In the main chat, previously seen IDs are recovered from earlier contextual hint
 
 When `systemone.json` exists, q uses its `agent_skill_decision` model assignment
 or representative-model fallback to rerank Agent Skills. Contextual discovery
-retrieves 32 candidates, sends one System One request containing one score
+retrieves 32 candidates, sends one Decisions request containing one score
 question per candidate, and keeps the top eight for `task_start` or the top six
 for other contextual triggers. `search_skills` retrieves and
 scores 32 candidates, then returns at most 20 or the smaller requested limit;

@@ -2,7 +2,7 @@
   import { ChevronDown, Folders, GitBranch, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, X } from '@lucide/svelte';
   import { formatSessionTime, shortID } from './format';
   import { flattenDelegations } from './tree';
-  import { workspaceRoleTitle, workspaceRoleDescription } from './types';
+  import { sessionListVisible, workspaceRoleTitle, workspaceRoleDescription } from './types';
   import type { FlatDelegation, RegisteredSessionTree, StudioProject, SessionType } from './types';
 
   export let projects: StudioProject[];
@@ -26,6 +26,7 @@
   let collapsedGroups = new Set<string>();
   $: query = search.trim().toLocaleLowerCase();
   $: filteredSessions = registeredSessions.filter(registration => {
+    if (!sessionListVisible(registration.kind)) return false;
     if (typeFilter !== 'all' && (registration.session.type || 'interaction') !== typeFilter) return false;
     const project = projects.find(project => project.id === registration.project_id);
     const title = workspaceRoleTitle(registration.kind) || registration.session.title || (registration.kind === 'chat' ? 'New chat' : 'New session');
@@ -94,7 +95,7 @@
         <div class="session-list-empty" role="status"><p>Loading your sessions…</p></div>
       {:else if query && !filteredSessions.length && !visibleProjects.length}
         <div class="session-list-empty"><Search aria-hidden="true" size={23} /><strong>No sessions found</strong><p>Try a session title, project name, or workspace path.</p><button class="text-button" onclick={clearSearch}>Clear search</button></div>
-      {:else if projects.length || registeredSessions.length}
+      {:else if projects.length || filteredSessions.length}
         {#if chats.length}
           <div class="session-project-heading">{@render groupHeading('chats', 'Chats', chats.length)}</div>
           <div id="session-group-chats" hidden={!query && collapsedGroups.has('chats')}>

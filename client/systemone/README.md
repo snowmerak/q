@@ -1,7 +1,8 @@
-# System One HTTP client
+# Decisions HTTP client
 
-This package calls the native Jev-style System One API. It is separate from Q's
-OpenAI-compatible chat client because System One returns structured decisions,
+This package calls the native Jev-style System One API and can translate requests
+for OpenAI-compatible Decisions and Gemini Decisions. It is separate from Q's
+chat client because these protocols return structured decisions,
 not generated chat text.
 
 ```go
@@ -51,16 +52,16 @@ call a separate operation. Custom System One hosts, including Jev-compatible
 services, can be selected with `Config.BaseURL`. If `Config.APIKey` is empty,
 the client sends no Authorization header.
 
-In q, `/systemone` or `q systemone` stores multiple providers and standalone
+In Q, `/decisions` or `q decisions` configures providers and standalone
 server settings in `~/.q/systemone.json`. `systemoneconfig.Store.NewClient()`
-returns a native client and model for the representative `default_model`
+returns a client and model for the representative `default_model`
 assignment; `Config.ResolveModel(role)` resolves an optional role override.
 The `agent_skill_decision` and `archive_decision` roles independently rerank
 skill and archive search candidates; unset roles use `default_model`.
 The initial TypeSafe provider reads `TYPESAFE_API_KEY`; provider settings store
 only the environment variable name. If it has no value, requests are sent
 without authentication. Run
-`q systemone start` to serve the native API locally; model IDs in its catalog
+`q decisions start` to serve the native API locally. Model IDs in its catalog
 use `provider-id/model-name`.
 
 Wire behavior follows the [System One API reference](https://docs.system-one.dev/en/docs/api)

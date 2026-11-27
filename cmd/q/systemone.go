@@ -18,27 +18,27 @@ import (
 
 type systemOneCommandOptions = networkCommandOptions
 
-func runSystemOneCommand(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+func runSystemOneCommand(ctx context.Context, command string, args []string, stdout, stderr io.Writer) error {
 	store, err := config.DefaultStore()
 	if err != nil {
-		return fmt.Errorf("q systemone: %w", err)
+		return fmt.Errorf("q %s: %w", command, err)
 	}
-	return runSystemOneWithStore(ctx, args, stdout, stderr, systemoneconfig.Store{Dir: store.Dir})
+	return runSystemOneWithStore(ctx, command, args, stdout, stderr, systemoneconfig.Store{Dir: store.Dir})
 }
 
 func runSystemOneWithStore(
-	ctx context.Context, args []string, stdout, stderr io.Writer, store systemoneconfig.Store,
+	ctx context.Context, command string, args []string, stdout, stderr io.Writer, store systemoneconfig.Store,
 ) error {
-	options, err := parseSystemOneOptions(args, stderr)
+	options, err := parseSystemOneOptions(command, args, stderr)
 	if errors.Is(err, flag.ErrHelp) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("q systemone: %w", err)
+		return fmt.Errorf("q %s: %w", command, err)
 	}
 	value, err := store.LoadOrDefault()
 	if err != nil {
-		return fmt.Errorf("q systemone: load settings: %w", err)
+		return fmt.Errorf("q %s: load settings: %w", command, err)
 	}
 	host, port := value.Server.Host, value.Server.Port
 	if options.hostSet {
@@ -52,16 +52,16 @@ func runSystemOneWithStore(
 	if value.ActiveGeneratedKeyCount() > 0 {
 		masterKey, err = store.LoadMasterKey()
 		if err != nil {
-			return fmt.Errorf("q systemone: load API key master: %w", err)
+			return fmt.Errorf("q %s: load API key master: %w", command, err)
 		}
 	} else if value.ActiveKeyCount() == 0 {
-		_, _ = fmt.Fprintln(stderr, "q systemone: no active API keys; authentication disabled")
+		_, _ = fmt.Fprintf(stderr, "q %s: no active API keys. Authentication is disabled.\n", command)
 	}
 	instance, err := systemoneserver.NewWithMasterKey(value, masterKey)
 	if err != nil {
-		return fmt.Errorf("q systemone: initialize: %w", err)
+		return fmt.Errorf("q %s: initialize: %w", command, err)
 	}
-	listener, fallback, err := listenSystemOne(options, value.Server)
+	listener, fallback, err := listenSystemOne(command, options, value.Server)
 	if err != nil {
 		return err
 	}
@@ -80,15 +80,15 @@ func runSystemOneWithStore(
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
-	watchDone := watchSystemOneKeyring(serverContext, store, instance, stderr)
+	watchDone := watchSystemOneKeyring(serverContext, command, store, instance, stderr)
 	if fallback {
-		_, _ = fmt.Fprintf(stderr, "q systemone: configured port %d is unavailable; using %s\n", port, listener.Addr())
+		_, _ = fmt.Fprintf(stderr, "q %s: configured port %d is unavailable. Listening on %s.\n", command, port, listener.Addr())
 	}
-	if _, err := fmt.Fprintf(stdout, "q systemone listening on http://%s/v1\n", listener.Addr()); err != nil {
+	if _, err := fmt.Fprintf(stdout, "q %s listening on http://%s/v1\n", command, listener.Addr()); err != nil {
 		cancelServer()
 		<-shutdownDone
 		<-watchDone
-		return fmt.Errorf("q systemone: report listen address: %w", err)
+		return fmt.Errorf("q %s: report listen address: %w", command, err)
 	}
 	serveErr := server.Serve(listener)
 	cancelServer()
@@ -97,10 +97,10 @@ func runSystemOneWithStore(
 	if errors.Is(serveErr, http.ErrServerClosed) {
 		return nil
 	}
-	return fmt.Errorf("q systemone: serve: %w", serveErr)
+	return fmt.Errorf("q %s: serve: %w", command, serveErr)
 }
 
-func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, server *systemoneserver.Server, output io.Writer) <-chan struct{} {
+func watchSystemOneKeyring(ctx context.Context, command string, store systemoneconfig.Store, server *systemoneserver.Server, output io.Writer) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -122,22 +122,22 @@ func watchSystemOneKeyring(ctx context.Context, store systemoneconfig.Store, ser
 				lastInfo = info
 				value, err := store.LoadOrDefault()
 				if err != nil {
-					_, _ = fmt.Fprintf(output, "q systemone: API key reload skipped: %v\n", err)
+					_, _ = fmt.Fprintf(output, "q %s: API key reload skipped: %v\n", command, err)
 					continue
 				}
 				var masterKey [32]byte
 				if value.ActiveGeneratedKeyCount() > 0 {
 					masterKey, err = store.LoadMasterKey()
 					if err != nil {
-						_, _ = fmt.Fprintf(output, "q systemone: API key reload skipped: %v\n", err)
+						_, _ = fmt.Fprintf(output, "q %s: API key reload skipped: %v\n", command, err)
 						continue
 					}
 				}
 				if err := server.ReloadAuthentication(value, masterKey); err != nil {
-					_, _ = fmt.Fprintf(output, "q systemone: API key reload skipped: %v\n", err)
+					_, _ = fmt.Fprintf(output, "q %s: API key reload skipped: %v\n", command, err)
 					continue
 				}
-				_, _ = fmt.Fprintln(output, "q systemone: API keys reloaded")
+				_, _ = fmt.Fprintf(output, "q %s: API keys reloaded\n", command)
 			}
 		}
 	}()
@@ -160,23 +160,23 @@ func systemOneConfigChanged(previous, current os.FileInfo) bool {
 	return !os.SameFile(previous, current) || !previous.ModTime().Equal(current.ModTime())
 }
 
-func parseSystemOneOptions(args []string, output io.Writer) (systemOneCommandOptions, error) {
-	return parseNetworkOptions("systemone", args, output)
+func parseSystemOneOptions(command string, args []string, output io.Writer) (systemOneCommandOptions, error) {
+	return parseNetworkOptions(command, args, output)
 }
 
-func listenSystemOne(options systemOneCommandOptions, configured systemoneconfig.ServerConfig) (net.Listener, bool, error) {
+func listenSystemOne(command string, options systemOneCommandOptions, configured systemoneconfig.ServerConfig) (net.Listener, bool, error) {
 	address := net.JoinHostPort(configured.Host, fmt.Sprintf("%d", configured.Port))
 	listener, err := net.Listen("tcp", address)
 	if err == nil {
 		return listener, false, nil
 	}
 	if options.portSet || configured.Port == 0 || !isAddressInUse(err) {
-		return nil, false, fmt.Errorf("q systemone: listen on %s: %w", address, err)
+		return nil, false, fmt.Errorf("q %s: listen on %s: %w", command, address, err)
 	}
 	fallbackAddress := net.JoinHostPort(configured.Host, "0")
 	listener, fallbackErr := net.Listen("tcp", fallbackAddress)
 	if fallbackErr != nil {
-		return nil, false, fmt.Errorf("q systemone: listen on %s after %s was unavailable: %w", fallbackAddress, address, fallbackErr)
+		return nil, false, fmt.Errorf("q %s: listen on %s after %s was unavailable: %w", command, fallbackAddress, address, fallbackErr)
 	}
 	return listener, true, nil
 }

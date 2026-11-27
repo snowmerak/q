@@ -24,7 +24,7 @@ toc:
 | `/learn [on\|off\|status]` | 워크스페이스 영구 학습을 체크포인트하거나 제어합니다. |
 | `/model` | 모델을 할당하고 폴백 그룹을 구성합니다. |
 | `/gateway` | 공급자와 Gateway 리스너를 구성합니다. |
-| `/systemone` | System One 공급자, decision 모델, 키와 리스너를 구성합니다. |
+| `/decisions` | Decisions 공급자, decision 모델, 키와 리스너를 구성합니다. |
 | `/library` | 전역 Library 리스너를 구성합니다. |
 | `/loom` | Loom 저장소를 확인하고 GC를 구성합니다. |
 | `/ignore` | `.qignore` 워크스페이스 검색 규칙을 편집합니다. |
@@ -43,8 +43,8 @@ toc:
 | `q studio [--host <ip>] [--port <port>] [--no-open]` | 내장 Studio 웹 인터페이스를 시작합니다. 기본값은 `127.0.0.1`과 임의 포트입니다. |
 | `q gateway` | Studio에서 Gateway 공급자와 리스너 설정을 엽니다. |
 | `q gateway start` | OpenAI 호환 Gateway를 시작합니다. |
-| `q systemone` | Studio에서 System One 공급자, decision 모델과 키를 엽니다. |
-| `q systemone start [--host <ip>] [--port <port>]` | System One decision API를 시작합니다. |
+| `q decisions` | Studio에서 Decisions 공급자, decision 모델과 키를 엽니다. |
+| `q decisions start [--host <ip>] [--port <port>]` | Decisions API를 시작합니다. |
 | `q library` | Studio에서 전역 Library 리스너 설정을 엽니다. |
 | `q library start` | 전역 Library를 포그라운드 서비스로 유지합니다. |
 | `q memory` | Workspace Memory를 독립적으로 실행합니다. |

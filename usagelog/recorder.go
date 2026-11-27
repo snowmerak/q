@@ -66,6 +66,10 @@ func (r *Recorder) RecordUsage(record client.UsageRecord) error {
 	}
 }
 
+func (r *Recorder) RecordModelCall(record client.UsageRecord) error {
+	return r.RecordUsage(record)
+}
+
 func (r *Recorder) recordUsage(ctx context.Context, record client.UsageRecord) error {
 	if record.EventID == "" {
 		var id [16]byte
@@ -207,3 +211,4 @@ func (r *Recorder) currentTime() time.Time {
 }
 
 var _ client.UsageRecorder = (*Recorder)(nil)
+var _ client.ModelCallRecorder = (*Recorder)(nil)

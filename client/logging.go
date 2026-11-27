@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,24 +30,36 @@ type modelCallLog struct {
 	timing          ModelCallTiming
 	output          modelOutputTiming
 	observe         func(ModelCallTiming)
+	record          ModelCallRecorder
+	attempts        int
 	nativeResponses bool
 }
 
-func startModelCall(ctx context.Context, model, apiMode string, streaming bool) *modelCallLog {
+func startModelCall(ctx context.Context, model, apiMode string, streaming bool, recorder UsageRecorder) *modelCallLog {
 	logger := diagnostics.Logger(ctx)
 	observe, _ := ctx.Value(modelCallObserverKey{}).(func(ModelCallTiming))
 	if !streaming {
 		observe = nil
 	}
-	if observe == nil && !logger.Enabled(ctx, slog.LevelInfo) && !logger.Enabled(ctx, slog.LevelError) {
+	record, _ := recorder.(ModelCallRecorder)
+	if observe == nil && record == nil && !logger.Enabled(ctx, slog.LevelInfo) && !logger.Enabled(ctx, slog.LevelError) {
 		return nil
 	}
 	timing := ModelCallTiming{ID: uuid.NewString(), Model: model, Role: usageRole(ctx)}
 	logger = logger.With("model_call_id", timing.ID, "requested_model", model,
 		"api_mode", apiMode, "streaming", streaming, "usage_role", timing.Role)
-	call := &modelCallLog{ctx: ctx, logger: logger, started: time.Now(), timing: timing, observe: observe, nativeResponses: apiMode == "responses"}
+	call := &modelCallLog{ctx: ctx, logger: logger, started: time.Now(), timing: timing, observe: observe, record: record, nativeResponses: apiMode == "responses"}
 	logger.Info("model.call.started")
 	return call
+}
+
+func (call *modelCallLog) startAttempt() {
+	if call == nil {
+		return
+	}
+	call.mu.Lock()
+	call.attempts++
+	call.mu.Unlock()
 }
 
 func (call *modelCallLog) observeResponse(response *ChatResponse) {
@@ -63,7 +76,7 @@ func (call *modelCallLog) observeUsage(model string, usage Usage) {
 	call.mu.Lock()
 	defer call.mu.Unlock()
 	call.model, call.usage = model, usage
-	call.reported = usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0
+	call.reported = usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0 || usage.PromptDetails != nil
 }
 
 func (call *modelCallLog) observeChunk(chunk *ChatChunk, received time.Time) {
@@ -125,12 +138,25 @@ func (call *modelCallLog) finish(err error, status string) {
 		attrs := []any{"status", status, "duration_ms", timing.DurationMS,
 			"response_model", call.model, "usage_reported", call.reported}
 		if call.reported {
-			outputTokens := call.usage.CompletionTokens
-			timing.OutputTokens = &outputTokens
-			attrs = append(attrs, "prompt_tokens", call.usage.PromptTokens,
-				"completion_tokens", call.usage.CompletionTokens, "total_tokens", call.usage.TotalTokens)
+			inputTokens, outputTokens, totalTokens := call.usage.PromptTokens, call.usage.CompletionTokens, call.usage.TotalTokens
+			if totalTokens == 0 {
+				totalTokens = inputTokens + outputTokens
+			}
+			timing.InputTokens, timing.OutputTokens, timing.TotalTokens = &inputTokens, &outputTokens, &totalTokens
+			attrs = append(attrs, "prompt_tokens", inputTokens, "completion_tokens", outputTokens, "total_tokens", totalTokens)
+			if details := call.usage.PromptDetails; details != nil {
+				cachedTokens := max(0, details.CachedTokens)
+				timing.CachedTokens = &cachedTokens
+				attrs = append(attrs, "cached_tokens", cachedTokens)
+				if inputTokens > 0 {
+					hitRate := float64(min(cachedTokens, inputTokens)) / float64(inputTokens)
+					timing.CacheHitRate = &hitRate
+					attrs = append(attrs, "cache_hit_rate", hitRate)
+				}
+			}
 		}
 		call.output.apply(&timing, call.started, ended)
+		attempts := call.attempts
 		call.mu.Unlock()
 		if timing.TTFTMS != nil {
 			attrs = append(attrs, "ttft_ms", *timing.TTFTMS)
@@ -154,7 +180,50 @@ func (call *modelCallLog) finish(err error, status string) {
 		if call.observe != nil {
 			call.observe(timing)
 		}
+		if call.record != nil && attempts > 0 {
+			call.recordOutcome(timing, ended, attempts > 1)
+		}
 	})
+}
+
+type generationOutcomeKey struct{}
+
+// A transport success can still produce an incomplete generation. Recovery
+// validates the last successful transport call before its outcome is recorded.
+type generationOutcome struct {
+	mu      sync.Mutex
+	pending func(error)
+}
+
+func (outcome *generationOutcome) swap(record func(error)) func(error) {
+	outcome.mu.Lock()
+	defer outcome.mu.Unlock()
+	previous := outcome.pending
+	outcome.pending = record
+	return previous
+}
+
+func (call *modelCallLog) recordOutcome(timing ModelCallTiming, ended time.Time, retried bool) {
+	record := func(err error) {
+		status := timing.Status
+		if errors.Is(err, context.Canceled) {
+			status = "cancelled"
+		} else if err != nil {
+			status = "failed"
+		}
+		_ = call.record.RecordModelCall(UsageRecord{
+			EventID: strings.ReplaceAll(timing.ID, "-", ""), At: ended, Model: timing.Model, Role: timing.Role,
+			Performance: &UsagePerformance{Status: status, DurationMS: timing.DurationMS, TTFTMS: timing.TTFTMS,
+				OutputTokensPerSec: timing.OutputTokensPerSec, Retried: retried},
+		})
+	}
+	if outcome, ok := call.ctx.Value(generationOutcomeKey{}).(*generationOutcome); ok && timing.Status == "completed" {
+		if previous := outcome.swap(record); previous != nil {
+			previous(nil)
+		}
+		return
+	}
+	record(nil)
 }
 
 type modelLogStream struct {

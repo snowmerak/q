@@ -61,8 +61,8 @@ receipts in the same transaction. A repeated `request_id` with identical input
 returns its original acknowledgement; changing input under the same key returns
 409. `revision` is required for optimistic edits. `source_revision` advances on
 content/metadata changes, separately from scheduling/lease changes. This keeps
-System One retry keys stable while an unchanged ticket waits for assignment.
-Source acceptance does not require embedding, System One or an agent response.
+Decisions retry keys stable while an unchanged ticket waits for assignment.
+Source acceptance does not require embedding, Decisions or an agent response.
 
 Thread reads use a snapshot upper sequence and keyset cursors. They return
 bounded previews and `content_truncated`; `post_get`/the post-content API return
@@ -122,10 +122,14 @@ report task. Omitted modes still default to `report` for compatibility.
 
 In Studio, choose **Execution mode** when creating a ticket, or change it through
 **Edit details → Execution mode → Save details** before execution starts. Leaving
-**Requested member** empty lets System One choose. Native and ACP ticket tool
+**Requested member** empty lets Decisions choose. Native and ACP ticket tool
 descriptions carry the same guidance; `ticket_create` should include
 `"execution_mode":"git"` for code/file changes or `"execution_mode":"report"`
 for read-only work. Issuance automatically requests assignment in either mode.
+
+For a read-only code review, join `builtin/code-reviewer` in the project and issue
+a `report` ticket with `requested_role: reviewer`. The reviewer can inspect
+repository files and pinned ticket diffs and returns its findings in the report.
 
 Workspace membership references existing global/workspace profiles by canonical
 agent ID plus definition and execution roots. Profiles, permissions and ACP
@@ -140,14 +144,14 @@ required. The coordinator checks every two seconds while Studio runs. The board
 stays `todo` until an eligible worker is reserved. Older unstarted tickets with
 an empty execution state are admitted automatically; explicit stops and uncertain
 outcomes still require an explicit retry. Source acknowledgement does not wait
-for assignment, execution or review. System One
+for assignment, execution or review. Decisions
 must select an eligible joined member even when a member was explicitly
 requested. Missing settings, missing credentials, failed/invalid answers and
 `none` leave `assignment_waiting` with a reason and bounded retry delay. There is
 no first-member or main-model fallback. Candidate batches retain every eligible
 member and validate returned member IDs. Assignment HTTP calls use the same
 two-minute budget as the coordinator, while caller cancellation can stop them
-earlier; the general System One client default remains unchanged.
+earlier; the general Decisions client default remains unchanged.
 
 The existing GeneralRunner/delegation runtime executes native workers. Each
 attempt has a distinct ID, durable worker session reference, owner/generation/
@@ -181,7 +185,7 @@ Each workspace reserves two independent conversations:
 
 - **Coordinator** receives requests, records requirements and plans in issues,
   and creates actionable tickets with acceptance criteria and explicit execution
-  modes. System One still selects from joined subagents. Planning and dependent
+  modes. Decisions still selects from joined subagents. Planning and dependent
   implementation tickets may be issued together using prerequisite relationships;
   implementation waits for the required planning tickets to reach `done`.
 - **Integrator** receives worker result notifications, reviews the pinned changes,
@@ -217,7 +221,7 @@ notifications are acknowledged without executing an obsolete review.
 
 `ticket_change_read` resolves the attempt's actual pinned MR. The ordinary
 `change_request_*` tools retain their existing direct-child ownership rules.
-Only the centrally reserved Integrator session may review an attempt; the source also rejects review requests carrying the Coordinator identity. Report
+The centrally reserved Integrator reviews top-level attempts. A live parent worker reviews a child attempt through a reservation scoped to that child. Report
 acceptance marks `done`. Git acceptance durably queues a real pinned merge;
 `done` is committed only after Git succeeds. Dirty parents, moved bases/heads,
 merge/cleanup failures and stale attempts remain visible conflicts. Merge
@@ -226,6 +230,27 @@ exact two-parent merge recovery handles a process stopping after Git commits
 but before the source acknowledgement. Rejecting Git work queues normal
 worktree/MR closure. Feedback is stored as a searchable ticket reply and queues
 another checked assignment to the original member.
+
+From a running Git ticket, a worker can issue another Git ticket with
+`ticket_create`, `as_child: true`, and a stable `request_id`. Set
+`requested_role` to a profile role such as `coder` to narrow the eligible
+members. Decisions chooses among the eligible joined members, and Q records
+the actual member and worker session with the attempt. Commit existing
+parent changes and finish the turn to release its execution slot. Children use the
+parent's worktree as the merge target. Q reopens the parent worker session to review
+each result, then resumes it again to verify and submit the combined work. Studio
+shows the parent, child tickets, and merge target. If a session loses its checkpoint
+or its ACP connection cannot resume it, select a joined member in **Handoff to**
+on the parent ticket to continue in the same worktree.
+
+Approved tickets can share a starting commit. The merge queue takes each reviewed
+head in turn and computes its merge against the current target. Git conflicts
+hold the affected ticket and leave the target checkout clean. Request changes to
+reopen the worker with the conflicting target commit, then review the updated
+diff. Moving-target merges require Git with `merge-tree --write-tree`.
+Repositories with merge commit hooks use the original hook-aware merge path.
+When the target moves in such a repository, update the ticket against the new
+target and review the result before merging.
 
 ## Native and ACP tools
 
@@ -239,16 +264,38 @@ The same workspace source tools are registered for native Q and `q-library` MCP:
 - `issue_create/list/get/reply/update`, `ticket_create/list/get/reply/update`;
 - `post_get/update`, `search_work`, `workspace_members`;
 - `ticket_start/retry/cancel`, `ticket_attempt_list/get`, `ticket_change_read`, `ticket_worker_read`;
-- only the Integrator receives `manager_inbox` and `ticket_review`; the Coordinator has issue/ticket tools without review authority.
+- the Integrator receives `manager_inbox` and `ticket_review`. A parent worker also receives `ticket_review` for its assigned child review turn.
+
+On an assigned review turn, Q supplies the attempt ID and a stable review
+request key. Call `ticket_attempt_get` and `ticket_change_read` with empty
+arguments, `ticket_worker_read` with optional pagination, and `ticket_review`
+with `decision` and optional `feedback`. Feedback is required for
+`request_changes`. On an ordinary Integrator turn, select an attempt
+explicitly and supply the review request key.
 
 The host binds workspace and actor; tool arguments cannot select another write
 scope or impersonate a manager. Explicit global reads do not grant cross-project
-writes. `search_skills`/`get_skill` continue to expose global skills through MCP.
-Ordinary ACP connections opt in using **Q Library for Sessions**. Managers and
-ticket workers always receive their required workspace tools.
+writes. When enabled, the work catalog provides six global read tools without
+a project, 21 tools for project sessions, and 23 for Integrators including
+review operations.
+
+Interactive ACP sessions and ACP ticket workers receive one `q-library` MCP
+connection with `search_skills` and `get_skill` for global and bundled skills.
+Ordinary ACP connections add work tools by enabling **Q issues and tickets**.
+Reserved project sessions and ticket workers automatically receive work tools
+scoped to their project and role.
+
+Project-specific workflow and role instructions accompany MCP initialization and
+the first ACP prompt. ACP has no separate system-prompt field, so Q prepends these
+instructions once per remote session, retries them after a failed prompt and
+refreshes them when their version or the current review scope changes. Q
+reopens the tools for a changed review scope and resumes the ACP conversation
+when the connection supports it. Git acceptance authorizes Q to merge the
+pinned commit locally; remote pushes remain separate.
 
 ```text
 q library mcp --config-dir <directory> --workspace-id <id> --session-id <id> [--manager]
+q library mcp --config-dir <directory> --skills-only
 ```
 
 `--embedding-connection` is supplied internally by the host. Bridge stdout
@@ -282,7 +329,8 @@ All Library routes use `/v1`:
 | Search/index | `POST /work/search`, `GET/POST /work/embeddings`, `POST /work/reindex` |
 | Membership | `GET/POST /workspaces/{id}/members` |
 | Execution | `POST /items/{id}/control`, `/claim`, `GET /items/{id}/attempts`, `GET/POST /attempts/{id}`, `POST /attempts/recover` |
-| Worker history | `GET /attempts/{id}/worker` (bounded public transcript and unknown-tool pages) |
+| Worker history and activity | `GET /attempts/{id}/worker` (bounded transcript, unknown-tool pages, and live ACP updates when `latest=true`) |
+| Native worker guidance | `POST /attempts/{id}/guidance` queues a request for the current running attempt. The worker saves it at a tool boundary before continuing. |
 | Review | `POST /attempts/{id}/review`, `/merge`, `GET /workspaces/{id}/inbox`, `POST /inbox/{id}/ack`, `/defer` |
 | Skills | Existing `/skills/search`, resource, reload and embedding routes |
 

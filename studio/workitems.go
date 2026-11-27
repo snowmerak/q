@@ -28,9 +28,18 @@ func workResponse[T any](service *sessionsService, w http.ResponseWriter, r *htt
 
 func (s *sessionsService) serveWorkItems(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		query := r.URL.Query()
+		limit, _ := strconv.Atoi(query.Get("limit"))
+		board := query.Get("board")
+		if board != "" && query.Get("kind") != workitems.Ticket {
+			writeAPIError(w, http.StatusBadRequest, workitems.ErrInvalidInput)
+			return
+		}
 		workResponse(s, w, r, 200, func(ctx context.Context, c *library.Client) (workitems.ItemPage, error) {
-			return c.ListItems(ctx, r.URL.Query().Get("workspace_id"), r.URL.Query().Get("kind"), r.URL.Query().Get("cursor"), limit)
+			if board != "" {
+				return c.ListBoardTickets(ctx, query.Get("workspace_id"), board, query.Get("cursor"), limit)
+			}
+			return c.ListItems(ctx, query.Get("workspace_id"), query.Get("kind"), query.Get("cursor"), limit)
 		})
 		return
 	}
@@ -40,6 +49,7 @@ func (s *sessionsService) serveWorkItems(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	in.Author = "user"
+	in.ParentWorker = nil
 	workResponse(s, w, r, 201, func(ctx context.Context, c *library.Client) (workitems.Item, error) { return c.CreateItem(ctx, in) })
 }
 func (s *sessionsService) serveWorkItem(w http.ResponseWriter, r *http.Request) {

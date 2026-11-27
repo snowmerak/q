@@ -14,12 +14,13 @@ import (
 )
 
 type studioProfileEntry struct {
-	Profile  subagent.Profile `json:"profile"`
-	Scope    string           `json:"scope"`
-	Path     string           `json:"path"`
-	Revision string           `json:"revision"`
-	Shadowed bool             `json:"shadowed"`
-	Error    string           `json:"error,omitempty"`
+	Profile         subagent.Profile       `json:"profile"`
+	Scope           string                 `json:"scope"`
+	Path            string                 `json:"path"`
+	Revision        string                 `json:"revision"`
+	Shadowed        bool                   `json:"shadowed"`
+	Error           string                 `json:"error,omitempty"`
+	EffectiveTarget *config.SubagentTarget `json:"effective_target,omitempty"`
 }
 
 type profileUpdate struct {
@@ -75,13 +76,17 @@ func (service *integrationService) serveProfiles(writer http.ResponseWriter, req
 		}
 		original = &entry
 	}
-	if input.Profile.EffectiveKind() == subagent.AgentKindExternal {
-		if connection, found := value.Agents.Connections[input.Profile.Agent]; !found || connection.Disabled {
+	if id := input.Profile.ACPConnection(); id != "" {
+		if connection, found := value.Agents.Connections[id]; !found || connection.Disabled {
 			writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("external subagent requires an enabled ACP connection"))
 			return
 		}
-	} else if !value.HasNativeRole(input.Profile.Role) {
+	} else if input.Profile.Target == nil && input.Profile.Role != "" && !value.HasNativeRole(input.Profile.Role) {
 		writeAPIError(writer, http.StatusUnprocessableEntity, errors.New("inner subagent references an unavailable model role"))
+		return
+	}
+	if err := validateSubagentTarget(value, input.Profile.Target); err != nil {
+		writeAPIError(writer, http.StatusUnprocessableEntity, err)
 		return
 	}
 	if err := validateProfileGraph(store, input.Profile, input.Scope, original); err != nil {
@@ -172,30 +177,24 @@ func findProfileEntry(entries []subagent.ProfileEntry, scope, name string) (suba
 
 func validateProfileGraph(store subagent.ProfileStore, candidate subagent.Profile, scope string, original *subagent.ProfileEntry) error {
 	definitions := subagent.PublicAgentDefinitions()
-	replaced := false
 	for _, entry := range store.List() {
 		if entry.Err != nil {
 			return fmt.Errorf("subagent profile %s: %w", entry.Path, entry.Err)
 		}
 		if original != nil && entry.Path == original.Path {
-			entry.Profile = candidate
-			entry.Scope = scope
-			replaced = true
+			continue
 		}
-		definition, err := subagent.DefinitionForProfile(entry)
+		definition, err := subagent.StoredDefinitionForProfile(entry)
 		if err != nil {
 			return err
 		}
 		definitions = append(definitions, definition)
 	}
-	if !replaced {
-		definition, err := subagent.DefinitionForProfile(subagent.ProfileEntry{Profile: candidate, Scope: scope})
-		if err != nil {
-			return err
-		}
-		definitions = append(definitions, definition)
+	definition, err := subagent.DefinitionForProfile(subagent.ProfileEntry{Profile: candidate, Scope: scope})
+	if err != nil {
+		return err
 	}
-	_, err := subagent.NewRegistry(definitions)
+	_, err = subagent.NewRegistry(append(definitions, definition))
 	return err
 }
 

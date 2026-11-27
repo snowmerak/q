@@ -93,7 +93,7 @@ func PrepareWorkspaceMessages(messages []client.Message, options WorkspaceMessag
 		}
 	}
 	if catalogHas(runtimeTools, "ticket_create") {
-		orchestrationPrompt += " To assign work to a subagent, inspect workspace_members and issue ticket_create in the current project. Ticket creation acknowledges durable queuing; System One selects a joined subagent and execution and Integrator review complete asynchronously. Report the ticket IDs and do not call delegate_list or delegate or synchronously wait for another worker. If no project is bound, ask the user to select one before issuing tickets."
+		orchestrationPrompt += " To assign work to a subagent, inspect workspace_members and issue ticket_create in the current project. Ticket creation acknowledges durable queuing; Decisions selects a joined subagent and execution and Integrator review complete asynchronously. Report the ticket IDs and do not call delegate_list or delegate or synchronously wait for another worker. If no project is bound, ask the user to select one before issuing tickets."
 	}
 	if orchestrationPrompt != "" {
 		result = append(result, client.Message{

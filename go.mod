@@ -1,6 +1,6 @@
 module github.com/snowmerak/q
 
-go 1.27.3
+go 1.27.4
 
 require (
 	charm.land/bubbles/v2 v2.1.1
@@ -20,10 +20,13 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/parquet-go/parquet-go v0.32.0
 	github.com/snowmerak/cdp-q-driver v0.0.0-20261107143548-ec463b2b34af
-	github.com/snowmerak/llm-provider v0.0.0-20261108025312-195d7124fbea
+	github.com/snowmerak/decisions v1.0.0
+	github.com/snowmerak/llm-provider v0.0.0-20261108030612-83466fe73f57
 	github.com/snowmerak/q/third_party/acp-go-sdk v0.0.0-20260827012000-155b26051836
+	github.com/tc-hib/winres v0.3.1
 	github.com/zeebo/blake3 v0.2.4
 	go.etcd.io/bbolt v1.4.0
+	golang.org/x/image v0.45.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -89,6 +92,7 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/parquet-go/bitpack v1.0.0 // indirect
 	github.com/parquet-go/jsonlite v1.0.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.21 // indirect
@@ -103,7 +107,6 @@ require (
 	github.com/yuin/goldmark v1.7.17 // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/exp v0.0.0-20240909161429-701f63a606c0 // indirect
-	golang.org/x/image v0.20.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect

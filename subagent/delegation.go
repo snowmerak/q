@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -16,8 +17,11 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/diagnostics"
 	"github.com/snowmerak/q/internal/toolbatch"
+	"github.com/snowmerak/q/internal/workitemtools"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
+	"github.com/snowmerak/q/workitems"
 )
 
 const (
@@ -29,10 +33,10 @@ const (
 	TaskStartToolName          = "task_start"
 	TaskCompleteToolName       = "task_complete"
 
-	BuiltinInterviewerID     = "builtin/interviewer"
 	BuiltinManagerID         = "builtin/manager"
 	BuiltinSeniorDeveloperID = "builtin/senior-developer"
 	BuiltinJuniorDeveloperID = "builtin/junior-developer"
+	BuiltinCodeReviewerID    = "builtin/code-reviewer"
 	BuiltinResearchID        = "builtin/research"
 	BuiltinWebSearchID       = "builtin/web-search"
 	BuiltinWebTesterID       = "builtin/web-tester"
@@ -62,6 +66,49 @@ type AgentDefinition struct {
 	Tools        []string
 	Delegates    []string
 	StrictTools  bool
+	Target       *config.SubagentTarget `json:",omitempty"`
+	config.ACPSelection
+}
+
+// ACPOptions returns the selection at the same scope as the ACP connection.
+func (definition AgentDefinition) ACPOptions() config.ACPSelection {
+	if definition.Target != nil && definition.Target.Agent != "" {
+		return definition.Target.ACPSelection
+	}
+	return definition.ACPSelection
+}
+
+// ExecutionDefinition applies an execution choice without editing the profile's grants.
+func ExecutionDefinition(value config.Config, definition AgentDefinition, workspaceTargets map[string]config.SubagentTarget) AgentDefinition {
+	if target, exists := workspaceTargets[definition.Info.Name]; exists && definition.Info.Kind == AgentKindInner {
+		definition.Target = &target
+		return applyExecutionTarget(definition)
+	}
+	if definition.Info.Source == "builtin" {
+		if definition.Info.Kind == AgentKindExternal {
+			assignment := value.Agents.Roles[definition.Info.Role]
+			definition.Connection = assignment.Agent
+			definition.ACPSelection = assignment.ACPSelection
+		} else if target, exists := value.Agents.SubagentTargets[definition.Info.Name]; exists {
+			definition.Target = &target
+		}
+	}
+	return applyExecutionTarget(definition)
+}
+
+func applyExecutionTarget(definition AgentDefinition) AgentDefinition {
+	if definition.Target == nil {
+		return definition
+	}
+	if definition.Target.Agent != "" {
+		definition.Info.Kind = AgentKindExternal
+		definition.Connection = definition.Target.Agent
+		definition.Tools, definition.Delegates = nil, nil
+	} else {
+		definition.Info.Kind = AgentKindInner
+		definition.Connection = ""
+	}
+	return definition
 }
 
 type Registry struct {
@@ -262,18 +309,11 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 		"edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command", "cmd_status", "wait")
 	return []AgentDefinition{
 		{
-			Info: DelegateInfo{Name: BuiltinInterviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleInterviewer,
-				Description: "Clarify consequential ambiguity in requirements and report focused questions and confirmed decisions."},
-			SystemPrompt: "You are an interviewer responsible for understanding the user's actual requirements. Read relevant context and create focused investigation tickets for additional work when needed. Ask only questions whose answers materially change the work. You cannot directly question the user in this child session: return the exact questions and why they matter to the caller. Distinguish confirmed answers from assumptions. Do not edit the workspace.",
-			Tools:        append([]string(nil), readTools...),
-			Delegates:    []string{BuiltinResearchID},
-		},
-		{
 			Info: DelegateInfo{Name: BuiltinManagerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleManager,
 				Description: "Own product requirements, priorities, acceptance criteria, and the work plan; coordinate specialists as needed."},
-			SystemPrompt: "You are the project manager. Read the request and relevant workspace evidence yourself. Own the objective, priorities, dependencies, acceptance criteria, and a concise actionable plan. Create tickets for interviewing, research, or technical assessment when needed; use workspace_members to inspect eligible joined subagents and report the issued ticket IDs. Ticket assignment, execution and Integrator review are asynchronous. Do not directly invoke other subagents or wait synchronously for their results. Record unresolved questions and assumptions explicitly. Coordinate work rather than treating planning as a mandatory separate mode. Do not make direct workspace edits.",
+			SystemPrompt: "You are the project manager. Read the request and relevant workspace evidence yourself. Own the objective, priorities, dependencies, acceptance criteria, and a concise actionable plan. Create tickets for research or technical assessment when needed; use workspace_members to inspect eligible joined subagents and report the issued ticket IDs. Ticket assignment, execution and Integrator review are asynchronous. Do not directly invoke other subagents or wait synchronously for their results. Record unresolved questions and assumptions explicitly. Coordinate work rather than treating planning as a mandatory separate mode. Do not make direct workspace edits.",
 			Tools:        append([]string(nil), readTools...),
-			Delegates:    []string{BuiltinInterviewerID, BuiltinResearchID, BuiltinSeniorDeveloperID},
+			Delegates:    []string{BuiltinResearchID, BuiltinSeniorDeveloperID},
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinSeniorDeveloperID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleReviewer,
@@ -287,6 +327,16 @@ func BuiltinAgentDefinitions() []AgentDefinition {
 				Description: "Read and modify the code for an assigned task, run relevant checks, and revise it after review.", MutatesWorkspace: true},
 			SystemPrompt: "You are the junior developer responsible for an assigned implementation. Inspect the relevant code and instructions, make the requested change, run focused verification, and report changed files, results, and remaining risks. When the senior developer returns feedback, revise the implementation and verify again. Stay within the assigned scope and do not delegate your implementation.",
 			Tools:        append([]string(nil), developerTools...),
+		},
+		{
+			Info: DelegateInfo{Name: BuiltinCodeReviewerID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleReviewer,
+				Description: "Review code and submitted changes and report findings with severity and evidence."},
+			SystemPrompt: "You are a read-only code reviewer. Inspect the assigned code and any referenced ticket or pinned change. Check correctness, regressions, and missing verification against the acceptance criteria. Report actionable findings in severity order with file locations and evidence. If there are no findings, say so and describe the remaining uncertainty. Return the review as the task result.",
+			Tools: []string{
+				"read_file", "list_directory", "search_work", "issue_get", "post_get", "ticket_list", "ticket_get",
+				"ticket_attempt_list", "ticket_attempt_get", "ticket_worker_read", "ticket_change_read",
+			},
+			StrictTools: true,
 		},
 		{
 			Info: DelegateInfo{Name: BuiltinResearchID, Source: "builtin", Kind: AgentKindInner, Role: config.AgentRoleResearch,
@@ -344,16 +394,44 @@ func DefinitionForProfile(entry ProfileEntry) (AgentDefinition, error) {
 	if id == "" {
 		return AgentDefinition{}, fmt.Errorf("subagent: invalid profile identity %s/%s", entry.Scope, entry.Profile.Name)
 	}
+	role, target := entry.Profile.Role, entry.Profile.Target
+	if entry.Profile.EffectiveKind() == AgentKindInner && role == "" {
+		role = config.AgentRoleResearch
+		if target == nil {
+			target = &config.SubagentTarget{Default: true}
+		}
+	}
 	return AgentDefinition{
 		Info: DelegateInfo{
-			Name: id, Description: entry.Profile.Description, Source: entry.Scope, Kind: entry.Profile.EffectiveKind(), Role: entry.Profile.Role,
+			Name: id, Description: entry.Profile.Description, Source: entry.Scope, Kind: entry.Profile.EffectiveKind(), Role: role,
 			MutatesWorkspace: entry.Profile.MutatesWorkspace || profileMayMutate(entry.Profile.Tools),
 		},
 		SystemPrompt: entry.Profile.SystemPrompt,
 		Connection:   entry.Profile.Agent,
+		ACPSelection: entry.Profile.ACPSelection,
+		Target:       target,
 		Tools:        withoutRetiredSearchTools(entry.Profile.Tools), Delegates: append([]string(nil), entry.Profile.Delegates...),
 		StrictTools: true,
 	}, nil
+}
+
+// StoredDefinitionForProfile ignores grants to retired built-ins in saved profiles.
+// Use DefinitionForProfile to validate new or edited grants.
+func StoredDefinitionForProfile(entry ProfileEntry) (AgentDefinition, error) {
+	definition, err := DefinitionForProfile(entry)
+	if err != nil {
+		return AgentDefinition{}, err
+	}
+	grants := definition.Delegates[:0]
+	for _, target := range definition.Delegates {
+		switch target {
+		case "builtin/scout", "builtin/griller", "builtin/planner", "builtin/executor", "builtin/coder", "builtin/reviewer", "builtin/interviewer":
+			continue
+		}
+		grants = append(grants, target)
+	}
+	definition.Delegates = grants
+	return definition, nil
 }
 
 func profileMayMutate(tools []string) bool {
@@ -472,6 +550,9 @@ type GeneralRunner struct {
 	Checkpoint                           func(GeneralRunState) error
 	Control                              *RunControl
 	Followup                             string
+	PromptImages                         []workmedia.Image
+	TicketQuestions                      bool
+	TicketGuidance                       *TicketGuidanceControl
 }
 
 // GeneralRunState is a full, provider-neutral child checkpoint. Transcript is
@@ -514,6 +595,9 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		return TaskResult{}, err
 	}
 	available = IncludeMemoryTools(available)
+	if r.TicketQuestions {
+		available = append(available, ticketQuestionDefinition())
+	}
 	if r.Resume != nil {
 		if err := r.Spec.Restore(r.Resume.Spec); err != nil {
 			return TaskResult{}, err
@@ -528,6 +612,7 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		taskID = strings.ReplaceAll(r.Definition.Info.Name, "/", "-") + "-" + generated
 	}
 	ctx = sessionstore.WithSearchScope(ctx, r.RunID, taskID)
+	ctx = client.WithUsageSubagent(ctx, r.Definition.Info.Name)
 	ctx = diagnostics.WithAttrs(ctx, slog.String("agent", r.Definition.Info.Name), slog.String("task_id", taskID), slog.String("parent_id", r.ParentID))
 	startedAt := time.Now()
 	logger := diagnostics.Logger(ctx)
@@ -582,7 +667,10 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 
 	systemPrompt := withRetrievalCatalog(r.Definition.SystemPrompt, available) + "\n\nRuntime environment: " + r.Environment + "\nWorking directory: " + r.WorkingDirectory +
 		"\n\nStart by calling task_start. Do not call any other tool before task_start succeeds. Finish with task_complete as the only tool call in that turn. Keep summary concise. Put detailed final analysis, design rationale, review notes, or research synthesis in the optional Markdown report field without exposing hidden chain-of-thought. task_complete uses the common schema exactly; do not invent agent-specific fields."
-	messages := []client.Message{{Role: client.RoleSystem, Content: systemPrompt}, {Role: client.RoleUser, Content: prompt}}
+	messages := []client.Message{{Role: client.RoleSystem, Content: systemPrompt}, workmedia.Message(prompt, r.PromptImages)}
+	if r.TicketQuestions {
+		messages[0].Content += "\nAfter task_start, check scope, prerequisites, and acceptance before changes. Use read-only inspection to resolve routine uncertainties. Ask for a decision with ask_to_user only when the user must choose a materially different outcome, approval boundary, or compatibility requirement. Call it alone before acting on the uncertainty. Include the evidence, recommendation, alternatives, and what waits. If the decision was discovered after implementation or verification, use late:true so Q compacts first. Q saves this turn and resumes the worker with the answer."
+	}
 	state := GeneralRunState{Transcript: append([]client.Message(nil), messages...), Context: append([]client.Message(nil), messages...), Spec: r.Spec.Checkpoint()}
 	if r.Resume != nil {
 		state = *r.Resume
@@ -604,7 +692,8 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 			state.Transcript = append(state.Transcript, message)
 			state.Context = append(state.Context, message)
 		}
-		message := client.Message{Role: client.RoleUser, Name: FollowupMessageName, Content: r.Followup}
+		message := workmedia.Message(r.Followup, r.PromptImages)
+		message.Name = FollowupMessageName
 		state.Transcript = append(state.Transcript, message)
 		state.Context = append(state.Context, message)
 		state.Reminders = 0
@@ -614,6 +703,9 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 	// GeneralRunState.Started remains authoritative across compaction and
 	// restart. Preserve the matching exchange so the model sees the same state.
 	history.PreserveTools(TaskStartToolName)
+	if r.TicketQuestions {
+		history.PreserveTools(ticketQuestionTool)
+	}
 	checkpoint := func() error {
 		state.Context = history.Messages()
 		state.Spec = r.Spec.Checkpoint()
@@ -665,6 +757,10 @@ func (r GeneralRunner) Run(ctx context.Context, prompt string) (result TaskResul
 		if err := r.applyGuidance(&state, history, lifecycle, checkpoint); err != nil {
 			return TaskResult{}, err
 		}
+		if err := r.applyTicketGuidance(ctx, &state, history, lifecycle, checkpoint); err != nil {
+			return TaskResult{}, err
+		}
+		reminders = state.Reminders
 		if len(state.Transcript) > 0 {
 			last := state.Transcript[len(state.Transcript)-1]
 			if last.Role == client.RoleAssistant && len(last.ToolCalls) == 0 {
@@ -804,6 +900,18 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 		if !hasTool(available, call.Function.Name) && (!recovering || call.Function.Name != DelegateToolName) {
 			return scoutToolError(fmt.Errorf("tool %q is unavailable", call.Function.Name)), nil
 		}
+		if r.TicketGuidance != nil {
+			guidance, err := r.TicketGuidance.Pending(ctx, false)
+			if err != nil {
+				return client.ToolResult{}, err
+			}
+			if guidance != nil {
+				if recovering {
+					return client.ToolResult{Content: `{"status":"unknown","detail":"tool execution outcome could not be confirmed after session restart"}`, IsError: true}, nil
+				}
+				return scoutToolError(errTicketGuidancePending), nil
+			}
+		}
 		return r.Tools.Call(ctx, call)
 	})
 	batch.Before = func(_ int, call client.ToolCall) error {
@@ -813,18 +921,49 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 		reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
 		return nil
 	}
+	mixedQuestion := r.TicketQuestions && len(calls) != 1 && slices.ContainsFunc(calls, func(call client.ToolCall) bool {
+		return call.Function.Name == ticketQuestionTool
+	})
 	for index := completed; index < len(calls); index++ {
 		if err := r.Control.wait(ctx); err != nil {
 			return TaskResult{}, false, err
 		}
 		call := calls[index]
 		recovering := index < recoveryEnd
-		if toolbatch.IsLoopTool(call) {
+		loopTool := toolbatch.IsLoopTool(call)
+		if loopTool {
 			reportProgress(r.Progress, ProgressEvent{Agent: r.Definition.Info.Name, TaskID: taskID, ParentID: r.ParentID, Action: ProgressTool, Detail: call.Function.Name})
 		}
 		var toolResult client.ToolResult
-		switch call.Function.Name {
-		case TaskStartToolName:
+		var guidance *workitems.TicketGuidance
+		if r.TicketGuidance != nil && loopTool {
+			var err error
+			guidance, err = r.TicketGuidance.Pending(ctx, false)
+			if err != nil {
+				return TaskResult{}, false, err
+			}
+		}
+		switch {
+		case guidance != nil:
+			toolResult = scoutToolError(errTicketGuidancePending)
+		case mixedQuestion:
+			toolResult = scoutToolError(errors.New("call ask_to_user by itself"))
+		case r.TicketQuestions && call.Function.Name == ticketQuestionTool:
+			if !*started {
+				toolResult = scoutToolError(errors.New("call task_start before asking for a ticket decision"))
+				break
+			}
+			result, err := r.storeTicketQuestion(ctx, state, history, call, checkpoint)
+			if errors.Is(err, workitems.ErrInvalidInput) {
+				toolResult = scoutToolError(errors.New("invalid ticket question"))
+				break
+			}
+			if errors.Is(err, errTicketGuidancePending) {
+				toolResult = scoutToolError(err)
+				break
+			}
+			return result, err == nil, err
+		case call.Function.Name == TaskStartToolName:
 			input, parseErr := parseGeneralTaskStart(call.Function.Arguments)
 			if parseErr == nil && *started {
 				parseErr = errors.New("another task_start lifecycle is already active")
@@ -841,7 +980,7 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 				body, _ := json.Marshal(output)
 				toolResult = client.ToolResult{Content: string(body)}
 			}
-		case TaskCompleteToolName:
+		case call.Function.Name == TaskCompleteToolName:
 			if !*started {
 				toolResult = scoutToolError(errors.New("task_complete requires task_start"))
 			} else if r.Control.hasGuidance() {
@@ -853,6 +992,13 @@ func (r *GeneralRunner) completeGeneralCalls(ctx context.Context, state *General
 				if parseErr != nil {
 					toolResult = scoutToolError(parseErr)
 				} else {
+					if err := r.sealTicketGuidance(ctx); err != nil {
+						if !errors.Is(err, errTicketGuidancePending) {
+							return TaskResult{}, false, err
+						}
+						toolResult = scoutToolError(err)
+						break
+					}
 					body, _ := json.Marshal(completed)
 					parallel := false
 					request := client.ChatRequest{Messages: history.RequestMessages(), Tools: available, ToolChoice: client.ToolChoiceAuto, ParallelToolCalls: &parallel, WorkingDirectory: r.WorkingDirectory}
@@ -926,7 +1072,7 @@ func selectDefinitionTools(definition AgentDefinition, runtime ToolRuntime) ([]c
 	found := make(map[string]bool, len(wanted))
 	for _, tool := range runtime.Tools() {
 		name := tool.Function.Name
-		if _, selected := wanted[name]; selected || (delegationCoordinationTool(name) && len(definition.Delegates) > 0) {
+		if _, selected := wanted[name]; selected || workitemtools.IsCollaborationTool(name) || (delegationCoordinationTool(name) && len(definition.Delegates) > 0) {
 			result = append(result, tool)
 			found[name] = true
 		}

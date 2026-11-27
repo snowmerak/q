@@ -1,12 +1,68 @@
 package memory
 
 import (
+	"bytes"
+	"encoding/json"
+	"image"
+	"image/png"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/workmedia"
 )
+
+func TestPreAppendImageBudgetUsesDimensions(t *testing.T) {
+	imagePixels := image.NewGray(image.Rect(0, 0, 1024, 512))
+	message := func(level png.CompressionLevel) client.Message {
+		var data bytes.Buffer
+		encoder := png.Encoder{CompressionLevel: level}
+		if err := encoder.Encode(&data, imagePixels); err != nil {
+			t.Fatal(err)
+		}
+		return workmedia.Message("look", []workmedia.Image{{Data: data.Bytes()}})
+	}
+	large := message(png.NoCompression)
+	small := message(png.BestCompression)
+	policy := Policy{ContextWindow: 262144, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}
+	wire, err := json.Marshal([]client.Message{large})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire)/3 <= int(float64(policy.ContextWindow)*policy.TriggerRatio) {
+		t.Fatal("fixture must overflow the old Base64 budget")
+	}
+	withoutImage := []client.Message{{Role: client.RoleUser, Content: "look"}}
+	if got, want := CountMessages([]client.Message{large}), CountMessages([]client.Message{small}); got != want || got < CountMessages(withoutImage)+615 {
+		t.Fatalf("image estimates = %d, %d, want equal estimates including the 615 image tokens", got, want)
+	}
+	if New(policy, nil).ShouldCompactAfterAppend(large) {
+		t.Fatal("image bytes triggered compaction in an empty chat")
+	}
+
+	policy.ContextWindow = 10000
+	history := []client.Message{
+		{Role: client.RoleSystem, Content: "role"},
+		{Role: client.RoleAssistant, Content: strings.Repeat("x", 22000)},
+		{Role: client.RoleUser, Content: "continue"},
+	}
+	manager := New(policy, history)
+	if manager.ShouldCompact() || !manager.ShouldCompactAfterAppend(large) {
+		t.Fatal("adding the image must cross the threshold when existing history nearly fills it")
+	}
+	plan, err := manager.PlanBeforeAppend(Retention{AllowTargetGrowth: true, SummarizeOversizedRecent: true}, large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Apply(plan, checkpointResponse("old work condensed")); err != nil {
+		t.Fatal(err)
+	}
+	manager.Append(large)
+	if manager.ShouldCompact() || !reflect.DeepEqual(manager.Messages()[len(manager.Messages())-1], large) {
+		t.Fatal("compaction must leave room for the intact image message")
+	}
+}
 
 func TestPreAppendCompactionReservesResultAndKeepsPendingCall(t *testing.T) {
 	policy := Policy{ContextWindow: 16000, TriggerRatio: .85, TargetRatio: .22, RecentRatio: .07}

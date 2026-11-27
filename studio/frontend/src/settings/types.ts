@@ -61,7 +61,8 @@ export type ModelOption = {
   context_override?: number;
   sampling?: ModelSampling;
 };
-export type SystemOneProvider = { id: string; uri: string; api_key_env: string; _original_id?: string };
+export type SystemOneAPI = 'systemone' | 'decision' | 'gemini';
+export type SystemOneProvider = { id: string; uri: string; api_key_env: string; api?: SystemOneAPI; model_filter_regex: string; _original_id?: string };
 export type SystemOneModelOption = { id: string; description?: string; release_date?: string };
 export type ServiceAPIKey = { id: string; alias: string; created_at?: string; revoked_at?: string; legacy?: boolean };
 export type SettingsSnapshot = {
@@ -116,7 +117,7 @@ export type SettingsSnapshot = {
     lsp: { config_path: string; items: number; bindings: number };
   };
 };
-export type SettingsSection = 'appearance' | 'models' | 'embeddings' | 'providers' | 'system-one' | 'runtime' | 'browser-control' | 'services' | 'subagents' | 'integrations' | 'import-export';
+export type SettingsSection = 'appearance' | 'models' | 'embeddings' | 'providers' | 'decisions' | 'runtime' | 'browser-control' | 'services' | 'subagents' | 'integrations' | 'import-export';
 export type SaveState = { kind: 'idle' | 'saving' | 'saved' | 'error'; message?: string };
 export type LoomStats = { artifacts: number; blobs: number; bytes: number };
 export type LoomGCResult = { artifacts_removed: number; blobs_removed: number; bytes_reclaimed: number; dry_run: boolean };

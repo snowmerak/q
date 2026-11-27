@@ -43,7 +43,8 @@
   $: selectionOptions = defaultsMode ? globalOptions : options;
   $: missingIDs = selectedAgents.filter(id => !selectionOptions.some(o => o.id === id));
   $: invalidSelection = missingIDs.length > 0 || selectionOptions.some(o => selectedAgents.includes(o.id) && !o.available);
-  $: dirty = editing && (defaultsMode ? JSON.stringify(defaultIDs) !== JSON.stringify(defaults.agent_ids) : !project || name !== project.name || JSON.stringify(roots) !== JSON.stringify(project.workspace_roots) || tickets !== (project.limits?.max_parallel_tickets || 0) || subagents !== (project.limits?.max_parallel_subagents || 0) || !!rootInput.trim());
+  let requireTicketApproval = false;
+  $: dirty = editing && (defaultsMode ? JSON.stringify(defaultIDs) !== JSON.stringify(defaults.agent_ids) : !project || name !== project.name || JSON.stringify(roots) !== JSON.stringify(project.workspace_roots) || tickets !== (project.limits?.max_parallel_tickets || 0) || subagents !== (project.limits?.max_parallel_subagents || 0) || requireTicketApproval !== !!project.limits?.require_ticket_approval || !!rootInput.trim());
   function message(cause: unknown) { error = cause instanceof Error ? cause.message : String(cause); }
   function effective(value: number) { return value > 0 ? Math.min(value, globalLimit) : globalLimit; }
   function canSwitch() { return !busy && (!dirty || window.confirm('Discard unsaved project settings?')); }
@@ -77,7 +78,7 @@
     const current = ++generation;
     selectedID = value?.id || ''; defaultsMode = false; editing = true; error = ''; status = ''; loading = true;
     name = value?.name || ''; roots = [...(value?.workspace_roots || [])]; rootInput = ''; members = [];
-    tickets = value?.limits?.max_parallel_tickets || 0; subagents = value?.limits?.max_parallel_subagents || 0;
+    tickets = value?.limits?.max_parallel_tickets || 0; subagents = value?.limits?.max_parallel_subagents || 0; requireTicketApproval = !!value?.limits?.require_ticket_approval;
     initialIDs = [...defaults.agent_ids];
     updateURL();
     try {
@@ -117,7 +118,7 @@
         status = 'Default subagents saved. Existing projects keep their members.';
       } else {
         if (rootInput.trim()) await addRoot();
-        const input = { name, workspace_roots: roots, limits: { max_parallel_tickets: tickets, max_parallel_subagents: subagents }, ...(!selectedID ? { initial_members: initialIDs.map(id => ({ agent_id: id, definition_root: roots[0], execution_root: roots[0], disabled: false })) } : {}) };
+        const input = { name, workspace_roots: roots, limits: { max_parallel_tickets: tickets, max_parallel_subagents: subagents, require_ticket_approval: requireTicketApproval }, ...(!selectedID ? { initial_members: initialIDs.map(id => ({ agent_id: id, definition_root: roots[0], execution_root: roots[0], disabled: false })) } : {}) };
         const saved = await requestJSON<StudioProject>(selectedID ? 'PUT' : 'POST', selectedID ? `/api/v1/projects/${selectedID}` : '/api/v1/projects', input);
         projects = (await requestJSON<{ projects: StudioProject[] }>('GET', '/api/v1/projects')).projects;
         await choose(saved, true);
@@ -207,6 +208,7 @@
         {#if !defaultsMode && section === 'execution'}
           <h3>Execution limits</h3><p class="muted">0 inherits the global limit of {globalLimit}. Project limits are capped at the global limit. Changes apply to new work; active work continues.</p>
           <div class="limits-grid"><label>Concurrent tickets<input type="number" aria-label="Concurrent tickets" min="0" max="64" step="1" required bind:value={tickets} /><small>Effective: {effective(tickets)} · Q and ACP ticket workers</small></label></div>
+          <label><span><input type="checkbox" bind:checked={requireTicketApproval} /> Require start approval for new tickets</span></label>
           <p class="help-note">Subagents run through ticket assignment. The ticket limit applies to Q and ACP workers; ACP agents manage their own internal subagents.</p>
         {/if}
         {#if defaultsMode || (section === 'members' && !selectedID)}
@@ -218,7 +220,7 @@
       </form>
 
       {#if !defaultsMode && selectedID && section === 'members'}
-        <div class="section-heading"><h3>Joined subagents</h3><span class="count">{members.filter(m => !m.disabled).length} enabled</span></div><p class="muted">System One selects from enabled members for each ticket. Reuse Q or ACP profiles from <a href="/settings">Settings</a>.</p>
+        <div class="section-heading"><h3>Joined subagents</h3><span class="count">{members.filter(m => !m.disabled).length} enabled</span></div><p class="muted">Decisions selects from enabled members for each ticket. Reuse Q or ACP profiles from <a href="/settings">Settings</a>.</p>
         <div class="members-list">{#each members as member}<article class="member-card" class:disabled={member.disabled}><div><strong>{member.agent_id}</strong><span class="member-state">{member.disabled ? 'Disabled' : 'Enabled'}</span><small>Definitions · {member.definition_root}</small><small>Execution · {member.execution_root}</small></div><div class="member-actions"><button class="icon-button" title="Edit member" aria-label="Edit member" onclick={() => resetMember(member)} disabled={busy}><Pencil size={16} aria-hidden="true" /></button><button class="icon-button" title={member.disabled ? 'Enable member' : 'Disable member'} aria-label={member.disabled ? 'Enable member' : 'Disable member'} onclick={() => saveMember(member)} disabled={busy}>{#if member.disabled}<UserCheck size={16} aria-hidden="true" />{:else}<UserMinus size={16} aria-hidden="true" />{/if}</button></div></article>{:else}<p class="empty-members">No joined subagents. Add one below so tickets can be assigned.</p>{/each}</div>
         <form class="member-form" aria-label="Subagent binding" onsubmit={event => { event.preventDefault(); void saveMember(); }}><h3>{memberID ? 'Edit member binding' : 'Join a subagent'}</h3><div class="binding-grid"><label>Definition directory<select aria-label="Definition directory" bind:value={definitionRoot} onchange={loadMemberOptions}>{#each project?.workspace_roots || [] as root}<option value={root}>{root}</option>{/each}{#if definitionRoot && !project?.workspace_roots.includes(definitionRoot)}<option value={definitionRoot}>{definitionRoot} (removed directory)</option>{/if}</select></label><label>Subagent<select aria-label="Join subagent" bind:value={agentID}>{#if agentID && !memberOptions.some(o => o.id === agentID)}<option value={agentID}>{agentID} (unavailable)</option>{/if}{#each memberOptions as option}<option value={option.id} disabled={!option.available}>{option.id} · {option.kind === 'external' ? 'ACP' : 'Q'}{!option.available ? ' (unavailable)' : ''}</option>{/each}</select></label><label>Execution directory<select aria-label="Execution directory" bind:value={executionRoot}>{#each project?.workspace_roots || [] as root}<option value={root}>{root}</option>{/each}{#if executionRoot && !project?.workspace_roots.includes(executionRoot)}<option value={executionRoot}>{executionRoot} (removed directory)</option>{/if}</select></label></div><div class="member-actions"><button class="primary-button" disabled={busy || !memberOptions.some(o => o.id === agentID && o.available)}><Plus size={16} aria-hidden="true" />{memberID ? 'Save member' : 'Join project'}</button>{#if memberID}<button type="button" class="secondary-button" onclick={() => resetMember()} disabled={busy}>Cancel</button>{/if}</div></form>
       {/if}
@@ -228,7 +230,7 @@
 {#if browsing}<DirectoryBrowser kind="project" onselect={path => { rootInput = path; browsing = false; }} onclose={() => browsing = false} />{/if}
 
 <style>
-  .projects-view { display:grid; grid-template-columns:240px minmax(0,1fr); gap:32px; max-width:1240px; margin:0 auto; align-items:start; }
+  .projects-view { display:grid; grid-template-columns:240px minmax(0,1fr); gap:32px; max-width:1240px; margin:24px auto 0; align-items:start; }
   .mobile-project-toolbar { display:none; }
   .project-list { border:1px solid var(--border); border-radius:12px; background:var(--surface); padding:16px; display:grid; gap:16px; min-width:0; }
   .list-heading,.section-heading,.project-heading,.root-row,.save-bar,.member-actions,.project-status { display:flex; align-items:center; gap:12px; }

@@ -43,7 +43,18 @@ func (c *Client) Append(ctx context.Context, record qclient.UsageRecord) error {
 	var output struct {
 		Inserted bool `json:"inserted"`
 	}
-	return c.doJSON(ctx, http.MethodPost, "/v1/events", record, &output)
+	err := c.doJSON(ctx, http.MethodPost, "/v1/events", record, &output)
+	if record.Performance != nil && unknownParameter(err, `unknown field "performance"`) {
+		return nil
+	}
+	if record.Attribution != (qclient.UsageAttribution{}) && unknownParameter(err, `unknown field "attribution"`) {
+		if record.Performance != nil {
+			return nil
+		}
+		record.Attribution = qclient.UsageAttribution{}
+		return c.doJSON(ctx, http.MethodPost, "/v1/events", record, &output)
+	}
+	return err
 }
 
 func (c *Client) Query(ctx context.Context, filter Filter) (UsageView, error) {
@@ -60,13 +71,34 @@ func (c *Client) Query(ctx context.Context, filter Filter) (UsageView, error) {
 	if filter.Role != "" {
 		query.Set("role", filter.Role)
 	}
+	if filter.Details {
+		query.Set("details", "1")
+	}
 	path := "/api/v1/usage"
 	if encoded := query.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
 	var output UsageView
 	err := c.doJSON(ctx, http.MethodGet, path, nil, &output)
+	if filter.Details && unknownParameter(err, `unknown query parameter "details"`) {
+		filter.Details = false
+		return c.Query(ctx, filter)
+	}
 	return output, err
+}
+
+type usageHTTPError struct {
+	status        int
+	code, message string
+}
+
+func (err *usageHTTPError) Error() string {
+	return fmt.Sprintf("usage: HTTP %d %s: %s", err.status, err.code, err.message)
+}
+
+func unknownParameter(err error, message string) bool {
+	response, ok := errors.AsType[*usageHTTPError](err)
+	return ok && response.status == http.StatusBadRequest && strings.Contains(response.message, message)
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, input, output any) error {
@@ -107,7 +139,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, input, output 
 			} `json:"error"`
 		}
 		_ = json.NewDecoder(response.Body).Decode(&envelope)
-		return fmt.Errorf("usage: HTTP %d %s: %s", response.StatusCode, envelope.Error.Code, envelope.Error.Message)
+		return &usageHTTPError{status: response.StatusCode, code: envelope.Error.Code, message: envelope.Error.Message}
 	}
 	if output == nil {
 		return nil

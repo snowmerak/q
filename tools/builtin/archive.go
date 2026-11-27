@@ -241,7 +241,7 @@ func searchArchiveWithRanker(ctx context.Context, archive Archive, ranker Archiv
 			if ctx.Err() != nil {
 				return SearchArchiveOutput{}, ctx.Err()
 			}
-			output.Warnings = append(output.Warnings, "System One archive relevance unavailable: "+rankErr.Error())
+			output.Warnings = append(output.Warnings, "Decisions archive relevance unavailable: "+rankErr.Error())
 		} else {
 			output.Hits = ranked
 		}

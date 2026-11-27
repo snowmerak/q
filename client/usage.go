@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/snowmerak/q/internal/tokenestimate"
 )
 
 const (
@@ -31,21 +33,57 @@ type usageEventIDContextKey struct{}
 
 var usageIDFallback atomic.Uint64
 
-// UsageRecord contains only model identity and token counts for one physical
-// provider call. Estimated marks locally reconstructed base counts, while
-// CacheEstimated distinguishes an unavailable cache report from a reported 0.
+// UsageRecord carries either token counts for a provider response or a model
+// call outcome. CacheEstimated distinguishes unavailable cache data from zero.
 type UsageRecord struct {
-	EventID          string    `json:"event_id"`
-	At               time.Time `json:"at"`
-	Model            string    `json:"model"`
-	Role             string    `json:"role"`
-	PromptTokens     int       `json:"prompt_tokens"`
-	CompletionTokens int       `json:"completion_tokens"`
-	TotalTokens      int       `json:"total_tokens"`
-	CachedTokens     int       `json:"cached_tokens"`
-	CacheWriteTokens int       `json:"cache_write_tokens"`
-	Estimated        bool      `json:"estimated,omitempty"`
-	CacheEstimated   bool      `json:"cache_estimated,omitempty"`
+	EventID          string            `json:"event_id"`
+	At               time.Time         `json:"at"`
+	Model            string            `json:"model"`
+	Role             string            `json:"role"`
+	PromptTokens     int               `json:"prompt_tokens"`
+	CompletionTokens int               `json:"completion_tokens"`
+	TotalTokens      int               `json:"total_tokens"`
+	CachedTokens     int               `json:"cached_tokens"`
+	CacheWriteTokens int               `json:"cache_write_tokens"`
+	Estimated        bool              `json:"estimated,omitempty"`
+	CacheEstimated   bool              `json:"cache_estimated,omitempty"`
+	Attribution      UsageAttribution  `json:"attribution,omitzero"`
+	Performance      *UsagePerformance `json:"performance,omitempty"`
+}
+
+type UsageAttribution struct {
+	ProjectID   string `json:"project_id,omitempty"`
+	ProjectName string `json:"project_name,omitempty"`
+	Subagent    string `json:"subagent,omitempty"`
+}
+
+type UsagePerformance struct {
+	Status             string   `json:"status"`
+	DurationMS         int64    `json:"duration_ms"`
+	TTFTMS             *int64   `json:"ttft_ms,omitempty"`
+	OutputTokensPerSec *float64 `json:"output_tokens_per_second,omitempty"`
+	Retried            bool     `json:"retried,omitempty"`
+}
+
+type usageAttributionKey struct{}
+
+func usageAttribution(ctx context.Context) UsageAttribution {
+	value, _ := ctx.Value(usageAttributionKey{}).(UsageAttribution)
+	return value
+}
+
+// WithUsageProject associates local model usage with a Q project.
+func WithUsageProject(ctx context.Context, id, name string) context.Context {
+	value := usageAttribution(ctx)
+	value.ProjectID, value.ProjectName = id, name
+	return context.WithValue(ctx, usageAttributionKey{}, value)
+}
+
+// WithUsageSubagent associates local model usage with the executing profile.
+func WithUsageSubagent(ctx context.Context, name string) context.Context {
+	value := usageAttribution(ctx)
+	value.Subagent = name
+	return context.WithValue(ctx, usageAttributionKey{}, value)
 }
 
 // WithUsageRole labels model calls made through ctx with a bounded Q-owned
@@ -87,10 +125,15 @@ func usageEventID(ctx context.Context) string {
 	return eventID
 }
 
-// UsageRecorder receives token-only records after provider responses. Recorder
+// UsageRecorder receives token records after provider responses. Recorder
 // failures are diagnostic-only and never change the model call result.
 type UsageRecorder interface {
 	RecordUsage(UsageRecord) error
+}
+
+// ModelCallRecorder is an optional extension for completed call outcomes.
+type ModelCallRecorder interface {
+	RecordModelCall(UsageRecord) error
 }
 
 func (c *Client) recordChatUsage(ctx context.Context, request ChatRequest, responseModel string, usage Usage, completionEstimate int) {
@@ -106,6 +149,7 @@ func (c *Client) recordChatUsage(ctx context.Context, request ChatRequest, respo
 		record.EventID = eventID
 	}
 	record.Role = usageRole(ctx)
+	record.Attribution = usageAttribution(ctx)
 	_ = c.usageRecorder.RecordUsage(record)
 }
 
@@ -126,6 +170,7 @@ func (c *Client) recordEmbeddingUsage(ctx context.Context, request EmbeddingRequ
 		record.EventID = eventID
 	}
 	record.Role = usageRole(ctx)
+	record.Attribution = usageAttribution(ctx)
 	if record.Role == UsageRoleUnknown {
 		record.Role = "embedding"
 	}
@@ -168,7 +213,7 @@ func normalizedUsageRecord(model string, reported Usage, promptEstimate, complet
 }
 
 func estimateRequestTokens(request ChatRequest) int {
-	return estimateJSONTokens(request.Messages, len(request.Messages), 4) +
+	return tokenestimate.Messages(request.Messages) +
 		estimateJSONTokens(request.Tools, len(request.Tools), 4)
 }
 
@@ -209,8 +254,7 @@ type usageStream struct {
 	model           string
 	usage           Usage
 	completionBytes int
-	role            string
-	eventID         string
+	ctx             context.Context
 	once            sync.Once
 }
 
@@ -284,9 +328,7 @@ func (s *usageStream) finish() {
 		if s.completionBytes > 0 {
 			completionEstimate = int(math.Ceil(float64(s.completionBytes)/3.0)) + 4
 		}
-		ctx := WithUsageRole(context.Background(), s.role)
-		ctx = withUsageEventID(ctx, s.eventID)
-		s.client.recordChatUsage(ctx, s.request, model, s.usage, completionEstimate)
+		s.client.recordChatUsage(s.ctx, s.request, model, s.usage, completionEstimate)
 	})
 }
 

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect } from './test.mjs';
 
 for (const change of ['rename', 'type', 'enable']) {
   test(`ChatGPT ${change} waits for the saved Gateway before reading account status`, async ({ page, request }) => {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Check, Copy, KeyRound, Plus, RefreshCw, Trash2 } from '@lucide/svelte';
   import { formatKeyDate } from './format';
-  import type { ServiceAPIKey, SystemOneModelOption, SystemOneProvider } from './types';
+  import type { ServiceAPIKey, SystemOneAPI, SystemOneModelOption, SystemOneProvider } from './types';
   import { apiError as responseError } from '../api';
   import { putSettings, writeSettings } from './persistence';
   import { acknowledgeProviderDraft, captureProviderDraft, markProviderDraft } from './providerDrafts';
@@ -16,69 +16,84 @@
   let systemOneModels: SystemOneModelOption[] = [];
   let systemOneModelsLoading = false;
   let systemOneModelsError = '';
+  let systemOneModelsRequest: AbortController | undefined;
   let systemOneKeyAlias = '';
   let generatedSystemOneKey = '';
   let systemOneKeyCopied = false;
+  let newProviderAPI: SystemOneAPI = 'systemone';
+  const providerPresets = {
+    systemone: { label: 'System One', id: 'typesafe', uri: 'https://api.typesafe.ai/v1/systemone', api_key_env: 'TYPESAFE_API_KEY', model_filter_regex: '' },
+    decision: { label: 'OpenAI-compatible Decisions', id: 'openai', uri: 'https://api.openai.com/v1/decisions', api_key_env: 'OPENAI_API_KEY', model_filter_regex: '^gpt-6-luna$' },
+    gemini: { label: 'Gemini Decisions', id: 'gemini', uri: 'https://generativelanguage.googleapis.com/v1beta/decisions', api_key_env: 'GEMINI_API_KEY', model_filter_regex: '' }
+  };
   const providerIDs = new WeakMap<SystemOneProvider, string>();
   $: if (active && !started) { started = true; void loadSystemOneModels(); }
 
   async function loadSystemOneModels() {
+    systemOneModelsRequest?.abort();
+    const request = new AbortController();
+    systemOneModelsRequest = request;
     systemOneModelsLoading = true;
     systemOneModelsError = '';
     try {
-      const response = await fetch('/api/v1/settings/system-one/models', { headers: { Accept: 'application/json' } });
+      const response = await fetch('/api/v1/settings/decisions/models', { headers: { Accept: 'application/json' }, signal: request.signal });
       if (!response.ok) throw new Error(await responseError(response));
       const catalog = (await response.json()) as { models: SystemOneModelOption[] };
-      systemOneModels = catalog.models;
+      if (!request.signal.aborted) systemOneModels = catalog.models;
     } catch (error) {
-      systemOneModelsError = error instanceof Error ? error.message : 'System One models are unavailable';
+      if (!request.signal.aborted) systemOneModelsError = error instanceof Error ? error.message : 'Decisions models are unavailable';
     } finally {
-      systemOneModelsLoading = false;
+      if (systemOneModelsRequest === request) {
+        systemOneModelsRequest = undefined;
+        systemOneModelsLoading = false;
+      }
     }
   }
 
   function saveSystemOneModel(target: 'default' | 'agent-skill-decision' | 'archive-decision' | 'task-assignment', model: string) {
-    queueSave(() => putSettings(`/api/v1/settings/system-one/models/${target}`, JSON.stringify({ model })));
+    queueSave(() => putSettings(`/api/v1/settings/decisions/models/${target}`, JSON.stringify({ model })));
   }
 
   function saveSystemOneProvider(provider: SystemOneProvider) {
     const originalID = provider._original_id || provider.id;
     const nextID = provider.id.trim();
     const submitted = captureProviderDraft(provider);
-    const payload = JSON.stringify({ id: provider.id, uri: provider.uri, api_key_env: provider.api_key_env });
+    const payload = JSON.stringify({ id: provider.id, uri: provider.uri, api_key_env: provider.api_key_env, model_filter_regex: provider.model_filter_regex });
     queueSave(async () => {
       const currentID = providerIDs.get(provider) || originalID;
-      const snapshot = await putSettings(`/api/v1/settings/system-one/providers/${encodeURIComponent(currentID)}`, payload);
+      const snapshot = await putSettings(`/api/v1/settings/decisions/providers/${encodeURIComponent(currentID)}`, payload);
       providerIDs.set(provider, nextID);
       // Match the acknowledged provider even if its ID has been edited again.
       provider._original_id = nextID;
       acknowledgeProviderDraft(provider, submitted);
+      if (submitted.has('model_filter_regex')) void loadSystemOneModels();
       return snapshot;
     });
   }
 
-  function nextSystemOneProviderID() {
+  function nextSystemOneProviderID(preferred: string) {
     const used = new Set(settings?.system_one.providers.map((provider) => provider.id) || []);
-    if (!used.has('typesafe')) return 'typesafe';
+    if (!used.has(preferred)) return preferred;
     let index = 1;
     while (used.has(`provider-${index}`)) index++;
     return `provider-${index}`;
   }
 
   function addSystemOneProvider() {
-    const id = nextSystemOneProviderID();
-    queueSave(() => writeSettings('POST', '/api/v1/settings/system-one/providers', JSON.stringify({
-      id,
-      uri: 'https://api.typesafe.ai/v1/systemone',
-      api_key_env: id === 'typesafe' ? 'TYPESAFE_API_KEY' : ''
+    const api = newProviderAPI;
+    const preset = providerPresets[api];
+    const id = nextSystemOneProviderID(preset.id);
+    const api_key_env = id === preset.id || api !== 'systemone' ? preset.api_key_env : '';
+    queueSave(() => writeSettings('POST', '/api/v1/settings/decisions/providers', JSON.stringify({
+      id, api, uri: preset.uri, api_key_env, model_filter_regex: preset.model_filter_regex
     })));
   }
 
   function deleteSystemOneProvider(provider: SystemOneProvider) {
-    if (!window.confirm(`Delete System One provider “${provider.id}”?`)) return;
+    if (!window.confirm(`Delete Decisions provider “${provider.id}”?`)) return;
     const originalID = provider._original_id || provider.id;
     queueSave(async () => {
-      const snapshot = await writeSettings('DELETE', `/api/v1/settings/system-one/providers/${encodeURIComponent(providerIDs.get(provider) || originalID)}`);
+      const snapshot = await writeSettings('DELETE', `/api/v1/settings/decisions/providers/${encodeURIComponent(providerIDs.get(provider) || originalID)}`);
       providerIDs.delete(provider);
       return snapshot;
     });
@@ -88,7 +103,7 @@
     const alias = systemOneKeyAlias.trim();
     if (!alias) return;
     queueSave(async () => {
-      const response = await fetch('/api/v1/settings/system-one/api-keys', {
+      const response = await fetch('/api/v1/settings/decisions/api-keys', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alias })
       });
       if (!response.ok) throw new Error(await responseError(response));
@@ -101,8 +116,8 @@
   }
 
   function revokeSystemOneAPIKey(key: ServiceAPIKey) {
-    if (!window.confirm(`Revoke System One API key “${key.alias}”?`)) return;
-    queueSave(() => writeSettings('DELETE', `/api/v1/settings/system-one/api-keys/${encodeURIComponent(key.id)}`));
+    if (!window.confirm(`Revoke Decisions API key “${key.alias}”?`)) return;
+    queueSave(() => writeSettings('DELETE', `/api/v1/settings/decisions/api-keys/${encodeURIComponent(key.id)}`));
   }
 
   async function copySystemOneAPIKey() {
@@ -114,8 +129,8 @@
 
 <section class="settings-section">
   <div class="section-heading">
-    <div><p class="eyebrow">GLOBAL SYSTEM ONE</p><h2>Decision API</h2><p>Configure decision providers, model routing, and access to <code>q systemone start</code>.</p></div>
-    <button class="icon-button" title="Refresh System One models" onclick={loadSystemOneModels} disabled={systemOneModelsLoading}><RefreshCw aria-hidden="true" size={16} class={systemOneModelsLoading ? 'spin' : undefined} /></button>
+    <div><h2>Decisions</h2><p>Configure decision providers, model routing, and access to <code>q decisions start</code>.</p></div>
+    <button class="icon-button" title="Refresh Decisions models" onclick={loadSystemOneModels} disabled={systemOneModelsLoading}><RefreshCw aria-hidden="true" size={16} class={systemOneModelsLoading ? 'spin' : undefined} /></button>
   </div>
   <code class="config-path">{settings.system_one.config_path}</code>
   {#if systemOneModelsError}<p class="inline-warning">{systemOneModelsError}</p>{/if}
@@ -154,21 +169,32 @@
     </div>
   </div>
 
-  <div class="subsection-heading"><div><h3>Providers</h3><p>Each model is addressed as provider ID and model name.</p></div><button class="primary-button" onclick={addSystemOneProvider}><Plus aria-hidden="true" size={16} /> Add provider</button></div>
+  <div class="subsection-heading"><div><h3>Providers</h3><p>Each model is addressed as provider ID and model name.</p></div></div>
+  <div class="api-key-create">
+    <label><span>Provider protocol</span><select bind:value={newProviderAPI}>
+      {#each Object.entries(providerPresets) as [api, preset]}<option value={api}>{preset.label}</option>{/each}
+    </select></label>
+    <button class="primary-button" onclick={addSystemOneProvider}><Plus aria-hidden="true" size={16} /> Add provider</button>
+  </div>
   <div class="provider-list">
     {#each settings.system_one.providers as provider}
       <article class="settings-card provider-card system-one-provider-card">
-        <div class="card-heading"><div><h3>{provider.id}</h3><p>Native System One endpoint</p></div><button class="danger-icon" title="Delete provider" onclick={() => deleteSystemOneProvider(provider)}><Trash2 aria-hidden="true" size={16} /></button></div>
+        <div class="card-heading"><div><h3>{provider.id}</h3><p>{providerPresets[provider.api || 'systemone'].label}</p></div><button class="danger-icon" title="Delete provider" onclick={() => deleteSystemOneProvider(provider)}><Trash2 aria-hidden="true" size={16} /></button></div>
         <div class="provider-fields system-one-provider-fields">
           <label><span>Provider ID</span><input bind:value={provider.id} oninput={() => markProviderDraft(provider, 'id')} onchange={() => saveSystemOneProvider(provider)} /></label>
-          <label class="wide-field"><span>Endpoint URI</span><input placeholder="https://example.com/v1/systemone" bind:value={provider.uri} oninput={() => markProviderDraft(provider, 'uri')} onchange={() => saveSystemOneProvider(provider)} /></label>
+          <label class="wide-field"><span>Endpoint URI</span><input placeholder={providerPresets[provider.api || 'systemone'].uri} bind:value={provider.uri} oninput={() => markProviderDraft(provider, 'uri')} onchange={() => saveSystemOneProvider(provider)} /></label>
           <label><span>API key environment</span><input placeholder="Optional · unauthenticated when empty" bind:value={provider.api_key_env} oninput={() => markProviderDraft(provider, 'api_key_env')} onchange={() => saveSystemOneProvider(provider)} /></label>
+          <label class="wide-field">
+            <span>Model filter regex</span>
+            <input aria-label="Model filter regex" aria-describedby={`system-one-filter-help-${provider.id}`} placeholder="All models · e.g. ^gpt-6-luna$" spellcheck={false} bind:value={provider.model_filter_regex} oninput={() => markProviderDraft(provider, 'model_filter_regex')} onchange={() => saveSystemOneProvider(provider)} />
+            <small id={`system-one-filter-help-${provider.id}`}>Match upstream model IDs without the provider prefix. Empty shows all discovered models. Go regex syntax.</small>
+          </label>
         </div>
       </article>
     {/each}
   </div>
 
-  <div class="subsection-heading"><div><h3>Server API keys</h3><p>Authenticate clients calling <code>q systemone start</code>. With no active keys, the server accepts unauthenticated requests.</p></div><span class="count-badge">{settings.system_one.active_api_keys} active</span></div>
+  <div class="subsection-heading"><div><h3>Server API keys</h3><p>Authenticate clients calling <code>q decisions start</code>. With no active keys, the server accepts unauthenticated requests.</p></div><span class="count-badge">{settings.system_one.active_api_keys} active</span></div>
   <div class="settings-card api-key-card">
     {#if generatedSystemOneKey}
       <div class="generated-key"><div><KeyRound aria-hidden="true" size={18} /><span><strong>Copy this key now</strong><small>It will not be shown again after this page is dismissed.</small></span></div><div class="generated-key-value"><code>{generatedSystemOneKey}</code><button class="icon-button" title="Copy API key" onclick={copySystemOneAPIKey}>{#if systemOneKeyCopied}<Check aria-hidden="true" size={16} />{:else}<Copy aria-hidden="true" size={16} />{/if}</button></div><button class="text-button" onclick={() => generatedSystemOneKey = ''}>Dismiss</button></div>

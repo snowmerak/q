@@ -39,33 +39,49 @@ type MemberInput struct {
 // Attempt is a fenced execution reservation. Lease loss never implies that
 // external effects did not happen: recovery requires an explicit retry.
 type Attempt struct {
-	ID                string          `json:"id"`
-	WorkspaceID       string          `json:"workspace_id"`
-	TicketID          string          `json:"ticket_id"`
-	MemberID          string          `json:"member_id"`
-	MemberRevision    int64           `json:"member_revision"`
-	DefinitionDigest  string          `json:"definition_digest"`
-	TicketRevision    int64           `json:"ticket_revision"`
-	BodyRevision      int64           `json:"body_revision"`
-	Acceptance        []string        `json:"acceptance"`
-	WorkerSessionID   string          `json:"worker_session_id"`
-	WorktreeID        string          `json:"worktree_id"`
-	PreviousAttemptID string          `json:"previous_attempt_id,omitempty"`
-	PreviousStatus    string          `json:"previous_status,omitempty"`
-	Generation        int64           `json:"generation"`
-	Owner             string          `json:"owner"`
-	Token             string          `json:"token"`
-	LeaseUntil        time.Time       `json:"lease_until"`
-	Status            string          `json:"status"`
-	StopRequested     bool            `json:"stop_requested,omitempty"`
-	Result            json.RawMessage `json:"result,omitempty"`
-	ChangeRequest     *change.Request `json:"change_request,omitempty"`
-	Feedback          string          `json:"feedback,omitempty"`
-	Decision          string          `json:"decision,omitempty"`
-	DecisionID        string          `json:"decision_id,omitempty"`
-	OperationError    string          `json:"operation_error,omitempty"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
+	ID                   string                 `json:"id"`
+	WorkspaceID          string                 `json:"workspace_id"`
+	TicketID             string                 `json:"ticket_id"`
+	MemberID             string                 `json:"member_id"`
+	MemberRevision       int64                  `json:"member_revision"`
+	DefinitionDigest     string                 `json:"definition_digest"`
+	TicketRevision       int64                  `json:"ticket_revision"`
+	TicketContract       string                 `json:"ticket_contract,omitempty"`
+	BodyRevision         int64                  `json:"body_revision"`
+	Acceptance           []string               `json:"acceptance"`
+	WorkerSessionID      string                 `json:"worker_session_id"`
+	WorktreeID           string                 `json:"worktree_id"`
+	ReviewChildAttemptID string                 `json:"review_child_attempt_id,omitempty"`
+	ResumeParent         bool                   `json:"resume_parent,omitempty"`
+	PreviousAttemptID    string                 `json:"previous_attempt_id,omitempty"`
+	PreviousStatus       string                 `json:"previous_status,omitempty"`
+	Generation           int64                  `json:"generation"`
+	Owner                string                 `json:"owner"`
+	Token                string                 `json:"token"`
+	LeaseUntil           time.Time              `json:"lease_until"`
+	Status               string                 `json:"status"`
+	StopRequested        bool                   `json:"stop_requested,omitempty"`
+	Result               json.RawMessage        `json:"result,omitempty"`
+	ChangeRequest        *change.Request        `json:"change_request,omitempty"`
+	MergeCandidate       *change.MergeCandidate `json:"merge_candidate,omitempty"`
+	MergeLanded          bool                   `json:"merge_landed,omitempty"`
+	RepairBase           string                 `json:"repair_base,omitempty"`
+	Feedback             string                 `json:"feedback,omitempty"`
+	Decision             string                 `json:"decision,omitempty"`
+	DecisionID           string                 `json:"decision_id,omitempty"`
+	OperationError       string                 `json:"operation_error,omitempty"`
+	UserQuestion         *UserQuestion          `json:"user_question,omitempty"`
+	PreviousAnswer       *UserQuestion          `json:"previous_answer,omitempty"`
+	CompactionAttemptID  string                 `json:"compaction_attempt_id,omitempty"`
+	WorkerKind           string                 `json:"worker_kind,omitempty"`
+	GuidanceOpen         bool                   `json:"guidance_open,omitempty"`
+	Guidance             *TicketGuidance        `json:"guidance,omitempty"`
+	CreatedAt            time.Time              `json:"created_at"`
+	UpdatedAt            time.Time              `json:"updated_at"`
+}
+
+func (a Attempt) CanRetryCompaction() bool {
+	return a.CompactionAttemptID != "" && (a.Status == "blocked" || a.Status == "unknown")
 }
 
 type InboxEntry struct {
@@ -84,6 +100,7 @@ type InboxEntry struct {
 }
 
 type TicketAction struct {
+	MemberID  string `json:"member_id,omitempty"`
 	Action    string `json:"action"`
 	Revision  int64  `json:"revision"`
 	Reason    string `json:"reason,omitempty"`
@@ -91,6 +108,7 @@ type TicketAction struct {
 }
 
 type ClaimInput struct {
+	Role             string `json:"role,omitempty"`
 	ParallelLimit    int    `json:"parallel_limit,omitempty"`
 	Revision         int64  `json:"revision"`
 	MemberID         string `json:"member_id"`
@@ -101,20 +119,29 @@ type ClaimInput struct {
 }
 
 type AttemptUpdate struct {
-	Owner          string          `json:"owner"`
-	Token          string          `json:"token"`
-	Generation     int64           `json:"generation"`
-	Status         string          `json:"status"`
-	Result         json.RawMessage `json:"result,omitempty"`
-	ChangeRequest  *change.Request `json:"change_request,omitempty"`
-	OperationError string          `json:"operation_error,omitempty"`
+	Owner             string                 `json:"owner"`
+	Token             string                 `json:"token"`
+	Generation        int64                  `json:"generation"`
+	Status            string                 `json:"status"`
+	Result            json.RawMessage        `json:"result,omitempty"`
+	ChangeRequest     *change.Request        `json:"change_request,omitempty"`
+	MergeCandidate    *change.MergeCandidate `json:"merge_candidate,omitempty"`
+	MergeLanded       bool                   `json:"merge_landed,omitempty"`
+	RepairBase        string                 `json:"repair_base,omitempty"`
+	OperationError    string                 `json:"operation_error,omitempty"`
+	UserQuestion      *UserQuestion          `json:"user_question,omitempty"`
+	PendingCompaction bool                   `json:"pending_compaction,omitempty"`
+	WorkerKind        string                 `json:"worker_kind,omitempty"`
+	GuidanceAck       string                 `json:"guidance_ack,omitempty"`
+	SealGuidance      bool                   `json:"seal_guidance,omitempty"`
 }
 
 type ReviewInput struct {
-	ManagerSessionID string `json:"manager_session_id"`
-	Decision         string `json:"decision"`
-	Feedback         string `json:"feedback,omitempty"`
-	RequestID        string `json:"request_id"`
+	Reviewer         *WorkerBinding `json:"reviewer,omitempty"`
+	ManagerSessionID string         `json:"manager_session_id"`
+	Decision         string         `json:"decision"`
+	Feedback         string         `json:"feedback,omitempty"`
+	RequestID        string         `json:"request_id"`
 }
 
 func (s *Store) initializeCoordinator(ctx context.Context) error {
@@ -234,7 +261,65 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 			return Item{}, fmt.Errorf("%w: edit or pause the recurring schedule; control an individual run instead", ErrInvalidInput)
 		}
 		switch in.Action {
+		case "approve_start":
+			return approveTicketStart(ctx, tx, item, in)
+		case "handoff":
+			if item.ActiveAttemptID == "" || item.State == "done" || in.RequestID == "" || (item.ExecutionState != WaitingChildren && item.ExecutionState != "blocked" && item.ExecutionState != "unknown") {
+				return Item{}, ErrConflict
+			}
+			previous, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, item.ActiveAttemptID))
+			if err != nil {
+				return Item{}, err
+			}
+			member, err := workerMember(ctx, tx, item.WorkspaceID, in.MemberID)
+			if err != nil {
+				return Item{}, err
+			}
+			original, err := workerMember(ctx, tx, item.WorkspaceID, previous.MemberID)
+			if err != nil {
+				return Item{}, err
+			}
+			entries, err := children(ctx, tx, item.ID, previous.WorktreeID)
+			if err != nil {
+				return Item{}, err
+			}
+			if member.Disabled || member.ExecutionRoot != original.ExecutionRoot || len(entries) == 0 || previous.StopRequested || previous.ChangeRequest == nil || previous.ChangeRequest.Final() || previous.ChangeRequest.HeadCommit != "" {
+				return Item{}, fmt.Errorf("%w: handoff requires a compatible member and a parked parent worktree", ErrConflict)
+			}
+			for _, child := range entries {
+				if child.State != "done" && (child.AssignedMemberID == member.ID || child.RequestedMemberID == member.ID) {
+					return Item{}, fmt.Errorf("%w: a child worker cannot take over its own review", ErrConflict)
+				}
+			}
+			item.HandoffMemberID = member.ID
+			if item.ExecutionState != WaitingChildren {
+				item.ExecutionState = "queued"
+			}
+			item.ExecutionReason = ""
+			item.NextAssignmentAt = time.Time{}
 		case "queue", "retry":
+			if item.RequireStartApproval && item.ActiveAttemptID == "" && item.ApprovedStartContract == "" {
+				if in.Action == "retry" && item.ExecutionState == "cancelled" {
+					if err := requireExclusiveScheduleRun(ctx, tx, item); err != nil {
+						return Item{}, err
+					}
+					resetStartApproval(&item)
+					return touchTicket(ctx, tx, item)
+				}
+				return Item{}, ErrConflict
+			}
+			if in.Action == "retry" && item.ExecutionState == "close_failed" {
+				a, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, item.ActiveAttemptID))
+				if err != nil {
+					return Item{}, err
+				}
+				a.Status, a.OperationError, a.UpdatedAt = "close_queued", "", time.Now().UTC()
+				item.ExecutionState, item.ExecutionReason = a.Status, ""
+				if err := saveAttempt(ctx, tx, a, false); err != nil {
+					return Item{}, err
+				}
+				return touchTicket(ctx, tx, item)
+			}
 			if err := requireTicketIssue(ctx, tx, item); err != nil {
 				return Item{}, err
 			}
@@ -244,47 +329,26 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 			if in.Action == "queue" && item.ExecutionState == "queued" {
 				return item, nil
 			}
-			if item.State == "done" || item.ExecutionState == "running" || item.ExecutionState == "reserved" || item.ExecutionState == "awaiting_review" || item.ExecutionState == "merging" || item.ExecutionState == "merge_queued" || item.ExecutionState == "closing" || item.ExecutionState == "close_queued" || item.ExecutionState == "stopping" {
+			if item.ExecutionState == WaitingChildren {
+				return item, nil
+			}
+			if item.State == "done" || item.ExecutionState == "running" || item.ExecutionState == "reserved" || item.ExecutionState == "awaiting_review" || item.ExecutionState == "merging" || item.ExecutionState == "merge_queued" || item.ExecutionState == "closing" || item.ExecutionState == "close_queued" || item.ExecutionState == "stopping" || item.ExecutionState == WaitingUser {
 				return Item{}, ErrConflict
 			}
 			item.ExecutionState = "queued"
 			item.ExecutionReason = ""
 			item.NextAssignmentAt = time.Time{}
 		case "assignment_waiting":
-			if item.ExecutionState != "queued" && item.ExecutionState != "assignment_waiting" {
+			if item.ExecutionState != "queued" && item.ExecutionState != "assignment_waiting" && item.ExecutionState != WaitingChildren {
 				return Item{}, ErrConflict
 			}
-			item.ExecutionState = "assignment_waiting"
+			if item.ExecutionState != WaitingChildren {
+				item.ExecutionState = "assignment_waiting"
+			}
 			item.ExecutionReason = in.Reason
 			item.NextAssignmentAt = time.Now().UTC().Add(time.Minute)
 		case "cancel":
-			if item.State == "done" {
-				return Item{}, fmt.Errorf("%w: completed tickets cannot be cancelled", ErrConflict)
-			}
-			if item.ExecutionState == "merging" || item.ExecutionState == "closing" {
-				return Item{}, fmt.Errorf("%w: Git review operation is already running", ErrConflict)
-			}
-			item.ExecutionState = "cancelled"
-			if item.ActiveAttemptID != "" {
-				a, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, item.ActiveAttemptID))
-				if err != nil {
-					return Item{}, err
-				}
-				a.StopRequested = true
-				a.UpdatedAt = time.Now().UTC()
-				if a.Status == "reserved" || a.Status == "running" {
-					item.ExecutionState = "stopping"
-				} else {
-					// Invalidate pending review/merge approval with the cancellation.
-					a.Status = cancelledAttemptStatus(a)
-					a.Decision, a.DecisionID = "", ""
-					item.ExecutionState = a.Status
-				}
-				if err := saveAttempt(ctx, tx, a, false); err != nil {
-					return Item{}, err
-				}
-			}
-			item.ExecutionReason = in.Reason
+			return cancelTicketTree(ctx, tx, item, in.Reason)
 		default:
 			return Item{}, ErrInvalidInput
 		}
@@ -305,7 +369,7 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		if err != nil {
 			return Attempt{}, err
 		}
-		if item.Revision != in.Revision || (item.ExecutionState != "queued" && item.ExecutionState != "assignment_waiting") {
+		if item.Revision != in.Revision || (item.ExecutionState != "queued" && item.ExecutionState != "assignment_waiting" && item.ExecutionState != WaitingChildren) {
 			return Attempt{}, ErrConflict
 		}
 		if !TicketReadyAt(item, time.Now()) {
@@ -316,6 +380,26 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		}
 		if err := requireReadyDependencies(ctx, tx, item.ID); err != nil {
 			return Attempt{}, err
+		}
+		if item.ParentTicketID != "" {
+			parent, err := childParent(ctx, tx, item)
+			if err != nil {
+				return Attempt{}, err
+			}
+			if parent.Status != WaitingChildren || in.MemberID == parent.MemberID {
+				return Attempt{}, fmt.Errorf("%w: child needs a parked parent and a separate worker", ErrConflict)
+			}
+			parentMember, err := workerMember(ctx, tx, item.WorkspaceID, parent.MemberID)
+			if err != nil {
+				return Attempt{}, err
+			}
+			childMember, err := workerMember(ctx, tx, item.WorkspaceID, in.MemberID)
+			if err != nil {
+				return Attempt{}, err
+			}
+			if parentMember.ExecutionRoot != childMember.ExecutionRoot {
+				return Attempt{}, fmt.Errorf("%w: child worker must use the same execution root", ErrConflict)
+			}
 		}
 		if err := requireExclusiveScheduleRun(ctx, tx, item); err != nil {
 			return Attempt{}, err
@@ -345,8 +429,12 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		if err != nil {
 			return Attempt{}, err
 		}
-		if member.Disabled || member.Revision != in.MemberRevision || (item.RequestedMemberID != "" && item.RequestedMemberID != member.ID) {
+		handoff := item.HandoffMemberID != ""
+		if member.Disabled || member.Revision != in.MemberRevision || (handoff && item.HandoffMemberID != member.ID) || (!handoff && item.RequestedMemberID != "" && item.RequestedMemberID != member.ID) {
 			return Attempt{}, ErrConflict
+		}
+		if !handoff && item.RequestedRole != "" && item.RequestedRole != in.Role {
+			return Attempt{}, fmt.Errorf("%w: ticket requires the %q role", ErrConflict, item.RequestedRole)
 		}
 		now := time.Now().UTC()
 		attempt := Attempt{ID: uuid.NewString(), WorkspaceID: item.WorkspaceID, TicketID: id, MemberID: member.ID, MemberRevision: member.Revision, DefinitionDigest: in.DefinitionDigest, WorkerSessionID: uuid.NewString(), Generation: 1, Owner: in.Owner, Token: uuid.NewString(), LeaseUntil: now.Add(45 * time.Second), Status: "reserved", CreatedAt: now, UpdatedAt: now}
@@ -358,6 +446,10 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 			return Attempt{}, err
 		}
 		attempt.BodyRevision = body.Revision
+		attempt.TicketContract = ticketContract(item, body.Revision)
+		if item.RequireStartApproval && item.ActiveAttemptID == "" && item.ApprovedStartContract != attempt.TicketContract {
+			return Attempt{}, fmt.Errorf("%w: current ticket scope requires start approval", ErrConflict)
+		}
 		if item.ActiveAttemptID != "" {
 			previous, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, item.ActiveAttemptID))
 			if err != nil {
@@ -369,14 +461,38 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 			attempt.Generation = previous.Generation + 1
 			attempt.PreviousAttemptID = previous.ID
 			attempt.PreviousStatus = previous.Status
+			if previous.CanRetryCompaction() {
+				if handoff || previous.MemberID != member.ID || previous.DefinitionDigest != in.DefinitionDigest || attempt.TicketContract != previous.TicketContract {
+					return Attempt{}, fmt.Errorf("%w: pending compaction belongs to the original worker and ticket scope", ErrConflict)
+				}
+				attempt.CompactionAttemptID = previous.CompactionAttemptID
+			}
+			if previous.Status == WaitingUser {
+				if previous.UserQuestion == nil || previous.UserQuestion.Answer == "" || previous.MemberID != member.ID || previous.DefinitionDigest != in.DefinitionDigest || attempt.TicketContract != previous.TicketContract {
+					return Attempt{}, ErrConflict
+				}
+				attempt.PreviousAnswer = previous.UserQuestion
+			}
 			attempt.Feedback = previous.Feedback
-			if previous.ChangeRequest != nil && !previous.ChangeRequest.Final() && (previous.MemberID != member.ID || previous.DefinitionDigest != in.DefinitionDigest) {
+			attempt.RepairBase = previous.RepairBase
+			review, hasChildren, outstanding, err := childContinuation(ctx, tx, previous)
+			if err != nil {
+				return Attempt{}, err
+			}
+			if item.ExecutionState == WaitingChildren && outstanding && review == "" {
+				return Attempt{}, ErrConflict
+			}
+			attempt.ReviewChildAttemptID = review
+			attempt.ResumeParent = !handoff && (hasChildren || previous.Status == WaitingChildren)
+			if !handoff && previous.ChangeRequest != nil && !previous.ChangeRequest.Final() && (previous.MemberID != member.ID || previous.DefinitionDigest != in.DefinitionDigest) {
 				return Attempt{}, fmt.Errorf("%w: active worktree requires the original member and profile", ErrConflict)
 			}
 			// Continuing a checkpoint/worktree is allowed only for the same member
 			// and unchanged definition. Otherwise a fresh worker must be chosen.
-			if previous.MemberID == member.ID && previous.DefinitionDigest == in.DefinitionDigest && (previous.ChangeRequest == nil || !previous.ChangeRequest.Final()) {
-				attempt.WorkerSessionID = previous.WorkerSessionID
+			if (handoff || previous.MemberID == member.ID && previous.DefinitionDigest == in.DefinitionDigest) && (previous.ChangeRequest == nil || !previous.ChangeRequest.Final()) {
+				if !handoff {
+					attempt.WorkerSessionID = previous.WorkerSessionID
+				}
 				attempt.WorktreeID = previous.WorktreeID
 				attempt.ChangeRequest = previous.ChangeRequest
 			}
@@ -386,6 +502,10 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		}
 		item.ActiveAttemptID = attempt.ID
 		item.AssignedMemberID = member.ID
+		if handoff {
+			item.RequestedMemberID, item.HandoffMemberID = member.ID, ""
+			item.RequestedRole = ""
+		}
 		item.State = "in_progress"
 		item.ExecutionState = "reserved"
 		item.ExecutionReason = ""
@@ -481,9 +601,27 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 			return Attempt{}, ErrConflict
 		}
 	}
-	allowed := status == a.Status || a.Status == "reserved" && status == "running" || (a.Status == "reserved" || a.Status == "running") && (status == "awaiting_review" || status == "failed" || status == "blocked" || status == "unknown" || status == "cancelled") || a.Status == "merging" && (status == "accepted" || status == "merge_failed") || a.Status == "closing" && (status == "rejected" || status == "close_failed")
+	allowed := status == a.Status || a.Status == "reserved" && status == "running" || (a.Status == "reserved" || a.Status == "running") && (status == WaitingChildren || status == WaitingUser || status == "awaiting_review" || status == "failed" || status == "blocked" || status == "unknown" || status == "cancelled") || a.Status == "merging" && (status == "accepted" || status == "merge_failed") || a.Status == "closing" && (status == "rejected" || status == "close_failed")
 	if !allowed {
 		return Attempt{}, ErrConflict
+	}
+	if in.WorkerKind != "" {
+		if status != "running" || (in.WorkerKind != "native" && in.WorkerKind != "acp") || (a.WorkerKind != "" && a.WorkerKind != in.WorkerKind) {
+			return Attempt{}, ErrConflict
+		}
+		if a.WorkerKind == "" {
+			a.WorkerKind = in.WorkerKind
+			a.GuidanceOpen = in.WorkerKind == "native"
+		}
+	}
+	if in.GuidanceAck != "" {
+		if a.Guidance == nil || a.Guidance.ID != in.GuidanceAck {
+			return Attempt{}, ErrConflict
+		}
+		a.Guidance = nil
+	}
+	if status != "running" || (in.SealGuidance && a.Guidance == nil) {
+		a.GuidanceOpen = false
 	}
 	// A stopped worker may still return a pinned worktree. Close it through the
 	// existing Git operation before releasing cancellation or recurring runs.
@@ -501,10 +639,38 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 		status = "cancelled"
 	}
 	previousStatus := a.Status
+	if status == WaitingUser {
+		if in.UserQuestion == nil || in.UserQuestion.Answer != "" || in.UserQuestion.ID != "" {
+			return Attempt{}, ErrInvalidInput
+		}
+		if err := in.UserQuestion.Validate(); err != nil {
+			return Attempt{}, err
+		}
+		body, err := decodeRow[Post](tx.QueryRowContext(ctx, `SELECT payload FROM posts WHERE id=?`, item.BodyPostID))
+		if err != nil {
+			return Attempt{}, err
+		}
+		if ticketContract(item, body.Revision) != a.TicketContract {
+			status = "blocked"
+			in.OperationError = "Ticket scope changed during execution. Review the current ticket before continuing."
+		} else {
+			question := *in.UserQuestion
+			question.ID = a.ID
+			a.UserQuestion = &question
+		}
+	}
 	if status == "accepted" && (in.ChangeRequest == nil || in.ChangeRequest.Status != "merged" || in.ChangeRequest.MergedCommit == "") {
 		return Attempt{}, ErrInvalidInput
 	}
 	a.Status = status
+	switch status {
+	case "reserved", "running", "blocked", "unknown":
+		if in.PendingCompaction && a.CompactionAttemptID == "" {
+			a.CompactionAttemptID = a.ID
+		}
+	default:
+		a.CompactionAttemptID = ""
+	}
 	a.UpdatedAt = time.Now().UTC()
 	a.LeaseUntil = a.UpdatedAt.Add(45 * time.Second)
 	if len(in.Result) > 0 {
@@ -513,7 +679,17 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 	if in.ChangeRequest != nil {
 		a.ChangeRequest = in.ChangeRequest
 	}
-	if status == "merge_failed" || status == "close_failed" || status == "accepted" || status == "rejected" || status == "cancelled" {
+	if in.MergeCandidate != nil {
+		if a.Status != "merging" || in.MergeCandidate.Target == "" || in.MergeCandidate.Commit == "" {
+			return Attempt{}, ErrInvalidInput
+		}
+		a.MergeCandidate = in.MergeCandidate
+	}
+	if previousStatus == "merging" && status == "merge_failed" {
+		a.RepairBase = in.RepairBase
+		a.MergeLanded = a.MergeLanded || in.MergeLanded
+	}
+	if ((status == "blocked" || status == "unknown") && in.OperationError != "") || status == "merge_failed" || status == "close_failed" || status == "accepted" || status == "rejected" || status == "cancelled" {
 		a.OperationError = in.OperationError
 	}
 	if err := saveAttempt(ctx, tx, a, false); err != nil {
@@ -527,6 +703,9 @@ func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) 
 	}
 	if item.ExecutionState != status {
 		item.ExecutionState = status
+		if in.OperationError != "" {
+			item.ExecutionReason = in.OperationError
+		}
 		if status == "accepted" {
 			item.State = "done"
 		}
@@ -550,6 +729,10 @@ func cancelledAttemptStatus(a Attempt) string {
 }
 
 func putInbox(ctx context.Context, tx *sql.Tx, a Attempt) error {
+	item, err := ticketTx(ctx, tx, a.TicketID)
+	if err != nil || item.ParentTicketID != "" {
+		return err
+	}
 	var managerID string
 	if err := tx.QueryRowContext(ctx, `SELECT manager_session_id FROM workspaces WHERE id=?`, a.WorkspaceID).Scan(&managerID); err != nil {
 		return err
@@ -654,9 +837,6 @@ func (s *Store) ReviewAttempt(ctx context.Context, id string, in ReviewInput) (A
 		if err := tx.QueryRowContext(ctx, `SELECT manager_session_id FROM workspaces WHERE id=?`, current.WorkspaceID).Scan(&managerID); err != nil {
 			return Attempt{}, err
 		}
-		if managerID != in.ManagerSessionID {
-			return Attempt{}, fmt.Errorf("%w: only the workspace Integrator may review attempts", ErrConflict)
-		}
 		a, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, id))
 		if err != nil {
 			return a, err
@@ -665,11 +845,31 @@ func (s *Store) ReviewAttempt(ctx context.Context, id string, in ReviewInput) (A
 		if err != nil {
 			return Attempt{}, err
 		}
+		if item.ParentTicketID == "" {
+			if managerID != in.ManagerSessionID {
+				return Attempt{}, fmt.Errorf("%w: only the workspace Integrator may review attempts", ErrConflict)
+			}
+		} else {
+			if in.Reviewer == nil {
+				return Attempt{}, fmt.Errorf("%w: child review requires the parent worker", ErrConflict)
+			}
+			reviewer, err := boundWorker(ctx, tx, *in.Reviewer)
+			if err != nil {
+				return Attempt{}, err
+			}
+			if reviewer.TicketID != item.ParentTicketID || reviewer.WorktreeID != item.ParentWorktreeID || reviewer.ReviewChildAttemptID != a.ID || reviewer.MemberID == a.MemberID || reviewer.WorkspaceID != a.WorkspaceID {
+				return Attempt{}, fmt.Errorf("%w: review is outside the parent worker's assignment", ErrConflict)
+			}
+			managerID = reviewer.WorkerSessionID
+		}
 		if item.ExecutionState == "cancelled" || item.ActiveAttemptID != id || (a.Status != "awaiting_review" && a.Status != "blocked" && a.Status != "failed" && a.Status != "unknown" && a.Status != "merge_failed" && a.Status != "close_failed") {
 			return Attempt{}, ErrConflict
 		}
 		if a.StopRequested && in.Decision != "reject" {
 			return Attempt{}, fmt.Errorf("%w: cancelled work can only finish closing its Git change request", ErrConflict)
+		}
+		if a.MergeLanded && in.Decision != "accept" {
+			return Attempt{}, fmt.Errorf("%w: Git has already applied this merge; retry its cleanup", ErrConflict)
 		}
 		a.Decision = in.Decision
 		a.DecisionID = in.RequestID
@@ -684,8 +884,12 @@ func (s *Store) ReviewAttempt(ctx context.Context, id string, in ReviewInput) (A
 				if a.ChangeRequest == nil || a.ChangeRequest.HeadCommit == "" {
 					return Attempt{}, ErrConflict
 				}
-				a.Status = "merge_queued"
-				item.ExecutionState = "merge_queued"
+				if a.ChangeRequest.Status == change.StatusClosed && a.ChangeRequest.HeadCommit == a.ChangeRequest.BaseCommit {
+					a.Status, item.ExecutionState, item.State = "accepted", "accepted", "done"
+				} else {
+					a.Status = "merge_queued"
+					item.ExecutionState = "merge_queued"
+				}
 			} else {
 				a.Status = "accepted"
 				item.ExecutionState = "accepted"
@@ -783,12 +987,24 @@ func (s *Store) RecoverExpired(ctx context.Context) error {
 		if previousStatus == "closing" {
 			a.Status = "close_queued"
 		}
+		if !a.StopRequested && previousStatus == "running" && a.ReviewChildAttemptID != "" {
+			child, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, a.ReviewChildAttemptID))
+			if err != nil {
+				return err
+			}
+			if child.DecisionID != "" && !reviewableChild(child.Status) {
+				a.Status = WaitingChildren
+			}
+		}
 		a.UpdatedAt = time.Now().UTC()
 		if err := saveAttempt(ctx, tx, a, false); err != nil {
 			return err
 		}
 		item.ExecutionState = a.Status
 		item.ExecutionReason = "execution lease expired; inspect the persisted worker before retrying"
+		if a.Status == WaitingChildren {
+			item.ExecutionReason = ""
+		}
 		if _, err := touchTicket(ctx, tx, item); err != nil {
 			return err
 		}
@@ -823,6 +1039,26 @@ func (s *Store) ClaimMerge(ctx context.Context, id, owner string) (Attempt, erro
 	}
 	if (a.Status != "merge_queued" && a.Status != "close_queued") || item.ActiveAttemptID != a.ID || item.ExecutionState != a.Status {
 		return Attempt{}, ErrConflict
+	}
+	if item.ParentTicketID != "" && a.Status == "merge_queued" {
+		parent, err := childParent(ctx, tx, item)
+		if err != nil {
+			return Attempt{}, err
+		}
+		if parent.Status != WaitingChildren {
+			return Attempt{}, ErrConflict
+		}
+	}
+	if a.Status == "close_queued" {
+		entries, err := children(ctx, tx, item.ID, a.WorktreeID)
+		if err != nil {
+			return Attempt{}, err
+		}
+		for _, child := range entries {
+			if child.State != "done" && child.ExecutionState != "cancelled" && child.ExecutionState != "rejected" {
+				return Attempt{}, fmt.Errorf("%w: wait for child worktrees to close", ErrConflict)
+			}
+		}
 	}
 	a.Owner = owner
 	a.Token = uuid.NewString()

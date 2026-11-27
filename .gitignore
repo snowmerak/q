@@ -6,3 +6,5 @@
 /studio/frontend/test-results/
 /studio/frontend/playwright-report/
 /go.work.sum
+/desktop/*.exe
+/desktop/desktop

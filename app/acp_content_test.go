@@ -1,15 +1,20 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/snowmerak/q/client"
+	"github.com/snowmerak/q/internal/workmedia"
+	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
@@ -108,6 +113,36 @@ func TestACPPromptImageResourceKeepsResourceIdentity(t *testing.T) {
 	}
 	if replayed[0].UserMessageChunk.Content.Resource.Resource.BlobResourceContents.Uri != "file:///workspace/diagram.png" {
 		t.Fatalf("image resource identity was lost: %#v", replayed[0])
+	}
+}
+
+func TestACPPromptResizesImageAndEstimatesProviderPayload(t *testing.T) {
+	var input bytes.Buffer
+	if err := png.Encode(&input, image.NewGray(image.Rect(0, 0, 2400, 1200))); err != nil {
+		t.Fatal(err)
+	}
+	original := base64.StdEncoding.EncodeToString(input.Bytes())
+	message, _, err := acpPromptMessage([]acp.ContentBlock{acp.ImageBlock(original, "image/png")}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := providerMessages([]client.Message{message}, false)
+	images := workmedia.URLs(wire[0])
+	if len(images) != 1 {
+		t.Fatalf("prepared image count = %d", len(images))
+	}
+	_, encoded, _ := strings.Cut(images[0], ",")
+	dimensions, err := png.DecodeConfig(base64.NewDecoder(base64.StdEncoding, strings.NewReader(encoded)))
+	if err != nil || dimensions.Width != 2048 || dimensions.Height != 1024 {
+		t.Fatalf("ACP provider image = %dx%d, want 2048x1024: %v", dimensions.Width, dimensions.Height, err)
+	}
+	if memory.CountMessages([]client.Message{message}) != memory.CountMessages(wire) {
+		t.Fatal("local image estimate includes ACP replay metadata")
+	}
+	replayed := replayACPUserMessage(message)
+	if len(replayed) != 1 || replayed[0].UserMessageChunk == nil || replayed[0].UserMessageChunk.Content.Image == nil ||
+		replayed[0].UserMessageChunk.Content.Image.Data != original {
+		t.Fatal("ACP replay lost the original image block")
 	}
 }
 

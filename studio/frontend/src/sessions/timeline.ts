@@ -7,7 +7,7 @@ export type TimelineEntry =
 
 // The latest run replays from cursor zero. Replace its persisted tail instead of
 // appending events to it, including after reconnecting halfway through a tool call.
-export function buildTimeline(messages: Message[], thoughts: { before: number; content: string }[], events: RunEvent[]): TimelineEntry[] {
+export function buildTimeline(messages: Message[], thoughts: { before: number; content: string }[], events: RunEvent[], useSavedReply = false): TimelineEntry[] {
   let lastUser = -1;
   for (let index = messages.length - 1; index >= 0; index--) {
     if (messages[index].role === 'user') { lastUser = index; break; }
@@ -22,6 +22,7 @@ export function buildTimeline(messages: Message[], thoughts: { before: number; c
     if (index < saved.length) entries.push({ kind: 'message', message: saved[index] });
   }
   if (!replay) return entries;
+  const runStart = entries.length;
 
   let response: Extract<TimelineEntry, { kind: 'message' }> | undefined;
   let thinking: Extract<TimelineEntry, { kind: 'thinking' }> | undefined;
@@ -73,6 +74,15 @@ export function buildTimeline(messages: Message[], thoughts: { before: number; c
     } else if (['activity', 'trace', 'question', 'error', 'cancelled', 'recovered', 'control'].includes(event.type)) {
       if (['error', 'cancelled', 'recovered'].includes(event.type)) finishResponse('');
       entries.push({ kind: 'activity', event });
+    }
+  }
+  if (useSavedReply && events.some(event => event.type === 'result')) {
+    const reply = messages[messages.length - 1];
+    if (reply?.role === 'assistant' && reply.index !== undefined && reply.content && !reply.tool_calls?.length) {
+      const renderedReply = entries.slice(runStart).reverse().find(entry => entry.kind === 'message' &&
+        entry.message.role === 'assistant' && !entry.message.tool_calls?.length);
+      if (renderedReply?.kind === 'message') renderedReply.message = reply;
+      else entries.push({ kind: 'message', message: reply });
     }
   }
   return entries;

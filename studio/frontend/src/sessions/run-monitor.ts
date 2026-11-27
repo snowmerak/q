@@ -5,7 +5,7 @@ export type RunTarget = { workspaceRoot: string; sessionID: string };
 
 type RunObserver = {
   page: (page: RunPage) => void | Promise<void>;
-  complete: () => Promise<void>;
+  complete: (run: RunSnapshot, signal: AbortSignal) => Promise<void>;
   retry: (cause: unknown) => void;
 };
 
@@ -14,6 +14,20 @@ export function terminalRun(status: string) {
 }
 
 export function runStatusLabel(run: RunSnapshot) {
+  if (run.kind === 'response_change') {
+    if (run.status === 'queued' || run.status === 'running') return 'Updating response…';
+    if (run.status === 'completed') return run.status_detail || 'Response updated';
+    if (run.status === 'cancelled') return 'Response change stopped';
+    if (run.status === 'failed') return 'Response change failed';
+    if (run.status === 'interrupted') return 'Response change interrupted';
+  }
+  if (run.kind === 'compaction') {
+    if (run.status === 'queued' || run.status === 'running') return 'Compacting context…';
+    if (run.status === 'completed') return run.status_detail || 'Context compacted';
+    if (run.status === 'cancelled') return 'Compaction stopped';
+    if (run.status === 'failed') return 'Compaction failed';
+    if (run.status === 'interrupted') return 'Compaction interrupted';
+  }
   if (run.status === 'waiting') return 'Waiting for your answer';
   if (run.status === 'paused') return 'Paused';
   if (run.status === 'running' || run.status === 'queued') return 'Running';
@@ -78,7 +92,7 @@ export class RunMonitor {
         if (page.events.length) cursor = page.events[page.events.length - 1].cursor;
         // A terminal run can still have unread event pages after reconnecting.
         if (terminalRun(page.run.status) && cursor >= page.run.cursor) {
-          await this.observer.complete();
+          await this.observer.complete(page.run, signal);
           return;
         }
       } catch (cause) {

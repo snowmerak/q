@@ -13,6 +13,7 @@ import (
 	"github.com/snowmerak/q/app"
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/subagent"
 	"github.com/snowmerak/q/workspace"
 )
@@ -49,7 +50,9 @@ type sessionSummary struct {
 
 type sessionMessage struct {
 	Role       string                `json:"role"`
+	Index      int                   `json:"index"`
 	Content    string                `json:"content,omitempty"`
+	Images     []string              `json:"images,omitempty"`
 	Name       string                `json:"name,omitempty"`
 	ToolCallID string                `json:"tool_call_id,omitempty"`
 	ToolCalls  []client.ToolCall     `json:"tool_calls,omitempty"`
@@ -60,6 +63,7 @@ type sessionDetail struct {
 	WorkspaceRoot      string                        `json:"workspace_root"`
 	Session            sessionSummary                `json:"session"`
 	Transcript         []sessionMessage              `json:"transcript"`
+	HistoryRevision    string                        `json:"history_revision,omitempty"`
 	TranscriptThoughts []workspace.TranscriptThought `json:"transcript_thoughts,omitempty"`
 	ActiveTask         *workspace.ActiveTask         `json:"active_task,omitempty"`
 	History            *sessionHistory               `json:"history,omitempty"`
@@ -78,9 +82,16 @@ type sessionOperationResponse struct {
 	Status string `json:"status"`
 }
 
-type sessionRunRequest struct {
+type sessionCompactRequest struct {
 	WorkspaceRoot string `json:"workspace_root"`
-	Content       string `json:"content"`
+	Background    bool   `json:"background,omitempty"`
+}
+
+type sessionRunRequest struct {
+	WorkspaceRoot string           `json:"workspace_root"`
+	Content       string           `json:"content"`
+	Images        []app.ImageInput `json:"images,omitempty"`
+	ImageMaxEdge  int              `json:"image_max_edge,omitempty"`
 }
 
 func newSessionsService(parent context.Context, runner sessionRunner, configDirectory string) *sessionsService {
@@ -350,7 +361,7 @@ func (service *sessionsService) serveCompact(writer http.ResponseWriter, request
 		writeAPIError(writer, http.StatusServiceUnavailable, app.ErrSessionRuntimeUnavailable)
 		return
 	}
-	var input workspaceRequest
+	var input sessionCompactRequest
 	if err := decodeSessionRequest(writer, request, &input); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
@@ -361,6 +372,16 @@ func (service *sessionsService) serveCompact(writer http.ResponseWriter, request
 		return
 	}
 	store := workspace.Store{Root: root, SessionID: request.PathValue("session")}
+	if input.Background {
+		run, err := service.runs.startCompaction(root, store.SessionID, request.Context())
+		if err != nil {
+			writeSessionError(writer, err)
+			return
+		}
+		writer.Header().Set("Cache-Control", "no-store")
+		writeJSON(writer, http.StatusAccepted, run.snapshotCopy())
+		return
+	}
 	if err := store.RequireInteraction(); err != nil {
 		writeSessionError(writer, err)
 		return
@@ -379,13 +400,21 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 		return
 	}
 	var input sessionRunRequest
-	if err := decodeSessionRequest(writer, request, &input); err != nil {
+	if err := decodeRequest(writer, request, &input, workmedia.MaxImageJSON, "decode message"); err != nil {
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
 	input.Content = strings.TrimSpace(input.Content)
-	if input.Content == "" {
-		writeAPIError(writer, http.StatusBadRequest, errors.New("content is required"))
+	if input.Content == "" && len(input.Images) == 0 {
+		writeAPIError(writer, http.StatusBadRequest, errors.New("content or an image is required"))
+		return
+	}
+	if err := workmedia.Validate(input.Images); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
+		return
+	}
+	if err := workmedia.ValidateMaxEdge(input.ImageMaxEdge); err != nil {
+		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
 	if len(input.Content) > subagent.MaximumDelegatePromptBytes {
@@ -397,13 +426,9 @@ func (service *sessionsService) serveMessage(writer http.ResponseWriter, request
 		writeAPIError(writer, http.StatusBadRequest, err)
 		return
 	}
-	run, err := service.runs.start(root, request.PathValue("session"), input.Content, request.Context())
+	run, err := service.runs.startTurn(root, request.PathValue("session"), input.Content, "", input.Images, input.ImageMaxEdge, request.Context())
 	if err != nil {
-		if strings.Contains(err.Error(), "already has a running turn") {
-			writeAPIError(writer, http.StatusConflict, err)
-		} else {
-			writeSessionError(writer, err)
-		}
+		writeSessionError(writer, err)
 		return
 	}
 	writer.Header().Set("Cache-Control", "no-store")
@@ -441,7 +466,8 @@ func detailFromSessionRange(root string, store workspace.Store, value workspace.
 			continue
 		}
 		projected := sessionMessage{
-			Role: string(message.Role), Content: message.TextContent(), Name: message.Name,
+			Role: string(message.Role), Index: index, Content: message.TextContent(), Name: message.Name,
+			Images:     workmedia.URLs(message),
 			ToolCallID: message.ToolCallID, ToolCalls: message.ToolCalls,
 		}
 		if message.Role == client.RoleAssistant {
@@ -466,7 +492,7 @@ func detailFromSessionRange(root string, store workspace.Store, value workspace.
 			SessionID: store.SessionID, RunID: value.RunID,
 			Title: value.Title, UpdatedAt: updatedAt,
 		},
-		Transcript: transcript, TranscriptThoughts: thoughts, ActiveTask: value.ActiveTask,
+		Transcript: transcript, HistoryRevision: value.HistoryRevision, TranscriptThoughts: thoughts, ActiveTask: value.ActiveTask,
 	}
 }
 
@@ -499,6 +525,8 @@ func decodeSessionRequest(writer http.ResponseWriter, request *http.Request, tar
 
 func writeSessionError(writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, errSessionRunActive):
+		writeAPIError(writer, http.StatusConflict, err)
 	case errors.Is(err, workspace.ErrRequiredManager):
 		writeAPIError(writer, http.StatusConflict, err)
 	case errors.Is(err, workspace.ErrWorkflowRequired):

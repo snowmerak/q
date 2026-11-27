@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/snowmerak/q/change"
+	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/gitwork"
 	"github.com/snowmerak/q/library"
 	"github.com/snowmerak/q/subagent"
@@ -148,16 +151,17 @@ func (e *Engine) scan(ctx context.Context) (returnErr error) {
 		remaining := workitems.EffectiveParallel(project.Limits.MaxParallelTickets, parallel) - load.Active
 		if remaining > 0 {
 			var queued []workitems.Item
-			cursor := ""
-			for {
-				page, err := c.ListTicketQueue(ctx, project.ID, "assignment", cursor, 100)
-				if err != nil {
-					return err
-				}
-				queued = append(queued, page.Items...)
-				cursor = page.NextCursor
-				if cursor == "" {
-					break
+			for _, queue := range []string{"resume", "assignment"} {
+				for cursor := ""; ; {
+					page, err := c.ListTicketQueue(ctx, project.ID, queue, cursor, 100)
+					if err != nil {
+						return err
+					}
+					queued = append(queued, page.Items...)
+					cursor = page.NextCursor
+					if cursor == "" {
+						break
+					}
 				}
 			}
 			// Assignment decisions not yet reserved in Library also occupy a
@@ -209,7 +213,7 @@ func (e *Engine) scan(ctx context.Context) (returnErr error) {
 }
 
 func needsAssignment(item workitems.Item) bool {
-	return !item.Deleted && len(item.WaitingOn) == 0 && workitems.TicketReadyAt(item, time.Now()) && (item.ExecutionState == "queued" || item.ExecutionState == "assignment_waiting" ||
+	return !item.Deleted && len(item.WaitingOn) == 0 && workitems.TicketReadyAt(item, time.Now()) && (item.ExecutionState == workitems.WaitingChildren || item.ExecutionState == "queued" || item.ExecutionState == "assignment_waiting" ||
 		(item.ExecutionState == "" && item.State == "todo" && item.ActiveAttemptID == ""))
 }
 
@@ -262,7 +266,38 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	if err != nil {
 		return waiting(err)
 	}
-	candidates, err := e.options.Candidates(e.ctx, project, item, members.Members)
+	pinned, previous, err := continuationMember(e.ctx, c, item)
+	if err != nil {
+		return waiting(err)
+	}
+	selection := item
+	if pinned != "" {
+		selection.RequestedMemberID = pinned
+	}
+	if item.HandoffMemberID != "" {
+		selection.RequestedRole = ""
+	}
+	if item.ParentTicketID != "" {
+		parent, err := c.GetItem(e.ctx, item.ParentTicketID)
+		if err != nil {
+			return waiting(err)
+		}
+		owner, err := c.GetAttempt(e.ctx, parent.ActiveAttemptID)
+		if err != nil {
+			return waiting(err)
+		}
+		var executionRoot string
+		for _, member := range members.Members {
+			if member.ID == owner.MemberID {
+				executionRoot = member.ExecutionRoot
+				break
+			}
+		}
+		members.Members = slices.DeleteFunc(members.Members, func(member workitems.Member) bool {
+			return member.ExecutionRoot != executionRoot || member.ID == owner.MemberID || member.ID == parent.HandoffMemberID
+		})
+	}
+	candidates, err := e.options.Candidates(e.ctx, project, selection, members.Members)
 	if err != nil {
 		return waiting(err)
 	}
@@ -284,13 +319,27 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	if err != nil {
 		return waiting(err)
 	}
-	decisionContext, cancelDecision := context.WithTimeout(e.ctx, assignmentTimeout)
-	candidate, err := SelectMember(decisionContext, systemoneconfig.Store{Dir: e.options.Directory}, item, body.Post.Content, candidates)
-	cancelDecision()
-	if err != nil {
-		return waiting(err)
+	var candidate Candidate
+	if pinned == "" {
+		if len(candidates) == 0 && item.RequestedRole != "" {
+			return waiting(fmt.Errorf("no eligible joined subagent for requested role %q", item.RequestedRole))
+		}
+		decisionContext, cancelDecision := context.WithTimeout(e.ctx, assignmentTimeout)
+		candidate, err = SelectMember(decisionContext, systemoneconfig.Store{Dir: e.options.Directory}, item, body.Post.Content, candidates)
+		cancelDecision()
+		if err != nil {
+			return waiting(err)
+		}
+	} else {
+		if len(candidates) != 1 || candidates[0].Member.ID != pinned {
+			return waiting(errors.New("parent worker is no longer available; retry or select a handoff member"))
+		}
+		candidate = candidates[0]
+		if item.HandoffMemberID == "" && candidate.Digest != previous.DefinitionDigest {
+			return waiting(errors.New("parent worker profile changed; select a handoff member to continue"))
+		}
 	}
-	attempt, err := c.ClaimTicket(e.ctx, item.ID, workitems.ClaimInput{Revision: item.Revision, MemberID: candidate.Member.ID, MemberRevision: candidate.Member.Revision, DefinitionDigest: candidate.Digest, Owner: e.owner, RequestID: uuid.NewString(), ParallelLimit: parallel})
+	attempt, err := c.ClaimTicket(e.ctx, item.ID, workitems.ClaimInput{Revision: item.Revision, MemberID: candidate.Member.ID, MemberRevision: candidate.Member.Revision, DefinitionDigest: candidate.Digest, Role: config.CanonicalAgentRole(candidate.Definition.Info.Role), Owner: e.owner, RequestID: uuid.NewString(), ParallelLimit: parallel})
 	if err != nil {
 		return err
 	}
@@ -298,11 +347,44 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	if attempt.Feedback != "" {
 		prompt += "\n\nManager feedback:\n" + excerptBytes(attempt.Feedback, 4000)
 	}
+	prompt += "\nRecord observed checks in verification. Include project-relative UTF-8 logs or PNG, JPEG, WebP, or GIF screenshots in artifacts when they support the result."
 	if len(item.DependsOn) > 0 {
 		prompt += "\n\nCompleted prerequisite ticket IDs:\n" + strings.Join(item.DependsOn, "\n") + "\nRead their results and source posts through the ticket tools before continuing dependent work."
 	}
 	if attempt.PreviousStatus == "unknown" || attempt.PreviousStatus == "cancelled" {
 		prompt += "\n\nA previous attempt may have produced side effects with an unknown result. Do not replay pending operations or assume failure. Inspect saved outcomes and the current workspace before deciding what remains."
+	}
+	if attempt.RepairBase != "" {
+		prompt += "\n\nThe merge requires an updated review base at " + attempt.RepairBase + ". Integrate that commit into this ticket's worktree, resolve any conflicts here, and verify. Submit the result for a fresh review."
+	}
+	if pinned != "" {
+		prompt += "\n\nContinue the existing parent ticket in its saved worktree. Read its issue, ticket history, and child results before changing files. If child work is queued, finish this turn with a clean checkout."
+		if attempt.ReviewChildAttemptID != "" {
+			prompt = fmt.Sprintf("Review the assigned child of parent ticket %s. Call ticket_attempt_get and ticket_change_read with empty arguments and check the child's acceptance criteria. Call ticket_review with a decision of accept, request_changes, or reject. Include actionable feedback when requesting changes. Keep the parent's checkout clean. End this turn once the decision is recorded. Q applies an approved merge after this turn returns.", item.ID)
+		} else if attempt.PreviousStatus == workitems.WaitingChildren {
+			prompt += "\nThe required child changes are merged into this worktree. Verify the combined result and finish the parent ticket for its reviewer."
+		}
+		if item.HandoffMemberID != "" {
+			prompt += "\nThis is an explicit handoff. Reconstruct context from the parent ticket, its recorded results and child tickets, and the existing worktree before acting."
+			if attempt.ReviewChildAttemptID == "" {
+				prompt += " Read the previous parent attempt with ticket_worker_read. Attempt ID: " + attempt.PreviousAttemptID
+			}
+		}
+		if attempt.ReviewChildAttemptID == "" {
+			if page, err := c.ListChildren(e.ctx, item.ID, attempt.WorktreeID); err == nil && len(page.Items) > 0 {
+				var children strings.Builder
+				for _, child := range page.Items {
+					fmt.Fprintf(&children, "\n- #%d %s (%s). Attempt: %s", child.Number, child.ID, child.ExecutionState, child.ActiveAttemptID)
+					if children.Len() >= 4000 {
+						break
+					}
+				}
+				prompt += "\n\nDirect child results to inspect:" + children.String()
+			}
+		}
+	}
+	if item.ExecutionMode == "git" && attempt.ReviewChildAttemptID == "" {
+		prompt += "\nTo delegate a direct child, call ticket_create with as_child:true, execution_mode:git, and a stable request_id. Use requested_role when the child should go to a specific role. Finish the current turn with a clean committed checkout. If your tools include task_complete, use outcome:succeeded to finish this turn after issuing the child. Q keeps the parent open, runs the child, and reopens this session for review."
 	}
 	update := workitems.AttemptUpdate{Owner: attempt.Owner, Token: attempt.Token, Generation: attempt.Generation, Status: "running"}
 	attempt, err = c.UpdateAttempt(e.ctx, attempt.ID, update)
@@ -310,7 +392,7 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 		return err
 	}
 	runContext, stop := e.heartbeat(c, attempt)
-	result, runErr := e.options.Run(runContext, c, project, item, candidate, attempt, prompt)
+	result, runErr := e.options.Run(runContext, c, project, selection, candidate, attempt, prompt)
 	interrupted := runContext.Err() != nil
 	stop()
 	status := "awaiting_review"
@@ -324,6 +406,10 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 			result.Summary = "Ticket execution did not complete"
 		}
 		result.Blocker = runErr.Error()
+	} else if result.Outcome == workitems.WaitingChildren {
+		status = workitems.WaitingChildren
+	} else if result.Outcome == workitems.WaitingUser {
+		status = workitems.WaitingUser
 	} else if result.Outcome != "succeeded" {
 		status = "blocked"
 	}
@@ -334,10 +420,42 @@ func (e *Engine) execute(project workitems.Workspace, item workitems.Item) (retu
 	update.Status = status
 	update.Result = raw
 	update.ChangeRequest = result.ChangeRequest
+	update.OperationError = errorText(runErr)
+	update.UserQuestion = result.UserQuestion
+	update.PendingCompaction = result.PendingCompaction
+	if result.PendingCompaction && update.OperationError == "" {
+		update.OperationError = result.Blocker
+	}
 	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, saveErr := c.UpdateAttempt(cleanup, attempt.ID, update)
 	return errors.Join(runErr, saveErr)
+}
+
+func continuationMember(ctx context.Context, c *library.Client, item workitems.Item) (string, workitems.Attempt, error) {
+	if item.ActiveAttemptID == "" {
+		return "", workitems.Attempt{}, nil
+	}
+	previous, err := c.GetAttempt(ctx, item.ActiveAttemptID)
+	if err != nil {
+		return "", previous, err
+	}
+	if item.HandoffMemberID != "" {
+		return item.HandoffMemberID, previous, nil
+	}
+	if item.ExecutionState == workitems.WaitingChildren || previous.Status == workitems.WaitingUser || previous.CanRetryCompaction() {
+		return previous.MemberID, previous, nil
+	}
+	if request := previous.ChangeRequest; request != nil && !request.Final() {
+		page, err := c.ListChildren(ctx, item.ID, previous.WorktreeID)
+		if err != nil {
+			return "", previous, err
+		}
+		if len(page.Items) > 0 {
+			return previous.MemberID, previous, nil
+		}
+	}
+	return "", previous, nil
 }
 
 // stop waits for an in-flight heartbeat before publishing a terminal result.
@@ -403,17 +521,53 @@ func (e *Engine) merge(project workitems.Workspace, item workitems.Item) (return
 	ctx, stop := e.heartbeat(c, a)
 	manager := gitwork.Manager{Root: filepath.Join(e.options.Directory, "worktrees")}
 	request := *a.ChangeRequest
+	candidate := a.MergeCandidate
+	var repairBase string
 	var mergeErr error
 	if a.Status == "closing" {
 		request, mergeErr = manager.Close(ctx, request)
 	} else {
 		mergeErr = (workspace.Store{Root: request.RepositoryRoot}).EnsureQGitLocallyIgnored(ctx)
 		if mergeErr == nil {
-			request, mergeErr = manager.Merge(ctx, request.RepositoryRoot, request)
+			for retry := 0; retry < 3; retry++ {
+				if candidate == nil {
+					var prepared change.MergeCandidate
+					prepared, mergeErr = manager.PrepareCandidate(ctx, request)
+					if mergeErr != nil {
+						if errors.Is(mergeErr, gitwork.ErrMergeConflict) {
+							repairBase = prepared.Target
+						} else if (errors.Is(mergeErr, gitwork.ErrMergeTreeUnavailable) || errors.Is(mergeErr, gitwork.ErrMergeCommitHooks)) && prepared.Target == request.BaseCommit {
+							request, mergeErr = manager.Merge(ctx, request.RepositoryRoot, request)
+						} else if errors.Is(mergeErr, gitwork.ErrMergeCommitHooks) || errors.Is(mergeErr, gitwork.ErrMergeTreeUnavailable) {
+							repairBase = prepared.Target
+						} else if errors.Is(mergeErr, gitwork.ErrReviewAlreadyInTarget) {
+							if adopted, err := manager.Merge(ctx, request.RepositoryRoot, request); !errors.Is(err, gitwork.ErrBaseMoved) {
+								request, mergeErr = adopted, err
+							}
+						}
+						break
+					}
+					candidate = &prepared
+					_, mergeErr = c.UpdateAttempt(ctx, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, MergeCandidate: candidate})
+					if mergeErr != nil {
+						break
+					}
+				}
+				request, mergeErr = manager.ApplyCandidate(ctx, request, *candidate)
+				if !errors.Is(mergeErr, gitwork.ErrBaseMoved) || retry == 2 {
+					break
+				}
+				candidate = nil
+			}
 		}
 	}
+	interrupted := ctx.Err() != nil
 	stop()
+	if interrupted && mergeErr != nil {
+		return mergeErr // The expired lease resumes the recorded Git operation.
+	}
 	status := "accepted"
+	landed := mergeErr != nil && request.Status == change.StatusMerged
 	if mergeErr != nil {
 		status = "merge_failed"
 		// Keep the original pinned request so retry can adopt the exact merge
@@ -428,7 +582,10 @@ func (e *Engine) merge(project workitems.Workspace, item workitems.Item) (return
 	}
 	cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err = c.UpdateAttempt(cleanup, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: status, ChangeRequest: &request, OperationError: errorText(mergeErr)})
+	_, err = c.UpdateAttempt(cleanup, a.ID, workitems.AttemptUpdate{Owner: a.Owner, Token: a.Token, Generation: a.Generation, Status: status, ChangeRequest: &request, OperationError: excerptBytes(errorText(mergeErr), 8000), RepairBase: repairBase, MergeLanded: landed})
+	if err == nil && mergeErr == nil && candidate != nil {
+		err = manager.DeleteCandidate(cleanup, request, *candidate)
+	}
 	return errors.Join(mergeErr, err)
 }
 func errorText(err error) string {

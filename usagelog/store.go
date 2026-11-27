@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/snowmerak/q/client"
@@ -19,9 +20,10 @@ import (
 const databaseFileName = "usage.sqlite"
 
 type Store struct {
-	db  *sql.DB
-	dir string
-	now func() time.Time
+	db        *sql.DB
+	dir       string
+	now       func() time.Time
+	archiveMu sync.RWMutex
 }
 
 func OpenStore(configDir string) (*Store, error) {
@@ -84,10 +86,10 @@ func (s *Store) initialize() error {
 	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return fmt.Errorf("usage: read schema version: %w", err)
 	}
-	if version > 1 {
-		return fmt.Errorf("usage: database schema version %d is newer than supported version 1", version)
+	if version > 2 {
+		return fmt.Errorf("usage: database schema version %d is newer than supported version 2", version)
 	}
-	if version == 1 {
+	if version == 2 {
 		return nil
 	}
 	tx, err := s.db.Begin()
@@ -95,7 +97,8 @@ func (s *Store) initialize() error {
 		return fmt.Errorf("usage: begin schema migration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, err = tx.Exec(`
+	if version == 0 {
+		_, err = tx.Exec(`
 CREATE TABLE IF NOT EXISTS usage_events (
   event_id TEXT PRIMARY KEY,
   occurred_at_ms INTEGER NOT NULL,
@@ -141,10 +144,14 @@ CREATE TABLE IF NOT EXISTS usage_imports (
   imported_at_ms INTEGER NOT NULL,
   PRIMARY KEY(source_path, source_sha256)
 ) STRICT;`)
-	if err != nil {
-		return fmt.Errorf("usage: initialize SQLite: %w", err)
+		if err != nil {
+			return fmt.Errorf("usage: initialize SQLite: %w", err)
+		}
 	}
-	if _, err := tx.Exec(`PRAGMA user_version = 1`); err != nil {
+	if _, err := tx.Exec(analyticsSchema); err != nil {
+		return fmt.Errorf("usage: initialize analytics: %w", err)
+	}
+	if _, err := tx.Exec(`PRAGMA user_version = 2`); err != nil {
 		return fmt.Errorf("usage: set schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -172,7 +179,15 @@ func (s *Store) Append(ctx context.Context, record client.UsageRecord) (bool, er
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	inserted, err := appendRecord(ctx, tx, record)
+	var inserted bool
+	if record.Performance == nil {
+		inserted, err = appendRecord(ctx, tx, record)
+		if err == nil && record.Attribution != (client.UsageAttribution{}) {
+			err = appendAttribution(ctx, tx, record)
+		}
+	} else {
+		inserted, err = appendPerformance(ctx, tx, record)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -207,8 +222,8 @@ ON CONFLICT(event_id) DO NOTHING`,
 	_, err = tx.ExecContext(ctx, `
 INSERT INTO usage_daily(
   day, model, role, calls, prompt_tokens, completion_tokens, total_tokens,
-  cached_tokens, cache_write_tokens, estimated_calls, cache_estimated_calls
-) VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+  cached_tokens, cache_write_tokens, estimated_calls, cache_estimated_calls, cache_hit_calls, cache_hit_samples
+) VALUES(?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(day, model, role) DO UPDATE SET
   calls = calls + 1,
   prompt_tokens = prompt_tokens + excluded.prompt_tokens,
@@ -217,10 +232,13 @@ ON CONFLICT(day, model, role) DO UPDATE SET
   cached_tokens = cached_tokens + excluded.cached_tokens,
   cache_write_tokens = cache_write_tokens + excluded.cache_write_tokens,
   estimated_calls = estimated_calls + excluded.estimated_calls,
-  cache_estimated_calls = cache_estimated_calls + excluded.cache_estimated_calls`,
+  cache_estimated_calls = cache_estimated_calls + excluded.cache_estimated_calls,
+  cache_hit_calls = cache_hit_calls + excluded.cache_hit_calls,
+  cache_hit_samples = cache_hit_samples + excluded.cache_hit_samples`,
 		record.At.UTC().Format("2006-01-02"), record.Model, record.Role,
 		record.PromptTokens, record.CompletionTokens, record.TotalTokens,
 		record.CachedTokens, record.CacheWriteTokens, boolInt(record.Estimated), boolInt(record.CacheEstimated),
+		boolInt(!record.CacheEstimated && record.CachedTokens > 0), boolInt(!record.CacheEstimated),
 	)
 	if err != nil {
 		return false, fmt.Errorf("usage: update daily rollup: %w", err)
@@ -250,6 +268,9 @@ func normalizeRecord(record *client.UsageRecord, now time.Time) error {
 		return errors.New("usage: model exceeds 256 bytes")
 	}
 	record.Role = normalizeRole(record.Role)
+	if err := validateAnalytics(record); err != nil {
+		return err
+	}
 	counts := []int{record.PromptTokens, record.CompletionTokens, record.TotalTokens, record.CachedTokens, record.CacheWriteTokens}
 	for _, count := range counts {
 		if count < 0 {
@@ -284,19 +305,23 @@ func (s *Store) Query(ctx context.Context, filter Filter) (UsageView, error) {
 		return UsageView{}, errors.New("usage: from must be before to")
 	}
 	view := UsageView{From: filter.From, To: filter.To}
+	s.archiveMu.RLock()
+	defer s.archiveMu.RUnlock()
 	var err error
 	if !filter.From.Before(s.currentTime().Add(-HotRetention)) && filter.To.Sub(filter.From) <= 48*time.Hour {
 		view.Resolution = "hour"
 		err = s.queryEvents(ctx, filter, &view)
-	} else if !filter.From.Before(s.currentTime().Add(-HotRetention)) {
-		view.Resolution = "day"
-		err = s.queryHybrid(ctx, filter, &view)
 	} else {
 		view.Resolution = "day"
-		err = s.queryDaily(ctx, filter, &view)
+		err = s.queryHybrid(ctx, filter, &view)
 	}
 	if err != nil {
 		return UsageView{}, err
+	}
+	if filter.Details {
+		if err := s.queryAnalytics(ctx, filter, &view); err != nil {
+			return UsageView{}, err
+		}
 	}
 	if view.Series == nil {
 		view.Series = []SeriesPoint{}
@@ -330,7 +355,7 @@ func (s *Store) queryEvents(ctx context.Context, filter Filter, view *UsageView)
 	where, args := eventWhere(filter)
 	return scanGroupedView(ctx, s.db, `
 SELECT strftime('%Y-%m-%dT%H:00:00Z', occurred_at_ms / 1000, 'unixepoch'), model, role, `+totalsSQL+`
-FROM usage_events WHERE `+where+` GROUP BY 1, 2, 3 ORDER BY 1`, args, view)
+FROM usage_events WHERE `+where+` GROUP BY 1, 2, 3 ORDER BY 1`, args, filter.Details, view)
 }
 
 func (s *Store) queryHybrid(ctx context.Context, filter Filter, view *UsageView) error {
@@ -345,34 +370,33 @@ AND (occurred_at_ms < ? OR occurred_at_ms >= ?)`, []any{
 	}, filter)
 	query := `
 WITH hybrid(day, model, role, calls, prompt_tokens, completion_tokens, total_tokens,
-            cached_tokens, cache_write_tokens, estimated_calls, cache_estimated_calls) AS (
+            cached_tokens, cache_write_tokens, estimated_calls, cache_estimated_calls, cache_hit_calls, cache_hit_samples) AS (
   SELECT day, model, role, ` + rollupColumnsSQL + ` FROM usage_daily WHERE ` + dailyWhere + `
   UNION ALL
   SELECT strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch'), model, role, ` + totalsSQL + `
   FROM usage_events WHERE ` + eventWhere + ` GROUP BY 1, 2, 3
 )
 SELECT day, model, role, ` + rollupTotalsSQL + ` FROM hybrid GROUP BY 1, 2, 3 ORDER BY 1`
-	return scanGroupedView(ctx, s.db, query, append(dailyArgs, eventArgs...), view)
-}
-
-func (s *Store) queryDaily(ctx context.Context, filter Filter, view *UsageView) error {
-	where, args := dailyWhere(filter)
-	return scanGroupedView(ctx, s.db, `SELECT day, model, role, `+rollupColumnsSQL+`
-FROM usage_daily WHERE `+where+` ORDER BY day`, args, view)
+	if err := scanGroupedView(ctx, s.db, query, append(dailyArgs, eventArgs...), filter.Details, view); err != nil {
+		return err
+	}
+	return s.mergeArchivedBoundaries(ctx, filter, view)
 }
 
 const totalsSQL = `COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
 COALESCE(SUM(total_tokens),0), COALESCE(SUM(cached_tokens),0), COALESCE(SUM(cache_write_tokens),0),
-COALESCE(SUM(estimated),0), COALESCE(SUM(cache_estimated),0)`
+COALESCE(SUM(estimated),0), COALESCE(SUM(cache_estimated),0),
+COALESCE(SUM(cache_estimated = 0 AND cached_tokens > 0),0), COALESCE(SUM(cache_estimated = 0),0)`
 
 const rollupTotalsSQL = `COALESCE(SUM(calls),0), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
 COALESCE(SUM(total_tokens),0), COALESCE(SUM(cached_tokens),0), COALESCE(SUM(cache_write_tokens),0),
-COALESCE(SUM(estimated_calls),0), COALESCE(SUM(cache_estimated_calls),0)`
+COALESCE(SUM(estimated_calls),0), COALESCE(SUM(cache_estimated_calls),0),
+COALESCE(SUM(cache_hit_calls),0), COALESCE(SUM(cache_hit_samples),0)`
 
 const rollupColumnsSQL = `calls, prompt_tokens, completion_tokens, total_tokens, cached_tokens,
-cache_write_tokens, estimated_calls, cache_estimated_calls`
+cache_write_tokens, estimated_calls, cache_estimated_calls, cache_hit_calls, cache_hit_samples`
 
-func scanGroupedView(ctx context.Context, db *sql.DB, query string, args []any, view *UsageView) (returnErr error) {
+func scanGroupedView(ctx context.Context, db *sql.DB, query string, args []any, details bool, view *UsageView) (returnErr error) {
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
@@ -386,19 +410,16 @@ func scanGroupedView(ctx context.Context, db *sql.DB, query string, args []any, 
 		var totals Totals
 		if err := rows.Scan(&bucket, &model, &role, &totals.Calls, &totals.PromptTokens,
 			&totals.CompletionTokens, &totals.TotalTokens, &totals.CachedTokens,
-			&totals.CacheWriteTokens, &totals.EstimatedCalls, &totals.CacheEstimatedCalls); err != nil {
+			&totals.CacheWriteTokens, &totals.EstimatedCalls, &totals.CacheEstimatedCalls, &totals.CacheHitCalls, &totals.CacheHitSamples); err != nil {
 			return err
 		}
+		if !details {
+			totals.CacheHitCalls, totals.CacheHitSamples = 0, 0
+		}
 		addTotals(&view.Totals, totals)
-		value := series[bucket]
-		addTotals(&value, totals)
-		series[bucket] = value
-		value = models[model]
-		addTotals(&value, totals)
-		models[model] = value
-		value = roles[role]
-		addTotals(&value, totals)
-		roles[role] = value
+		addGroupedTotals(series, bucket, totals)
+		addGroupedTotals(models, model, totals)
+		addGroupedTotals(roles, role, totals)
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -418,6 +439,14 @@ func addTotals(target *Totals, value Totals) {
 	target.CacheWriteTokens += value.CacheWriteTokens
 	target.EstimatedCalls += value.EstimatedCalls
 	target.CacheEstimatedCalls += value.CacheEstimatedCalls
+	target.CacheHitCalls += value.CacheHitCalls
+	target.CacheHitSamples += value.CacheHitSamples
+}
+
+func addGroupedTotals(groups map[string]Totals, key string, totals Totals) {
+	value := groups[key]
+	addTotals(&value, totals)
+	groups[key] = value
 }
 
 func sortedSeries(values map[string]Totals) []SeriesPoint {
@@ -450,16 +479,6 @@ func sortedDimensions(values map[string]Totals) []DimensionTotal {
 func eventWhere(filter Filter) (string, []any) {
 	where := "occurred_at_ms >= ? AND occurred_at_ms < ?"
 	args := []any{filter.From.UnixMilli(), filter.To.UnixMilli()}
-	return dimensionWhere(where, args, filter)
-}
-
-func dailyWhere(filter Filter) (string, []any) {
-	operator := "<="
-	if filter.To.Equal(floorUTCDay(filter.To)) {
-		operator = "<"
-	}
-	where := "day >= ? AND day " + operator + " ?"
-	args := []any{filter.From.Format("2006-01-02"), filter.To.Format("2006-01-02")}
 	return dimensionWhere(where, args, filter)
 }
 

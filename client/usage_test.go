@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
 
 type captureUsageRecorder struct {
@@ -27,6 +28,59 @@ func (r *captureUsageRecorder) snapshot() []UsageRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]UsageRecord(nil), r.records...)
+}
+
+type captureModelCallRecorder struct {
+	captureUsageRecorder
+	outcomes captureUsageRecorder
+}
+
+func (r *captureModelCallRecorder) RecordModelCall(record UsageRecord) error {
+	return r.outcomes.RecordUsage(record)
+}
+
+func TestUsageRecordsGenerationFailureRetryAndAttribution(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		attempts++
+		writer.Header().Set("Content-Type", "application/json")
+		if attempts == 1 {
+			writer.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(writer, `{"error":{"message":"rate limited"}}`)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"model":"provider/model","choices":[{"index":0,"message":{"role":"assistant","content":"partial"}}],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}`)
+	}))
+	defer server.Close()
+	recorder := &captureModelCallRecorder{}
+	configured, err := New(Config{
+		BaseURL: server.URL, DisableAPIKey: true, UsageRecorder: recorder,
+		Retry: RetryPolicy{MaxAttempts: 2, InitialBackoff: time.Millisecond},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := configured.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	ctx := WithUsageRole(WithUsageSubagent(WithUsageProject(t.Context(), "project-1", "Proj"), "builtin/reviewer"), "reviewer")
+	ctx = WithGenerationSettings(ctx, GenerationSettings{SafeReplay: true, RequireFinishReason: true})
+	_, err = RecoverGeneration(ctx, configured, ChatRequest{Model: "provider/model", Messages: []Message{{Role: RoleUser, Content: "hi"}}}, configured.Chat)
+	if incomplete, ok := errors.AsType[*IncompleteGeneration](err); !ok || incomplete.Reason != "missing_finish_reason" {
+		t.Fatalf("expected missing finish reason, got %v", err)
+	}
+	outcomes := recorder.outcomes.snapshot()
+	if len(outcomes) != 1 || outcomes[0].Model != "provider/model" || outcomes[0].Role != "reviewer" ||
+		outcomes[0].Performance.Status != "failed" || !outcomes[0].Performance.Retried || outcomes[0].Performance.DurationMS < 1 {
+		t.Fatalf("model outcomes = %#v", outcomes)
+	}
+	tokens := recorder.snapshot()
+	if len(tokens) != 1 || tokens[0].TotalTokens != 10 ||
+		tokens[0].Attribution != (UsageAttribution{ProjectID: "project-1", ProjectName: "Proj", Subagent: "builtin/reviewer"}) {
+		t.Fatalf("token records = %#v", tokens)
+	}
 }
 
 func TestChatRecordsRemoteTokenUsage(t *testing.T) {

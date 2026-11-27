@@ -19,10 +19,12 @@ func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{BuiltinInterviewerID, BuiltinJuniorDeveloperID, BuiltinManagerID, BuiltinResearchID, BuiltinSeniorDeveloperID}
+	want := []string{BuiltinCodeReviewerID, BuiltinJuniorDeveloperID, BuiltinManagerID, BuiltinResearchID, BuiltinSeniorDeveloperID}
 	listed := registry.List()
-	if _, found := registry.Get("builtin/reviewer"); found {
-		t.Fatal("separate reviewer subagent is still registered")
+	for _, id := range []string{"builtin/reviewer", "builtin/interviewer"} {
+		if _, found := registry.Get(id); found {
+			t.Fatalf("retired ID %q is still registered", id)
+		}
 	}
 	if slices.Contains(delegateNames(registry.Allowed("")), BuiltinJuniorDeveloperID) {
 		t.Fatal("junior developer must be assigned by a senior developer")
@@ -33,10 +35,10 @@ func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 		}
 	}
 	for name, wantGrants := range map[string][]string{
-		BuiltinInterviewerID:     {BuiltinResearchID},
-		BuiltinManagerID:         {BuiltinInterviewerID, BuiltinResearchID, BuiltinSeniorDeveloperID},
+		BuiltinManagerID:         {BuiltinResearchID, BuiltinSeniorDeveloperID},
 		BuiltinSeniorDeveloperID: {BuiltinJuniorDeveloperID, BuiltinResearchID},
 		BuiltinJuniorDeveloperID: {},
+		BuiltinCodeReviewerID:    {},
 		BuiltinResearchID:        {},
 	} {
 		got := delegateNames(registry.Allowed(name))
@@ -51,6 +53,11 @@ func TestBuiltinAgentDefinitionsArePublicAndBounded(t *testing.T) {
 	senior, found := registry.Get(BuiltinSeniorDeveloperID)
 	if !found || senior.Info.Role != config.AgentRoleReviewer || !senior.Info.MutatesWorkspace {
 		t.Fatalf("senior developer definition = %#v", senior)
+	}
+	reviewer, found := registry.Get(BuiltinCodeReviewerID)
+	if !found || reviewer.Info.Role != config.AgentRoleReviewer || reviewer.Info.MutatesWorkspace ||
+		profileMayMutate(reviewer.Tools) || !slices.Contains(reviewer.Tools, "ticket_change_read") {
+		t.Fatalf("read-only reviewer definition = %#v", reviewer)
 	}
 	for _, required := range []string{"loom_read", "edit_file", "write_file", "create_directory", "move_path", "copy_path", "remove_path", "run_command"} {
 		if !slices.Contains(senior.Tools, required) {

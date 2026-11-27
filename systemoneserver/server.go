@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/snowmerak/decisions"
 	"github.com/snowmerak/q/client/systemone"
 	"github.com/snowmerak/q/systemoneconfig"
 )
@@ -102,7 +103,7 @@ func (s *Server) evaluate(writer http.ResponseWriter, request *http.Request) {
 	providerID, backendModel := s.routeModel(model)
 	client := s.clients[providerID]
 	if client == nil || backendModel == "" {
-		writeError(writer, http.StatusBadRequest, "unknown System One provider or model")
+		writeError(writer, http.StatusBadRequest, "unknown Decisions provider or model")
 		return
 	}
 	fields["model"], _ = json.Marshal(backendModel)
@@ -115,6 +116,10 @@ func (s *Server) evaluate(writer http.ResponseWriter, request *http.Request) {
 		IdempotencyKey: request.Header.Get("Idempotency-Key"),
 	})
 	if err != nil {
+		if errors.Is(err, decisions.ErrInvalidRequest) || errors.Is(err, decisions.ErrUnsupported) {
+			writeError(writer, http.StatusBadRequest, err.Error())
+			return
+		}
 		var apiErr *systemone.APIError
 		if errors.As(err, &apiErr) {
 			copyHeaders(writer.Header(), apiErr.Header)
@@ -123,7 +128,7 @@ func (s *Server) evaluate(writer http.ResponseWriter, request *http.Request) {
 			_, _ = writer.Write(apiErr.Body)
 			return
 		}
-		writeError(writer, http.StatusBadGateway, "System One provider request failed")
+		writeError(writer, http.StatusBadGateway, "Decisions provider request failed")
 		return
 	}
 	copyHeaders(writer.Header(), result.Header)

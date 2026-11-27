@@ -32,6 +32,11 @@ waiting list reflects current source state without changing the ticket revision.
 Up to 64 direct prerequisites are supported. Self references, duplicates,
 cycles, deleted tickets, issues and tickets from other projects are rejected.
 
+Prerequisites must share the same merge scope. Top-level tickets can depend on
+other top-level tickets. A child can depend on siblings under the same parent
+worktree. For changes needed on the project branch, depend on the top-level
+ticket that integrates those changes. See the [Library ticket workflow](library.md).
+
 Relationships are editable before the first execution and on recurring
 templates. Active and historical attempts retain their work contract. Each
 recurring run copies its template's current dependencies. A recurring template
@@ -46,6 +51,6 @@ continues to satisfy existing dependents.
 Library commits dependency edges with ticket metadata and rejects a cyclic
 update atomically. It filters the assignment queue by readiness and checks
 again in the fenced reservation transaction. Relationships survive restart;
-existing tickets start with no prerequisites. Catalog schema 9 and Library
-protocol 13 prevent older coordinators from ignoring dependencies. Restart
+existing tickets start with no prerequisites. Catalog schema 10 and Library
+protocol 15 include child-ticket coordination, role requests and merge recovery. Restart
 Studio/Library using the updated Q binary when upgrading.

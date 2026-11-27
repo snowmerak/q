@@ -21,17 +21,18 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/acpadapter"
+	"github.com/snowmerak/q/internal/workitemtools"
 	"github.com/snowmerak/q/third_party/acp-go-sdk"
 )
 
 type acpAgentCommand struct {
-	name          string
-	args          []string
-	env           map[string]string
-	display       string
-	installPreset string
-	mcpServers    []acp.McpServer
-	browserStore  *config.Store
+	name             string
+	args             []string
+	env              map[string]string
+	display          string
+	installPreset    string
+	mcpServers       []acp.McpServer
+	ticketCompaction bool
 }
 
 type acpRemoteConnection interface {
@@ -70,12 +71,15 @@ type acpRemoteClient struct {
 	sessionCheckpoint       *acpSessionCheckpoint
 	configOptions           []acp.SessionConfigOption
 	mcpServers              []acp.McpServer
+	libraryInstructions     string
 	libraryInstructionsSent bool
 	libraryRoleInstructions string
-	browserStore            *config.Store
-	lastBrowserPreference   string
+	projectLibrary          bool
+	// Last preference delivered by an older Q version, for one-time withdrawal.
+	lastBrowserPreference string
 
 	slashCommandsBySession map[acp.SessionId][]slashCommand
+	compactions            map[acpCompactionKey]struct{}
 
 	stdin          io.WriteCloser
 	processContext context.Context
@@ -87,17 +91,21 @@ type acpRemoteClient struct {
 }
 
 type acpRemoteTurn struct {
-	ctx             context.Context
-	events          chan<- agentEvent
-	display         string
-	mu              sync.Mutex
-	response        strings.Builder
-	contentParts    []client.MessageContentPart
-	structured      bool
-	responseStarted bool
-	thoughtStarted  bool
-	toolTitles      map[acp.ToolCallId]string
-	toolCalls       map[acp.ToolCallId]struct{}
+	compacting       bool
+	compactionIDs    map[string]bool
+	compactionStatus string
+	ctx              context.Context
+	events           chan<- agentEvent
+	observe          func(acp.SessionUpdate)
+	display          string
+	mu               sync.Mutex
+	response         strings.Builder
+	contentParts     []client.MessageContentPart
+	structured       bool
+	responseStarted  bool
+	thoughtStarted   bool
+	toolTitles       map[acp.ToolCallId]string
+	toolCalls        map[acp.ToolCallId]struct{}
 }
 
 type acpSessionResetMsg struct {
@@ -217,7 +225,15 @@ func startACPRemoteClientWithResume(
 	}
 	wait := make(chan error, 1)
 	go func() {
-		wait <- cmd.Wait()
+		err := cmd.Wait()
+		// Windows can deny TerminateProcess when the peer exits concurrently.
+		// The reaped process state establishes whether it actually exited cleanly.
+		var stopErr *os.SyscallError
+		if cmd.ProcessState != nil && cmd.ProcessState.Success() && errors.As(err, &stopErr) &&
+			stopErr.Syscall == "TerminateProcess" && errors.Is(stopErr, os.ErrPermission) {
+			err = nil
+		}
+		wait <- err
 		close(wait)
 	}()
 
@@ -225,12 +241,18 @@ func startACPRemoteClientWithResume(
 		root: root, agent: strings.ToLower(command.display), display: command.display,
 		command: strings.Join(append([]string{filepath.Base(command.name)}, command.args...), " "),
 		stdin:   stdin, cancel: cancel, processContext: processContext, processDone: wait, stderr: stderr,
-		mcpServers: command.mcpServers, browserStore: command.browserStore,
+		mcpServers: command.mcpServers,
 	}
 	if remote.mcpServers == nil {
 		remote.mcpServers = []acp.McpServer{}
 	}
-	connection := acp.NewClientSideConnection(remote, stdin, stdout)
+	var input io.Writer = stdin
+	var output io.Reader = stdout
+	if command.ticketCompaction {
+		input = acpCompactionWriter{stdin}
+		output = newACPCompactionReader(stdout, remote.observeCompaction)
+	}
+	connection := acp.NewClientSideConnection(remote, input, output)
 	connection.SetLogger(slog.New(slog.NewTextHandler(stderr, nil)))
 	remote.connection = connection
 
@@ -367,9 +389,9 @@ func (r *acpRemoteClient) close(closeSession bool) error {
 	return r.closeErr
 }
 
-func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events chan<- agentEvent) {
+func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events chan<- agentEvent, images ...string) {
 	defer close(events)
-	result, toolCalls, err := r.prompt(ctx, content, events)
+	result, toolCalls, err := r.prompt(ctx, content, events, images...)
 	if err != nil {
 		emitAgentEvent(ctx, events, agentEvent{err: err})
 		return
@@ -377,26 +399,26 @@ func (r *acpRemoteClient) runPrompt(ctx context.Context, content string, events 
 	emitAgentEvent(ctx, events, agentEvent{response: result, toolCalls: toolCalls})
 }
 
-func (r *acpRemoteClient) prompt(ctx context.Context, content string, events chan<- agentEvent) (*client.ChatResponse, int, error) {
+func (r *acpRemoteClient) prompt(ctx context.Context, content string, events chan<- agentEvent, images ...string) (*client.ChatResponse, int, error) {
+	return r.promptWithUpdates(ctx, content, events, nil, images...)
+}
+
+func (r *acpRemoteClient) promptWithUpdates(ctx context.Context, content string, events chan<- agentEvent, observe func(acp.SessionUpdate), images ...string) (*client.ChatResponse, int, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
-	browserPreference := ""
-	if r.browserStore != nil {
-		value, err := r.browserStore.Load()
-		if err != nil {
-			return nil, 0, fmt.Errorf("load browser preference: %w", err)
-		}
-		browserPreference = browsercontrol.Prompt(value.BrowserControl)
-	}
 	turn := &acpRemoteTurn{
-		ctx: ctx, events: events, display: r.display,
+		ctx: ctx, events: events, observe: observe, display: r.display,
 		toolTitles: make(map[acp.ToolCallId]string), toolCalls: make(map[acp.ToolCallId]struct{}),
 	}
 	r.mu.Lock()
 	if r.turn != nil {
 		r.mu.Unlock()
 		return nil, 0, errors.New("another ACP turn is already active")
+	}
+	if len(images) != 0 && !r.capabilities.PromptCapabilities.Image {
+		r.mu.Unlock()
+		return nil, 0, errors.New("the selected ACP agent does not accept images")
 	}
 	r.turn = turn
 	connection := r.connection
@@ -407,15 +429,13 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	initialContext := r.initialContext
 	r.initialContext = ""
 	content, libraryInstructions := r.libraryPrompt(content, initialContext)
-	previousPreference := r.lastBrowserPreference
-	if r.browserStore != nil {
-		previous := []client.Message{}
-		if previousPreference != "" {
-			previous = append(previous, client.Message{Role: client.RoleUser, Content: "<q_browser_control>\n" + previousPreference + "\n</q_browser_control>"})
+	clearBrowserPreference := r.lastBrowserPreference != ""
+	if clearBrowserPreference {
+		messages := []client.Message{
+			{Role: client.RoleUser, Content: "<q_browser_control>\n" + r.lastBrowserPreference + "\n</q_browser_control>"},
+			{Role: client.RoleUser, Content: content},
 		}
-		previous = append(previous, client.Message{Role: client.RoleUser, Content: content})
-		updated := browsercontrol.AppendPreference(previous, browserPreference)
-		content = updated[len(updated)-1].TextContent()
+		content = browsercontrol.AppendPreference(messages, "")[1].TextContent()
 	}
 	r.mu.Unlock()
 	defer func() {
@@ -429,6 +449,11 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	promptBlocks, err := acpPromptBlocksForText(root, content, embeddedContext)
 	if err != nil {
 		return nil, 0, err
+	}
+	for _, image := range images {
+		header, data, _ := strings.Cut(image, ",")
+		mime := strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")
+		promptBlocks = append(promptBlocks, acp.ImageBlock(data, mime))
 	}
 	response, err := connection.Prompt(ctx, acp.PromptRequest{
 		SessionId: sessionID,
@@ -445,9 +470,9 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 		r.libraryInstructionsSent = true
 		r.mu.Unlock()
 	}
-	if r.browserStore != nil {
+	if clearBrowserPreference {
 		r.mu.Lock()
-		r.lastBrowserPreference = browserPreference
+		r.lastBrowserPreference = ""
 		r.mu.Unlock()
 	}
 	message, toolCalls := turn.result()
@@ -469,8 +494,12 @@ func (r *acpRemoteClient) prompt(ctx context.Context, content string, events cha
 	return result, toolCalls, nil
 }
 
-func (r *acpRemoteClient) promptText(ctx context.Context, content string) (string, error) {
-	response, _, err := r.prompt(ctx, content, nil)
+func (r *acpRemoteClient) promptText(ctx context.Context, content string, images ...string) (string, error) {
+	return r.promptTextWithUpdates(ctx, content, nil, images...)
+}
+
+func (r *acpRemoteClient) promptTextWithUpdates(ctx context.Context, content string, observe func(acp.SessionUpdate), images ...string) (string, error) {
+	response, _, err := r.promptWithUpdates(ctx, content, nil, observe, images...)
 	if err != nil {
 		return "", err
 	}
@@ -553,18 +582,28 @@ func (r *acpRemoteClient) SessionUpdate(ctx context.Context, notification acp.Se
 	if notification.SessionId != sessionID || turn == nil {
 		return nil
 	}
-	return turn.update(ctx, notification.Update)
+	if err := turn.update(ctx, notification.Update); err != nil {
+		return err
+	}
+	if turn.observe != nil {
+		turn.observe(notification.Update)
+	}
+	return nil
 }
 
 func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.RequestPermissionRequest) (acp.RequestPermissionResponse, error) {
 	r.mu.Lock()
 	turn := r.turn
 	permissions := r.permissions
+	projectLibrary := r.projectLibrary
 	r.mu.Unlock()
-	if turn == nil {
+	if turn == nil || turn.compacting {
 		return cancelledPermission(), nil
 	}
 	if permissions == acpPermissionReadOnly {
+		if projectLibrary && qualifiedLibraryTool(request.ToolCall) {
+			return allowOncePermission(request), nil
+		}
 		return readOnlyPermission(request), nil
 	}
 	if permissions == acpPermissionAutomatic {
@@ -606,18 +645,67 @@ func (r *acpRemoteClient) RequestPermission(ctx context.Context, request acp.Req
 	}
 }
 
+// ACP tool titles can be descriptive. Only use a provider's explicit qualified
+// tool identifier, never a match on the human-readable description.
+func qualifiedLibraryTool(call acp.ToolCallUpdate) bool {
+	if call.Title == nil {
+		return false
+	}
+	args, ok := call.RawInput.(map[string]any)
+	if !ok {
+		return false
+	}
+	// An external command must not borrow a Library tool's permission by
+	// looking like its display title.
+	for _, field := range []string{"command", "cmd", "path"} {
+		if _, exists := args[field]; exists {
+			return false
+		}
+	}
+	hasString := func(key string) bool {
+		_, exists := args[key].(string)
+		return exists
+	}
+	for _, prefix := range []string{"mcp__q-library__", "q-library/", "Run mcp_q-library_"} {
+		name, ok := strings.CutPrefix(*call.Title, prefix)
+		if !ok || !workitemtools.IsCollaborationTool(name) {
+			continue
+		}
+		switch name {
+		case "issue_create", "ticket_create":
+			return hasString("title") && hasString("content")
+		case "issue_reply", "ticket_reply", "post_update":
+			return hasString("id") && hasString("content")
+		case "issue_update", "ticket_update":
+			return hasString("id") && hasString("title")
+		case "post_get", "issue_get", "ticket_get":
+			return hasString("id")
+		case "search_work":
+			return hasString("query")
+		case "issue_list", "ticket_list":
+			return true
+		}
+	}
+	return false
+}
+
 func readOnlyPermission(request acp.RequestPermissionRequest) acp.RequestPermissionResponse {
 	if request.ToolCall.Kind == nil {
 		return cancelledPermission()
 	}
 	switch *request.ToolCall.Kind {
 	case acp.ToolKindRead, acp.ToolKindSearch, acp.ToolKindFetch, acp.ToolKindThink:
-		for _, option := range request.Options {
-			if option.Kind == acp.PermissionOptionKindAllowOnce {
-				return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{
-					Selected: &acp.RequestPermissionOutcomeSelected{OptionId: option.OptionId},
-				}}
-			}
+		return allowOncePermission(request)
+	}
+	return cancelledPermission()
+}
+
+func allowOncePermission(request acp.RequestPermissionRequest) acp.RequestPermissionResponse {
+	for _, option := range request.Options {
+		if option.Kind == acp.PermissionOptionKindAllowOnce {
+			return acp.RequestPermissionResponse{Outcome: acp.RequestPermissionOutcome{
+				Selected: &acp.RequestPermissionOutcomeSelected{OptionId: option.OptionId},
+			}}
 		}
 	}
 	return cancelledPermission()

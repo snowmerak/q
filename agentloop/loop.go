@@ -56,6 +56,8 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 	if !catalogHas(availableTools, taskCompleteToolName) {
 		activeTask = nil
 	}
+	toolTokens := memory.CountTools(availableTools)
+	var replacement *ContextReplacement
 	hintedSkillIDs := knownSkillIDs(history)
 	if len(history) > 0 && history[len(history)-1].Role == client.RoleUser {
 		index := len(history) - 1
@@ -79,14 +81,25 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 		}
 		if updated.TextContent() != original.TextContent() {
 			history[index] = updated
-			replacement := &ContextReplacement{Index: index, Message: updated}
-			if !emitEvent(ctx, events, Event{contextReplace: replacement}) {
-				return
-			}
+			replacement = &ContextReplacement{Index: index, Message: updated}
 		}
 	}
-	loopContext := newAgentLoopContext(contextPolicy, history, availableTools)
+	if (replacement != nil || toolTokens > 0) &&
+		!emitEvent(ctx, events, Event{contextReplace: replacement, toolTokenEstimate: toolTokens}) {
+		return
+	}
+	loopContext := newAgentLoopContext(contextPolicy, history, toolTokens)
 	loopContext.extra = requestExtra
+	loopContext.manager.ObserveUsage(request.PromptUsage.InputTokens, request.PromptUsage.LocalEstimate)
+	observePrompt := func(response *client.ChatResponse, requestEstimate int) bool {
+		usage := client.ContextUsage(response)
+		if usage.PromptTokens <= 0 {
+			return true
+		}
+		loopContext.Observe(usage, requestEstimate)
+		observation := loopContext.manager.PromptUsage()
+		return emitEvent(ctx, events, Event{promptUsage: &observation})
+	}
 	toolCalls := 0
 	taskStarted := activeTask != nil
 	var deliveredReply *client.Message
@@ -175,8 +188,8 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 			emitEvent(ctx, events, Event{err: err})
 			return
 		}
-		if response != nil {
-			loopContext.Observe(client.ContextUsage(response), requestEstimate)
+		if !observePrompt(response, requestEstimate) {
+			return
 		}
 		if response == nil || len(response.Choices) == 0 {
 			emitEvent(ctx, events, Event{response: response, complete: true})
@@ -480,6 +493,9 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 					if response != nil && response.ConversationID != "" {
 						conversationID = response.ConversationID
 					}
+					if err == nil && !observePrompt(response, requestEstimate) {
+						return nil, ctx.Err()
+					}
 					return response, err
 				}, func(message client.Message) error {
 					// The final provider reply is handled once below. Preserve extra
@@ -509,7 +525,6 @@ func RunAgentLoop(ctx context.Context, request Request, events chan<- Event) {
 				if providerReply.Role == "" {
 					providerReply.Role = client.RoleAssistant
 				}
-				loopContext.Observe(client.ContextUsage(response), requestEstimate)
 				if !appendHistory(providerReply) {
 					return
 				}

@@ -19,6 +19,7 @@ import (
 	"github.com/snowmerak/q/client"
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/internal/hostruntime"
+	"github.com/snowmerak/q/internal/workmedia"
 	"github.com/snowmerak/q/mcpconfig"
 	"github.com/snowmerak/q/memory"
 	"github.com/snowmerak/q/sessionstore"
@@ -1251,6 +1252,7 @@ func (a *acpAgent) runAgentTurn(ctx context.Context, history []client.Message) (
 			a.state.gatewayConfig, a.state.activeConfig().ModelGroups, a.state.activeModel(), nil,
 		),
 		ContextPolicy:     memoryPolicy(a.state.activeConfig()),
+		PromptUsage:       a.state.memory.PromptUsage(),
 		BrowserPreference: a.state.browserPreference(),
 	}, events)
 
@@ -1289,6 +1291,10 @@ func (a *acpAgent) continueACPAgentTurn(
 	}()
 
 	for event := range events {
+		if event.promptUsage != nil {
+			a.state.memory.ObserveUsage(event.promptUsage.InputTokens, event.promptUsage.LocalEstimate)
+			a.publishUsageUpdate()
+		}
 		if event.activity != nil {
 			progress := strings.TrimSpace(strings.Join([]string{acpTraceAgentLabel(event.activity.Agent, event.activity.TaskID), event.activity.Action, event.activity.Detail}, " · "))
 			if progress != "" {
@@ -1312,6 +1318,10 @@ func (a *acpAgent) continueACPAgentTurn(
 			if err := a.state.memory.Replace(event.contextReplace.Index, event.contextReplace.Message); err != nil {
 				return acp.PromptResponse{}, fmt.Errorf("update model context: %w", err)
 			}
+		}
+		if event.toolTokenEstimate > 0 {
+			a.state.memory.ReserveToolTokens(event.toolTokenEstimate)
+			a.publishUsageUpdate()
 		}
 		if event.compaction != nil {
 			if err := a.state.persistAgentCompaction(event); err != nil {
@@ -1430,7 +1440,7 @@ func (a *acpAgent) continueACPAgentTurn(
 			return acp.PromptResponse{}, event.err
 		}
 		if event.response != nil {
-			return a.finishPrompt(*event.response, event.requestEstimate, streamedResponse, event.responseContext, event.replyAlreadyEmitted)
+			return a.finishPrompt(*event.response, streamedResponse, event.responseContext, event.replyAlreadyEmitted)
 		}
 	}
 
@@ -1462,7 +1472,7 @@ func (a *acpAgent) finishCancelledPrompt() acp.PromptResponse {
 	return acp.PromptResponse{StopReason: acp.StopReasonCancelled}
 }
 
-func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate int, streamedResponse *string, responseContext *client.Message, replyAlreadyEmitted bool) (acp.PromptResponse, error) {
+func (a *acpAgent) finishPrompt(response client.ChatResponse, streamedResponse *string, responseContext *client.Message, replyAlreadyEmitted bool) (acp.PromptResponse, error) {
 	if len(response.Choices) == 0 {
 		return acp.PromptResponse{}, errors.New("model returned no response choices")
 	}
@@ -1481,7 +1491,6 @@ func (a *acpAgent) finishPrompt(response client.ChatResponse, requestEstimate in
 		contextMessage = *responseContext
 	}
 	a.state.memory.Append(contextMessage)
-	a.state.memory.ObserveUsage(client.ContextUsage(&response).PromptTokens, requestEstimate)
 	a.state.conversationID = response.ConversationID
 	if !replyAlreadyEmitted {
 		a.state.archiveMessage(message, sessionstore.StatusSucceeded, false)
@@ -1719,6 +1728,7 @@ func (a *acpAgent) emitAvailableCommandsContext(ctx context.Context) error {
 func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptResponse, bool, error) {
 	command := strings.TrimSpace(text)
 	var output string
+	var compactionStatus string
 	switch {
 	case retiredLoopModeCommand(command):
 		output = "Loop modes were removed. Ordinary chat can use direct tools and issue tickets for subagent work."
@@ -1738,12 +1748,14 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	case command == "/compact":
 		if !hasCompactionHistory(a.state.memory.Messages()) {
 			output = "Nothing to compact."
+			compactionStatus = "not_needed"
 			break
 		}
 		before := a.state.memory.PredictedTokens()
 		if err := a.compactContext(ctx, true); err != nil {
 			if errors.Is(err, memory.ErrNothingToCompact) {
 				output = "Nothing to compact."
+				compactionStatus = "not_needed"
 				break
 			}
 			a.state.archiveFailure("ACP context compaction failed", err)
@@ -1751,6 +1763,7 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 			return acp.PromptResponse{}, true, err
 		}
 		output = fmt.Sprintf("Context compacted · %s → %s", formatTokens(before), formatTokens(a.state.memory.PredictedTokens()))
+		compactionStatus = "completed"
 		if err := a.state.flushArchive(); err != nil {
 			output += " · archive: " + err.Error()
 		}
@@ -1765,7 +1778,11 @@ func (a *acpAgent) runACPCommand(ctx context.Context, text string) (acp.PromptRe
 	if err := a.updateContext(ctx, acp.UpdateAgentMessageText(output)); err != nil {
 		return acp.PromptResponse{}, true, err
 	}
-	return acp.PromptResponse{StopReason: acp.StopReasonEndTurn}, true, nil
+	response := acp.PromptResponse{StopReason: acp.StopReasonEndTurn}
+	if compactionStatus != "" {
+		response.Meta = map[string]any{acpCompactionMeta: compactionStatus}
+	}
+	return response, true, nil
 }
 
 func renderACPCommandHelp() string {
@@ -2012,6 +2029,14 @@ func acpImageDataURI(data, mimeType string) (string, error) {
 	}
 	if len(decoded) > maximumImageBytes {
 		return "", fmt.Errorf("ACP image exceeds %d bytes", maximumImageBytes)
+	}
+	image := workmedia.Image{Data: decoded}
+	if workmedia.Supported(image.MIME()) {
+		resized, err := workmedia.Resize(image, workmedia.DefaultMaxEdge, maximumImageBytes)
+		if err != nil {
+			return "", fmt.Errorf("prepare ACP image: %w", err)
+		}
+		return resized.URL(), nil
 	}
 	return "data:" + mimeType + ";base64," + data, nil
 }

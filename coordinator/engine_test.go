@@ -246,6 +246,12 @@ func TestEngineAssignmentResultInboxAndNoDuplicateExecution(t *testing.T) {
 		if r.Header.Get("Idempotency-Key") == "" {
 			t.Error("assignment has no receipt key")
 		}
+		var request struct {
+			State map[string]any `json:"state"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.State["requested_role"] != config.AgentRoleResearch {
+			t.Errorf("Decisions did not receive the requested role: %+v %v", request.State, err)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"answers": map[string]any{"assignee": map[string]string{"type": "choice", "choice": member.ID}}})
 	}))
 	defer decision.Close()
@@ -278,7 +284,7 @@ func TestEngineAssignmentResultInboxAndNoDuplicateExecution(t *testing.T) {
 		}
 		return nil
 	}}}
-	item, err := c.CreateItem(ctx, workitems.CreateInput{WorkspaceID: project.ID, Kind: workitems.Ticket, Title: "Inspect", Content: "Verify", Author: "user"})
+	item, err := c.CreateItem(ctx, workitems.CreateInput{WorkspaceID: project.ID, Kind: workitems.Ticket, Title: "Inspect", Content: "Verify", Author: "user", RequestedRole: config.AgentRoleResearch})
 	if err != nil {
 		t.Fatal(err)
 	}

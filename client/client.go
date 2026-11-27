@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	llmprovider "github.com/snowmerak/llm-provider"
 	provideropenai "github.com/snowmerak/llm-provider/providers/openai"
@@ -138,7 +139,7 @@ func validateConfig(config Config) error {
 // request omits Model.
 func (c *Client) Chat(ctx context.Context, request ChatRequest) (response *ChatResponse, err error) {
 	request.Model = c.model(request.Model)
-	call := startModelCall(ctx, request.Model, c.apiMode(request.Model), false)
+	call := startModelCall(ctx, request.Model, c.apiMode(request.Model), false, c.usageRecorder)
 	defer func() {
 		call.observeResponse(response)
 		call.finish(err, "completed")
@@ -149,16 +150,19 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest) (response *ChatR
 	}
 	if c.apiMode(request.Model) == "responses" {
 		return retryRequest(&requestRetry{ctx: ctx, policy: policy}, func() (*ChatResponse, error) {
-			return c.responsesChat(ctx, request)
+			call.startAttempt()
+			return c.responsesChat(ctx, request, call)
 		})
 	}
 	usageContext := ctx
 	response, err = retryRequest(&requestRetry{ctx: ctx, policy: policy}, func() (*ChatResponse, error) {
+		call.startAttempt()
 		attempt := request
 		usageContext, attempt.Headers = c.withUsageMetadata(ctx, request.Headers, "")
 		return c.inner.Chat(usageContext, attempt)
 	})
 	if response != nil {
+		call.observeCompletion(time.Now())
 		c.recordChatUsage(usageContext, request, response.Model, response.Usage, estimateResponseTokens(response))
 	}
 	return response, err
@@ -168,13 +172,14 @@ func (c *Client) Chat(ctx context.Context, request ChatRequest) (response *ChatR
 // returned stream.
 func (c *Client) ChatStream(ctx context.Context, request ChatRequest) (Stream, error) {
 	request.Model = c.model(request.Model)
-	call := startModelCall(ctx, request.Model, c.apiMode(request.Model), true)
+	call := startModelCall(ctx, request.Model, c.apiMode(request.Model), true, c.usageRecorder)
 	policy, err := c.generationRetryPolicy(ctx, request.Model)
 	if err != nil {
 		call.finish(err, "failed")
 		return nil, err
 	}
 	stream, err := openRetryStream(ctx, policy, func(attemptContext context.Context) (retryStreamSource[ChatChunk], error) {
+		call.startAttempt()
 		return c.chatStream(attemptContext, request, call)
 	})
 	if err != nil {
@@ -202,7 +207,7 @@ func (c *Client) chatStream(ctx context.Context, request ChatRequest, call *mode
 	}
 	tracked := &usageStream{
 		inner: stream, client: c, request: request, call: call,
-		role: usageRole(ctx), eventID: usageEventID(ctx),
+		ctx: ctx,
 	}
 	if headers, ok := stream.(ResponseHeaderer); ok {
 		return &usageHeaderStream{usageStream: tracked, headers: headers}, nil
@@ -232,7 +237,7 @@ func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 // Embed creates embeddings, using DefaultModel when request.Model is empty.
 func (c *Client) Embed(ctx context.Context, request EmbeddingRequest) (response *EmbeddingResponse, err error) {
 	request.Model = c.model(request.Model)
-	call := startModelCall(WithUsageRole(ctx, "embedding"), request.Model, "embeddings", false)
+	call := startModelCall(WithUsageRole(ctx, "embedding"), request.Model, "embeddings", false, c.usageRecorder)
 	defer func() {
 		if response != nil {
 			call.observeUsage(response.Model, Usage{PromptTokens: response.Usage.PromptTokens, TotalTokens: response.Usage.TotalTokens})
@@ -241,11 +246,13 @@ func (c *Client) Embed(ctx context.Context, request EmbeddingRequest) (response 
 	}()
 	usageContext := ctx
 	response, err = retryRequest(&requestRetry{ctx: ctx, policy: c.retry}, func() (*EmbeddingResponse, error) {
+		call.startAttempt()
 		attempt := request
 		usageContext, attempt.Headers = c.withUsageMetadata(ctx, request.Headers, "embedding")
 		return c.provider.Embed(usageContext, attempt)
 	})
 	if response != nil {
+		call.observeCompletion(time.Now())
 		c.recordEmbeddingUsage(usageContext, request, response)
 	}
 	return response, err

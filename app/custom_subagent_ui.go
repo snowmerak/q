@@ -731,6 +731,9 @@ func (m model) saveCustom() (tea.Model, tea.Cmd) {
 		p.MutatesWorkspace = c.inputs[customFieldAccess].Value() == "mutates workspace"
 	} else {
 		p.Role = strings.TrimSpace(c.inputs[customFieldRole].Value())
+		if c.original != nil {
+			p.Target = c.original.Profile.Target
+		}
 		p.Tools = []string{}
 		p.Delegates = []string{}
 		for toolName, selected := range c.tools {
@@ -746,7 +749,7 @@ func (m model) saveCustom() (tea.Model, tea.Cmd) {
 		}
 		sort.Strings(p.Delegates)
 	}
-	if p.Kind == subagent.AgentKindInner && !m.activeConfig().HasNativeRole(p.Role) {
+	if p.Kind == subagent.AgentKindInner && p.Target == nil && p.Role != "" && !m.activeConfig().HasNativeRole(p.Role) {
 		err = fmt.Errorf("unknown native role %q", p.Role)
 	} else if p.Kind == subagent.AgentKindExternal {
 		if _, found := m.activeConfig().Agents.Connections[p.Agent]; !found {
@@ -784,7 +787,7 @@ func (m model) validateCustomDelegates(profile subagent.Profile, scope string, o
 		if entry.Err != nil || original != nil && entry.Path == original.Path {
 			continue
 		}
-		definition, err := definitionForStoredProfile(entry)
+		definition, err := subagent.StoredDefinitionForProfile(entry)
 		if err != nil {
 			return err
 		}

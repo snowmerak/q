@@ -121,10 +121,15 @@ func TestSettingsTransferMergesSelectedItemsAndPreservesSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	selection := config.ACPSelection{AgentModel: "deep", AgentReasoningEffort: "max"}
 	bundle := transferTestBundle(t, map[string]map[string]any{
-		"models":       {"group/new": []modelCandidateSettings{{Model: "local/new", Timeout: "30s"}}, "role/coder": transferRole{Group: "new", ReasoningEffort: "high"}},
-		"runtime":      {"parallel-agents": 7},
-		"subagents":    {"connection/codex": config.AgentConnectionConfig{Preset: "codex", Args: []string{"--stdio"}}, "binding/search": "codex"},
+		"models":  {"group/new": []modelCandidateSettings{{Model: "local/new", Timeout: "30s"}}, "role/coder": transferRole{Group: "new", ReasoningEffort: "high"}},
+		"runtime": {"parallel-agents": 7},
+		"subagents": {
+			"connection/codex": config.AgentConnectionConfig{Preset: "codex", Args: []string{"--stdio"}},
+			"binding/search":   "codex",
+			"binding/" + config.AgentRoleExternalWebTester: config.SubagentTarget{Agent: "codex", ACPSelection: selection},
+		},
 		"integrations": {"mcp-server/docs": mcpconfig.ServerConfig{Transport: "stdio", Command: "docs-server", Env: map[string]string{"TOKEN": "DOCS_TOKEN"}}, "mcp-role/coder": []string{"docs"}},
 	})
 	before, _ := os.ReadFile(store.Path())
@@ -149,6 +154,9 @@ func TestSettingsTransferMergesSelectedItemsAndPreservesSecrets(t *testing.T) {
 	}
 	if len(loaded.ModelGroups) != 2 || loaded.ModelGroups["new"].Candidates[0].Timeout != 30*time.Second || loaded.Agents.Roles["coder"].Group != "new" || loaded.Agents.MaxParallel != 7 {
 		t.Fatalf("selected values = %#v", loaded)
+	}
+	if loaded.Agents.Roles[config.AgentRoleSearch].Agent != "codex" || loaded.Agents.Roles[config.AgentRoleExternalWebTester].ACPSelection != selection {
+		t.Fatal("ACP bindings did not preserve the connection and profile settings")
 	}
 	mcp, err := (mcpconfig.Store{Dir: store.Dir}).Load()
 	if err != nil || len(mcp.Roles["coder"]) != 1 {
