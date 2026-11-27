@@ -21,7 +21,7 @@ func (s *skillService) syncBundle(ctx context.Context, bundle skillbundle.Bundle
 	if err := s.registry.Reload(); err != nil {
 		return skillbundle.Manifest{}, err
 	}
-	if err := s.registry.SyncRecords(ctx, s.archive); err != nil {
+	if err := s.registry.SyncRecords(ctx, contextRecordStore{ctx: ctx, index: s.archive}); err != nil {
 		return skillbundle.Manifest{}, err
 	}
 	s.bundle.Store(&manifest)

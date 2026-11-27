@@ -283,7 +283,7 @@ func TestGlobalSkillSearchBackfillsAndReassignsEmbeddingModel(t *testing.T) {
 	if err != nil || len(semantic.Hits) != 1 || semantic.Hits[0].Title != "animal-care" {
 		t.Fatalf("semantic skill search = %#v, %v", semantic, err)
 	}
-	record, err := runtime.leader.archive.Get(semantic.Hits[0].ID)
+	record, err := runtime.leader.archive.Get(context.Background(), semantic.Hits[0].ID)
 	if err != nil || record.Embedding != nil || len(record.VectorProjections) != 3 ||
 		record.VectorProjections[0].ID != "name" || record.VectorProjections[1].ID != "description" ||
 		record.VectorProjections[2].ID != "tag-0" || record.VectorProjections[1].Embedding.Model != "embed-v1" {
@@ -293,14 +293,14 @@ func TestGlobalSkillSearchBackfillsAndReassignsEmbeddingModel(t *testing.T) {
 	// even when the configured model and dimensions have not changed.
 	record.Embedding = &sessionstore.Embedding{Model: "embed-v1", Dimensions: 3, Vector: []float32{1, 0, 0}}
 	record.VectorProjections = nil
-	if _, err := runtime.leader.archive.Save(record); err != nil {
+	if _, err := runtime.leader.archive.Save(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
 	stats, err = client.SyncSkillEmbeddings(context.Background())
 	if err != nil || stats.Embedded != 1 {
 		t.Fatalf("legacy skill embedding migration = %#v, %v", stats, err)
 	}
-	record, err = runtime.leader.archive.Get(semantic.Hits[0].ID)
+	record, err = runtime.leader.archive.Get(context.Background(), semantic.Hits[0].ID)
 	if err != nil || record.Embedding != nil || len(record.VectorProjections) != 3 {
 		t.Fatalf("migrated skill record = %#v, %v", record, err)
 	}
@@ -312,7 +312,7 @@ func TestGlobalSkillSearchBackfillsAndReassignsEmbeddingModel(t *testing.T) {
 	if err != nil || stats.Embedded != 2 {
 		t.Fatalf("reassigned skill embedding sync = %#v, %v", stats, err)
 	}
-	record, err = runtime.leader.archive.Get(semantic.Hits[0].ID)
+	record, err = runtime.leader.archive.Get(context.Background(), semantic.Hits[0].ID)
 	if err != nil || record.Embedding != nil || len(record.VectorProjections) != 3 ||
 		record.VectorProjections[1].Embedding.Model != "embed-v2" {
 		t.Fatalf("reassigned skill record = %#v, %v", record, err)

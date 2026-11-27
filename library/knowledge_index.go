@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +16,6 @@ import (
 	"github.com/snowmerak/q/config"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workitems"
-	"github.com/snowmerak/q/worklock"
 )
 
 var ErrSemanticUnavailable = errors.New("library: semantic search requires a configured embedding model and indexed vectors")
@@ -63,16 +60,21 @@ type chunkMetadata struct {
 	ItemRevision int64 `json:"item_revision"`
 	Offset       int   `json:"offset"`
 }
+type knowledgeSource interface {
+	workitems.WorkspaceRepository
+	workitems.ItemRepository
+	workitems.OutboxRepository
+}
 type knowledgeProjection struct {
 	key         string
 	workspaceID string
-	store       *sessionstore.Store
+	store       sessionstore.SearchIndex
 }
 type knowledgeIndex struct {
 	mu          sync.Mutex
 	dir         string
-	source      *workitems.Store
-	lock        *worklock.Lock
+	source      knowledgeSource
+	backend     SearchBackend
 	vector      sessionstore.VectorConfig
 	generation  string
 	projections map[string]*knowledgeProjection
@@ -80,9 +82,9 @@ type knowledgeIndex struct {
 	done        chan struct{}
 }
 
-func newKnowledgeIndex(parent context.Context, dir string, source *workitems.Store, lock *worklock.Lock, vector sessionstore.VectorConfig) *knowledgeIndex {
+func newKnowledgeIndex(parent context.Context, dir string, source knowledgeSource, backend SearchBackend, vector sessionstore.VectorConfig) *knowledgeIndex {
 	ctx, cancel := context.WithCancel(parent)
-	index := &knowledgeIndex{dir: dir, source: source, lock: lock, vector: vector, projections: map[string]*knowledgeProjection{}, cancel: cancel, done: make(chan struct{})}
+	index := &knowledgeIndex{dir: dir, source: source, backend: backend, vector: vector, projections: map[string]*knowledgeProjection{}, cancel: cancel, done: make(chan struct{})}
 	go func() {
 		defer close(index.done)
 		timer := time.NewTicker(500 * time.Millisecond)
@@ -122,7 +124,11 @@ func (k *knowledgeIndex) projection(ctx context.Context, workspaceID string) (*k
 	} else if !errors.Is(err, config.ErrNotFound) {
 		return nil, err
 	}
-	body, _ := json.Marshal([]any{"knowledge-v1", sessionstore.MappingVersion, vector.Model, vector.Dimensions})
+	mapping := any(sessionstore.MappingVersion)
+	if version := strings.TrimSpace(k.backend.MappingVersion()); version != "" {
+		mapping = version
+	}
+	body, _ := json.Marshal([]any{"knowledge-v1", mapping, vector.Model, vector.Dimensions})
 	digest := sha256.Sum256(body)
 	generation := hex.EncodeToString(digest[:8])
 	if k.generation != "" && k.generation != generation {
@@ -152,16 +158,23 @@ func (k *knowledgeIndex) projection(ctx context.Context, workspaceID string) (*k
 	if existing := k.projections[name]; existing != nil {
 		return existing, nil
 	}
-	directory := filepath.Join("library", "knowledge-index", generation, name)
-	_, statErr := os.Stat(filepath.Join(k.dir, directory, "data", "records"))
-	store, err := sessionstore.OpenWithOptions(k.dir, sessionstore.OpenOptions{Directory: directory, WorkspaceLock: k.lock, Vector: vector})
+	opened, err := k.backend.Open(ctx, SearchIndexSpec{
+		Purpose:     SearchPurposeKnowledge,
+		Generation:  generation,
+		Namespace:   name,
+		WorkspaceID: workspaceID,
+		Vector:      vector,
+	})
 	if err != nil {
 		return nil, err
 	}
-	projection := &knowledgeProjection{key: generation + "/" + name, workspaceID: workspaceID, store: store}
-	if errors.Is(statErr, os.ErrNotExist) {
+	if opened.Index == nil {
+		return nil, errors.New("library: search backend returned nil knowledge index")
+	}
+	projection := &knowledgeProjection{key: generation + "/" + name, workspaceID: workspaceID, store: opened.Index}
+	if opened.Created {
 		if err := k.source.ResetReceipt(ctx, projection.key); err != nil {
-			_ = store.Close()
+			_ = opened.Index.Close()
 			return nil, err
 		}
 	}
@@ -245,13 +258,13 @@ func (k *knowledgeIndex) indexPost(ctx context.Context, p *knowledgeProjection, 
 			delete(old, id)
 		}
 		if len(records) > 0 {
-			if _, err := p.store.SaveBatch(records); err != nil {
+			if _, err := p.store.SaveBatch(ctx, records); err != nil {
 				return err
 			}
 		}
 	}
 	for id := range old {
-		if err := p.store.Delete(id); err != nil {
+		if err := p.store.Delete(ctx, id); err != nil {
 			return err
 		}
 	}
@@ -302,7 +315,7 @@ func (k *knowledgeIndex) search(ctx context.Context, in WorkSearchRequest) (Work
 		options.Filters.Kinds = []string{in.Kind}
 	}
 	out := WorkSearchResponse{Hits: []WorkSearchHit{}, Mode: in.Mode, Generation: k.generation, IndexPending: seq < latest, TotalRelation: "exact_chunks"}
-	documents, vectorCount, err := p.store.IndexCounts()
+	documents, vectorCount, err := p.store.IndexCounts(ctx)
 	if err != nil {
 		return out, err
 	}

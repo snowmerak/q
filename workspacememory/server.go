@@ -113,40 +113,32 @@ type workspaceEntry struct {
 	id        string
 	key       string
 	root      string
-	store     workspaceStore
+	store     sessionstore.SearchIndex
 	lock      *worklock.Lock
 	leases    map[string]workspaceLease
 	operation sync.RWMutex
 }
 
-type workspaceStore interface {
-	Save(sessionstore.Record) (sessionstore.Record, error)
-	SaveBatch([]sessionstore.Record) ([]sessionstore.Record, error)
-	ApplyEmbeddings([]sessionstore.EmbeddingUpdate) (sessionstore.EmbeddingUpdateResult, error)
-	Get(string) (sessionstore.Record, error)
-	Delete(string) error
-	Search(context.Context, sessionstore.SearchOptions) (sessionstore.SearchResult, error)
-	ConfigureVector(sessionstore.VectorConfig) error
-	VectorConfig() sessionstore.VectorConfig
-	Close() error
-}
-
 type workspaceManager struct {
-	mu       sync.Mutex
-	entries  map[string]*workspaceEntry
-	byKey    map[string]*workspaceEntry
-	leaseTTL time.Duration
-	closed   bool
+	mu        sync.Mutex
+	entries   map[string]*workspaceEntry
+	byKey     map[string]*workspaceEntry
+	leaseTTL  time.Duration
+	openStore StoreOpener
+	closed    bool
 }
 
-func newWorkspaceManager(leaseTTL time.Duration) *workspaceManager {
+func newWorkspaceManager(leaseTTL time.Duration, opener StoreOpener) *workspaceManager {
+	if opener == nil {
+		opener = sessionstore.OpenLocalIndex
+	}
 	return &workspaceManager{
 		entries: make(map[string]*workspaceEntry), byKey: make(map[string]*workspaceEntry),
-		leaseTTL: leaseTTL,
+		leaseTTL: leaseTTL, openStore: opener,
 	}
 }
 
-func (m *workspaceManager) open(request openWorkspaceRequest) (OpenWorkspaceResponse, error) {
+func (m *workspaceManager) open(ctx context.Context, request openWorkspaceRequest) (OpenWorkspaceResponse, error) {
 	root, key, err := canonicalWorkspaceRoot(request.Root)
 	if err != nil {
 		return OpenWorkspaceResponse{}, &invalidRequestError{err: err}
@@ -194,13 +186,17 @@ func (m *workspaceManager) open(request openWorkspaceRequest) (OpenWorkspaceResp
 	if err != nil {
 		return OpenWorkspaceResponse{}, fmt.Errorf("workspacememory: acquire workspace memory ownership: %w", err)
 	}
-	store, err := sessionstore.OpenWithOptions(root, sessionstore.OpenOptions{
+	store, err := m.openStore(ctx, root, sessionstore.OpenOptions{
 		WorkspaceLock: lock,
 		Vector:        request.Vector,
 	})
 	if err != nil {
 		_ = lock.Close()
 		return OpenWorkspaceResponse{}, fmt.Errorf("workspacememory: open workspace Store: %w", err)
+	}
+	if store == nil {
+		_ = lock.Close()
+		return OpenWorkspaceResponse{}, errors.New("workspacememory: open workspace Store returned nil")
 	}
 	entry := &workspaceEntry{
 		id: id, key: key, root: root, store: store, lock: lock,
@@ -259,7 +255,7 @@ func (m *workspaceManager) renew(id, leaseID string) error {
 	return nil
 }
 
-func (m *workspaceManager) configureVector(id, leaseID string, vector sessionstore.VectorConfig) (sessionstore.VectorConfig, error) {
+func (m *workspaceManager) configureVector(ctx context.Context, id, leaseID string, vector sessionstore.VectorConfig) (sessionstore.VectorConfig, error) {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -291,7 +287,7 @@ func (m *workspaceManager) configureVector(id, leaseID string, vector sessionsto
 	entry.operation.RLock()
 	m.mu.Unlock()
 	defer entry.operation.RUnlock()
-	if err := entry.store.ConfigureVector(vector); err != nil {
+	if err := entry.store.ConfigureVector(ctx, vector); err != nil {
 		return sessionstore.VectorConfig{}, err
 	}
 	return entry.store.VectorConfig(), nil
@@ -445,7 +441,7 @@ func newHandler(health Health, manager *workspaceManager) http.Handler {
 			writeServiceError(writer, err)
 			return
 		}
-		output, err := manager.open(input)
+		output, err := manager.open(request.Context(), input)
 		if err != nil {
 			writeServiceError(writer, err)
 			return
@@ -484,7 +480,7 @@ func newHandler(health Health, manager *workspaceManager) http.Handler {
 			writeServiceError(writer, err)
 			return
 		}
-		record, err := entry.store.Save(input.Record)
+		record, err := entry.store.Save(request.Context(), input.Record)
 		if err != nil {
 			// Save may cross the source-record durability boundary before a
 			// derived index fails. Always return the prepared record with the
@@ -500,7 +496,7 @@ func newHandler(health Health, manager *workspaceManager) http.Handler {
 			writeServiceError(writer, err)
 			return
 		}
-		records, err := entry.store.SaveBatch(input.Records)
+		records, err := entry.store.SaveBatch(request.Context(), input.Records)
 		if err != nil {
 			writeJSON(writer, http.StatusOK, saveBatchResponse{Records: records, Error: encodeStoreError(err)})
 			return
@@ -513,7 +509,7 @@ func newHandler(health Health, manager *workspaceManager) http.Handler {
 			writeServiceError(writer, err)
 			return
 		}
-		result, err := entry.store.ApplyEmbeddings(input.Updates)
+		result, err := entry.store.ApplyEmbeddings(request.Context(), input.Updates)
 		writeJSON(writer, http.StatusOK, embeddingUpdateResponse{Result: result, Error: encodeStoreError(err)})
 	}))
 	mux.Handle("POST /v1/workspaces/{workspace}/records/get", withWorkspace(func(writer http.ResponseWriter, request *http.Request, entry *workspaceEntry) {
@@ -522,7 +518,7 @@ func newHandler(health Health, manager *workspaceManager) http.Handler {
 			writeServiceError(writer, err)
 			return
 		}
-		record, err := entry.store.Get(input.ID)
+		record, err := entry.store.Get(request.Context(), input.ID)
 		if err != nil {
 			writeServiceError(writer, err)
 			return
@@ -535,7 +531,7 @@ func newHandler(health Health, manager *workspaceManager) http.Handler {
 			writeServiceError(writer, err)
 			return
 		}
-		if err := entry.store.Delete(input.ID); err != nil {
+		if err := entry.store.Delete(request.Context(), input.ID); err != nil {
 			writeServiceError(writer, err)
 			return
 		}
@@ -561,7 +557,7 @@ func newHandler(health Health, manager *workspaceManager) http.Handler {
 			return
 		}
 		vector, err := manager.configureVector(
-			request.PathValue("workspace"), request.Header.Get(leaseHeader), input.Vector,
+			request.Context(), request.PathValue("workspace"), request.Header.Get(leaseHeader), input.Vector,
 		)
 		if err != nil {
 			writeServiceError(writer, err)
@@ -670,7 +666,7 @@ func startLeader(parent context.Context, options EnsureOptions, listener net.Lis
 		Service: ServiceName, ProtocolVersion: ProtocolVersion,
 		Implementation: Implementation, Generation: generation, Ready: true,
 	}
-	manager := newWorkspaceManager(options.effectiveLeaseTTL())
+	manager := newWorkspaceManager(options.effectiveLeaseTTL(), options.OpenStore)
 	ctx, cancel := context.WithCancel(parent)
 	leader := &leader{
 		health: health, manager: manager, lock: serviceLock, cancel: cancel,

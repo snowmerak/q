@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snowmerak/q/internal/closeutil"
 	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/workitems"
 	"github.com/snowmerak/q/worklock"
@@ -22,10 +24,11 @@ import (
 type leader struct {
 	health     Health
 	server     *http.Server
-	archive    *sessionstore.Store
-	workspaces *workitems.Store
+	archive    sessionstore.SearchIndex
+	workspaces workitems.Repository
 	knowledge  *knowledgeIndex
 	lock       *worklock.Lock
+	closers    []io.Closer
 	cancel     context.CancelFunc
 	done       chan struct{}
 
@@ -38,6 +41,7 @@ func startLeader(
 	parent context.Context,
 	dir string,
 	vector sessionstore.VectorConfig,
+	backends Backends,
 	listener net.Listener,
 	lock *worklock.Lock,
 ) (*leader, error) {
@@ -45,9 +49,18 @@ func startLeader(
 	if err != nil {
 		return nil, err
 	}
-	catalog, err := workitems.Open(parent, dir)
+	openWorkItems := backends.OpenWorkItems
+	if openWorkItems == nil {
+		openWorkItems = func(ctx context.Context, configDir string) (workitems.Repository, error) {
+			return workitems.Open(ctx, configDir)
+		}
+	}
+	catalog, err := openWorkItems(parent, dir)
 	if err != nil {
 		return nil, fmt.Errorf("library: open workspace catalog: %w", err)
+	}
+	if catalog == nil {
+		return nil, errors.New("library: workitems repository opener returned nil")
 	}
 	keepCatalog := false
 	defer func() {
@@ -59,15 +72,29 @@ func startLeader(
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("library: create store root: %w", err)
 	}
-	archive, err := sessionstore.OpenWithOptions(dir, sessionstore.OpenOptions{
-		WorkspaceLock: lock, Directory: "library", Vector: vector,
+	defaultSearch := localSearchBackend{dir: dir, lock: lock}
+	skillsBackend := backends.skillsBackend(defaultSearch)
+	knowledgeBackend := backends.knowledgeBackend(defaultSearch)
+	openedArchive, err := skillsBackend.Open(parent, SearchIndexSpec{
+		Purpose:   SearchPurposeSkills,
+		Namespace: "global",
+		Vector:    vector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("library: open global Store: %w", err)
 	}
+	if openedArchive.Index == nil {
+		return nil, errors.New("library: search backend returned nil global archive")
+	}
+	archive := openedArchive.Index
+	keepArchive := false
+	defer func() {
+		if !keepArchive {
+			_ = archive.Close()
+		}
+	}()
 	skills, err := newSkillService(parent, dir, archive)
 	if err != nil {
-		_ = archive.Close()
 		return nil, err
 	}
 	storeID, err := loadOrCreateID(filepath.Join(root, "store.id"))
@@ -102,15 +129,18 @@ func startLeader(
 	registerWorkAssetRoutes(mux, catalog)
 	registerCoordinatorRoutes(mux, catalog)
 	registerWorkerRoute(mux, catalog, dir)
-	knowledge := newKnowledgeIndex(ctx, dir, catalog, lock, vector)
+	knowledge := newKnowledgeIndex(ctx, dir, catalog, knowledgeBackend, vector)
 	registerKnowledgeRoutes(mux, knowledge)
 	l := &leader{
 		health: health, archive: archive,
 		workspaces: catalog,
 		knowledge:  knowledge,
-		lock:       lock, cancel: cancel, done: make(chan struct{}),
+		lock:       lock,
+		closers:    closeutil.Deduplicate(backends.Closers),
+		cancel:     cancel, done: make(chan struct{}),
 		server: &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second},
 	}
+	keepArchive = true
 	keepCatalog = true
 	go func() {
 		serveErr := l.server.Serve(listener)
@@ -118,12 +148,13 @@ func startLeader(
 		knowledgeErr := l.knowledge.Close()
 		archiveErr := l.archive.Close()
 		catalogErr := l.workspaces.Close()
+		closersErr := closeutil.CloseAll(l.closers)
 		lockErr := l.lock.Close()
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil
 		}
 		l.errMu.Lock()
-		l.err = errors.Join(serveErr, archiveErr, catalogErr, knowledgeErr, lockErr)
+		l.err = errors.Join(serveErr, archiveErr, catalogErr, knowledgeErr, closersErr, lockErr)
 		l.errMu.Unlock()
 		close(l.done)
 	}()

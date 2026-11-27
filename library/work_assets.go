@@ -26,7 +26,7 @@ func (c *Client) GetWorkAsset(ctx context.Context, workspace, id string) (workit
 	return asset, err
 }
 
-func registerWorkAssetRoutes(mux *http.ServeMux, store *workitems.Store) {
+func registerWorkAssetRoutes(mux *http.ServeMux, store workitems.AssetRepository) {
 	mux.HandleFunc("POST /v1/workspaces/{workspace}/assets", func(w http.ResponseWriter, r *http.Request) {
 		var input AssetUpload
 		if err := decodeLibraryJSONWithLimit(w, r, &input, workmedia.MaxImageJSON); err != nil {

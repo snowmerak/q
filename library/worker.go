@@ -109,7 +109,11 @@ func (c *Client) readWorker(ctx context.Context, id string, query url.Values) (W
 	return out, err
 }
 
-func registerWorkerRoute(mux *http.ServeMux, s *workitems.Store, directory string) {
+type attemptGetter interface {
+	GetAttempt(ctx context.Context, id string) (workitems.Attempt, error)
+}
+
+func registerWorkerRoute(mux *http.ServeMux, s attemptGetter, directory string) {
 	mux.HandleFunc("GET /v1/attempts/{attempt}/worker", func(w http.ResponseWriter, r *http.Request) {
 		a, err := s.GetAttempt(r.Context(), r.PathValue("attempt"))
 		if err != nil {

@@ -22,6 +22,7 @@ type EnsureOptions struct {
 	Dir            string
 	Config         Config
 	Vector         sessionstore.VectorConfig
+	Backends       Backends
 	ProbeTimeout   time.Duration
 	StartupTimeout time.Duration
 	RequestTimeout time.Duration
@@ -121,7 +122,7 @@ func EnsureWithOptions(ctx context.Context, options EnsureOptions) (*Runtime, er
 				_ = lock.Close()
 				lastListenErr = listenErr
 			} else {
-				leader, startErr := startLeader(ctx, options.Dir, options.Vector, listener, lock)
+				leader, startErr := startLeader(ctx, options.Dir, options.Vector, options.Backends, listener, lock)
 				if startErr != nil {
 					_ = listener.Close()
 					_ = lock.Close()

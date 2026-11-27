@@ -117,12 +117,29 @@ type SkillEmbeddingSyncStats struct {
 type skillService struct {
 	dir      string
 	registry *agentskills.Registry
-	archive  *sessionstore.Store
+	archive  sessionstore.SearchIndex
 	mu       sync.Mutex
 	bundle   atomic.Pointer[skillbundle.Manifest]
 }
 
-func newSkillService(ctx context.Context, dir string, archive *sessionstore.Store) (*skillService, error) {
+type contextRecordStore struct {
+	ctx   context.Context
+	index sessionstore.SearchIndex
+}
+
+func (s contextRecordStore) Search(ctx context.Context, options sessionstore.SearchOptions) (sessionstore.SearchResult, error) {
+	return s.index.Search(ctx, options)
+}
+
+func (s contextRecordStore) Save(record sessionstore.Record) (sessionstore.Record, error) {
+	return s.index.Save(s.ctx, record)
+}
+
+func (s contextRecordStore) Delete(id string) error {
+	return s.index.Delete(s.ctx, id)
+}
+
+func newSkillService(ctx context.Context, dir string, archive sessionstore.SearchIndex) (*skillService, error) {
 	manifest, err := skillbundle.Install(dir, bundledskills.CDP())
 	if err != nil {
 		return nil, fmt.Errorf("library: install bundled skills: %w", err)
@@ -137,7 +154,7 @@ func newSkillService(ctx context.Context, dir string, archive *sessionstore.Stor
 	}
 	service := &skillService{dir: dir, registry: registry, archive: archive}
 	service.bundle.Store(&manifest)
-	if err := registry.SyncRecords(ctx, archive); err != nil {
+	if err := registry.SyncRecords(ctx, contextRecordStore{ctx: ctx, index: archive}); err != nil {
 		return nil, fmt.Errorf("library: reconcile global Agent Skills: %w", err)
 	}
 	return service, nil
@@ -175,7 +192,7 @@ func (s *skillService) search(ctx context.Context, request SkillSearchRequest) (
 	return response, nil
 }
 
-func (s *skillService) configureVector(request SkillVectorConfigRequest) (SkillVectorConfigRequest, error) {
+func (s *skillService) configureVector(ctx context.Context, request SkillVectorConfigRequest) (SkillVectorConfigRequest, error) {
 	if s == nil || s.archive == nil {
 		return SkillVectorConfigRequest{}, errors.New("library: global Agent Skills are unavailable")
 	}
@@ -187,7 +204,7 @@ func (s *skillService) configureVector(request SkillVectorConfigRequest) (SkillV
 	if err != nil {
 		return SkillVectorConfigRequest{}, err
 	}
-	err = s.archive.ConfigureVector(sessionstore.VectorConfig{
+	err = s.archive.ConfigureVector(ctx, sessionstore.VectorConfig{
 		Model: strings.TrimSpace(request.Model), Dimensions: request.Dimensions,
 	})
 	return request, err
@@ -207,7 +224,7 @@ func savedEmbeddingVector(dir string, fallback SkillVectorConfigRequest) (SkillV
 	return SkillVectorConfigRequest{Model: loaded.Embedding.Model, Dimensions: loaded.Embedding.Dimensions}, nil
 }
 
-func validateEmbeddingModel(dir string, archive *sessionstore.Store, model string, dimensions int) error {
+func validateEmbeddingModel(dir string, archive sessionstore.SearchIndex, model string, dimensions int) error {
 	wanted, err := savedEmbeddingVector(dir, SkillVectorConfigRequest{Model: model, Dimensions: dimensions})
 	if err != nil {
 		return err
@@ -218,7 +235,7 @@ func validateEmbeddingModel(dir string, archive *sessionstore.Store, model strin
 	return nil
 }
 
-func (s *skillService) embeddingSources(request SkillEmbeddingSourceRequest) (SkillEmbeddingSourceResponse, error) {
+func (s *skillService) embeddingSources(ctx context.Context, request SkillEmbeddingSourceRequest) (SkillEmbeddingSourceResponse, error) {
 	if s == nil || s.registry == nil || s.archive == nil {
 		return SkillEmbeddingSourceResponse{}, errors.New("library: global Agent Skills are unavailable")
 	}
@@ -238,7 +255,7 @@ func (s *skillService) embeddingSources(request SkillEmbeddingSourceRequest) (Sk
 		if err != nil {
 			return SkillEmbeddingSourceResponse{}, fmt.Errorf("library: skill %q: %w", skill.Name, err)
 		}
-		record, err := s.archive.Get(skill.ID)
+		record, err := s.archive.Get(ctx, skill.ID)
 		if err != nil {
 			return SkillEmbeddingSourceResponse{}, err
 		}
@@ -255,7 +272,7 @@ func (s *skillService) embeddingSources(request SkillEmbeddingSourceRequest) (Sk
 	return response, nil
 }
 
-func (s *skillService) applyEmbeddings(request SkillEmbeddingApplyRequest) (SkillEmbeddingApplyResponse, error) {
+func (s *skillService) applyEmbeddings(ctx context.Context, request SkillEmbeddingApplyRequest) (SkillEmbeddingApplyResponse, error) {
 	if s == nil || s.registry == nil || s.archive == nil {
 		return SkillEmbeddingApplyResponse{}, errors.New("library: global Agent Skills are unavailable")
 	}
@@ -297,7 +314,7 @@ func (s *skillService) applyEmbeddings(request SkillEmbeddingApplyRequest) (Skil
 		if len(item.Projections) != len(parts) {
 			return SkillEmbeddingApplyResponse{}, fmt.Errorf("library: skill %q has %d projections; want %d", skill.Name, len(item.Projections), len(parts))
 		}
-		record, err := s.archive.Get(skill.ID)
+		record, err := s.archive.Get(ctx, skill.ID)
 		if err != nil {
 			return SkillEmbeddingApplyResponse{}, err
 		}
@@ -325,7 +342,7 @@ func (s *skillService) applyEmbeddings(request SkillEmbeddingApplyRequest) (Skil
 	if err := validateEmbeddingModel(s.dir, s.archive, request.Model, request.Dimensions); err != nil {
 		return SkillEmbeddingApplyResponse{}, err
 	}
-	applied, err := s.archive.ApplyEmbeddings(updates)
+	applied, err := s.archive.ApplyEmbeddings(ctx, updates)
 	if err != nil {
 		return SkillEmbeddingApplyResponse{}, err
 	}
@@ -361,7 +378,7 @@ func (s *skillService) reload(ctx context.Context) (SkillReloadResponse, error) 
 	}
 	// SyncRecords compares persisted digests and only saves changed/new skills
 	// or deletes missing ones; unchanged skills are not reindexed.
-	if err := s.registry.SyncRecords(ctx, s.archive); err != nil {
+	if err := s.registry.SyncRecords(ctx, contextRecordStore{ctx: ctx, index: s.archive}); err != nil {
 		return SkillReloadResponse{}, err
 	}
 	return SkillReloadResponse{Active: len(s.registry.Skills()), Issues: s.registry.Issues()}, nil
@@ -420,7 +437,7 @@ func registerSkillRoutes(mux *http.ServeMux, skills *skillService) {
 			writeLibraryError(writer, http.StatusBadRequest, err)
 			return
 		}
-		vector, err := skills.configureVector(input)
+		vector, err := skills.configureVector(request.Context(), input)
 		if err != nil {
 			writeLibraryError(writer, http.StatusBadRequest, err)
 			return
@@ -433,7 +450,7 @@ func registerSkillRoutes(mux *http.ServeMux, skills *skillService) {
 			writeLibraryError(writer, http.StatusBadRequest, err)
 			return
 		}
-		output, err := skills.embeddingSources(input)
+		output, err := skills.embeddingSources(request.Context(), input)
 		if err != nil {
 			writeLibraryError(writer, http.StatusBadRequest, err)
 			return
@@ -446,7 +463,7 @@ func registerSkillRoutes(mux *http.ServeMux, skills *skillService) {
 			writeLibraryError(writer, http.StatusBadRequest, err)
 			return
 		}
-		output, err := skills.applyEmbeddings(input)
+		output, err := skills.applyEmbeddings(request.Context(), input)
 		if err != nil {
 			writeLibraryError(writer, http.StatusBadRequest, err)
 			return

@@ -13,8 +13,12 @@ import (
 	"time"
 
 	"github.com/snowmerak/q/internal/localservice"
+	"github.com/snowmerak/q/sessionstore"
 	"github.com/snowmerak/q/worklock"
 )
+
+// StoreOpener opens the search/record index for one workspace root.
+type StoreOpener func(ctx context.Context, root string, options sessionstore.OpenOptions) (sessionstore.SearchIndex, error)
 
 const (
 	defaultProbeTimeout   = 300 * time.Millisecond
@@ -26,6 +30,7 @@ const (
 type EnsureOptions struct {
 	Dir            string
 	Config         Config
+	OpenStore      StoreOpener
 	ProbeTimeout   time.Duration
 	StartupTimeout time.Duration
 	RequestTimeout time.Duration

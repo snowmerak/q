@@ -147,7 +147,7 @@ func coordinatorWrite[I, O any](mux *http.ServeMux, route string, action func(co
 	})
 }
 
-func registerCoordinatorRoutes(mux *http.ServeMux, s *workitems.Store) {
+func registerCoordinatorRoutes(mux *http.ServeMux, s workitems.CoordinatorRepository) {
 	coordinatorWrite(mux, "POST /v1/attempts/{attempt}/guidance", func(ctx context.Context, r *http.Request, input workitems.TicketGuidanceInput) (workitems.TicketGuidance, error) {
 		return s.QueueTicketGuidance(ctx, r.PathValue("attempt"), input)
 	})

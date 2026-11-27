@@ -249,8 +249,8 @@ func TestWorkspaceVectorConfigurationAndSearch(t *testing.T) {
 
 func TestWorkspaceManagerExpiresAbandonedLease(t *testing.T) {
 	root := t.TempDir()
-	manager := newWorkspaceManager(20 * time.Millisecond)
-	response, err := manager.open(openWorkspaceRequest{
+	manager := newWorkspaceManager(20*time.Millisecond, nil)
+	response, err := manager.open(t.Context(), openWorkspaceRequest{
 		Root: root, LeaseID: "0123456789abcdef0123456789abcdef",
 	})
 	if err != nil {
@@ -520,7 +520,7 @@ func TestSaveProtocolPreservesPreparedRecordsAndIndexingError(t *testing.T) {
 		saveErr:      &sessionstore.IndexingError{RecordID: prepared.ID, Err: indexFailure},
 		configureErr: &sessionstore.IndexingError{Err: indexFailure},
 	}
-	manager := newWorkspaceManager(time.Minute)
+	manager := newWorkspaceManager(time.Minute, nil)
 	entry := &workspaceEntry{
 		id: "workspace-id", key: "workspace-key", root: t.TempDir(), store: store,
 		leases: map[string]workspaceLease{"lease-id": {expiresAt: time.Now().Add(time.Minute)}},
@@ -700,29 +700,33 @@ type failingWorkspaceStore struct {
 	configureErr error
 }
 
-func (s *failingWorkspaceStore) ApplyEmbeddings([]sessionstore.EmbeddingUpdate) (sessionstore.EmbeddingUpdateResult, error) {
+func (s *failingWorkspaceStore) ApplyEmbeddings(context.Context, []sessionstore.EmbeddingUpdate) (sessionstore.EmbeddingUpdateResult, error) {
 	return sessionstore.EmbeddingUpdateResult{}, s.saveErr
 }
 
-func (s *failingWorkspaceStore) Save(sessionstore.Record) (sessionstore.Record, error) {
+func (s *failingWorkspaceStore) Save(context.Context, sessionstore.Record) (sessionstore.Record, error) {
 	return s.saveRecords[0], s.saveErr
 }
 
-func (s *failingWorkspaceStore) SaveBatch([]sessionstore.Record) ([]sessionstore.Record, error) {
+func (s *failingWorkspaceStore) SaveBatch(context.Context, []sessionstore.Record) ([]sessionstore.Record, error) {
 	return append([]sessionstore.Record(nil), s.saveRecords...), s.saveErr
 }
 
-func (s *failingWorkspaceStore) Get(string) (sessionstore.Record, error) {
+func (s *failingWorkspaceStore) Get(context.Context, string) (sessionstore.Record, error) {
 	return sessionstore.Record{}, sessionstore.ErrNotFound
 }
 
-func (s *failingWorkspaceStore) Delete(string) error { return nil }
+func (s *failingWorkspaceStore) Delete(context.Context, string) error { return nil }
 
 func (s *failingWorkspaceStore) Search(context.Context, sessionstore.SearchOptions) (sessionstore.SearchResult, error) {
 	return sessionstore.SearchResult{}, nil
 }
 
-func (s *failingWorkspaceStore) ConfigureVector(sessionstore.VectorConfig) error {
+func (s *failingWorkspaceStore) IndexCounts(context.Context) (uint64, int, error) {
+	return 0, 0, nil
+}
+
+func (s *failingWorkspaceStore) ConfigureVector(context.Context, sessionstore.VectorConfig) error {
 	return s.configureErr
 }
 

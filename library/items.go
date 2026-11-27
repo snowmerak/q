@@ -76,7 +76,7 @@ func queryLimit(r *http.Request) (int, error) {
 	return limit, nil
 }
 
-func registerItemRoutes(mux *http.ServeMux, store *workitems.Store) {
+func registerItemRoutes(mux *http.ServeMux, store workitems.ItemRepository) {
 	mux.HandleFunc("GET /v1/posts/{post}/revision/{revision}", func(w http.ResponseWriter, r *http.Request) {
 		revision, err := strconv.ParseInt(r.PathValue("revision"), 10, 64)
 		if err != nil || revision < 0 {

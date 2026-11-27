@@ -68,7 +68,7 @@ func workspaceError(writer http.ResponseWriter, err error) {
 	writeLibraryError(writer, status, err)
 }
 
-func registerWorkspaceRoutes(mux *http.ServeMux, catalog *workitems.Store) {
+func registerWorkspaceRoutes(mux *http.ServeMux, catalog workitems.WorkspaceRepository) {
 	mux.HandleFunc("GET /v1/workspace-defaults", func(w http.ResponseWriter, r *http.Request) {
 		value, err := catalog.GetProjectDefaults(r.Context())
 		if err != nil {

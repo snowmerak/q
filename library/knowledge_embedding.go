@@ -56,7 +56,7 @@ func (k *knowledgeIndex) sources(ctx context.Context) (WorkEmbeddingBatch, error
 			if err := k.sync(ctx, workspace); err != nil {
 				return out, err
 			}
-			local, localErr := workspace.store.Get(record.ID)
+			local, localErr := workspace.store.Get(ctx, record.ID)
 			matched := func(r sessionstore.Record) bool {
 				return r.Embedding != nil && r.Embedding.Model == out.Model && r.Embedding.Dimensions == out.Dimensions
 			}
@@ -90,7 +90,7 @@ func (k *knowledgeIndex) apply(ctx context.Context, in WorkEmbeddingApply) (int,
 	}
 	updated := 0
 	for n, source := range in.Sources {
-		record, err := p.store.Get(source.ID)
+		record, err := p.store.Get(ctx, source.ID)
 		if errors.Is(err, sessionstore.ErrNotFound) {
 			continue
 		}
@@ -128,7 +128,7 @@ func (k *knowledgeIndex) apply(ctx context.Context, in WorkEmbeddingApply) (int,
 		}
 		update := sessionstore.EmbeddingUpdate{ID: record.ID, SourceDigest: digest, Embedding: &sessionstore.Embedding{Model: in.Model, Dimensions: in.Dimensions, CreatedAt: time.Now().UTC(), Vector: in.Vectors[n]}}
 		for _, projection := range []*knowledgeProjection{p, workspace} {
-			if _, err := projection.store.ApplyEmbeddings([]sessionstore.EmbeddingUpdate{update}); err != nil {
+			if _, err := projection.store.ApplyEmbeddings(ctx, []sessionstore.EmbeddingUpdate{update}); err != nil {
 				return updated, err
 			}
 		}
