@@ -35,11 +35,12 @@ CREATE INDEX IF NOT EXISTS inbox_pending ON manager_inbox_events(workspace_id,ju
 // work. Completed, cancelled, deleted, and already claimed tickets stay out of
 // the partial indexes. The normal UI list contract remains unchanged.
 func (s *Store) ListTicketQueue(ctx context.Context, workspaceID, queue, token string, limit int) (ItemPage, error) {
-	predicate, index := assignmentQueue, "ticket_assignment_queue_v2"
+	d := s.dialect()
+	predicate, index := assignmentQueueSQL(d), "ticket_assignment_queue_v2"
 	if queue == "merge" {
-		predicate, index = mergeQueue, "ticket_merge_queue"
+		predicate, index = mergeQueueSQL(d), "ticket_merge_queue"
 	} else if queue == "resume" {
-		predicate, index = resumeQueue, "ticket_parent_resume"
+		predicate, index = resumeQueueSQL(d), "ticket_parent_resume"
 	} else if queue != "assignment" {
 		return ItemPage{}, ErrInvalidInput
 	}
@@ -51,32 +52,32 @@ func (s *Store) ListTicketQueue(ctx context.Context, workspaceID, queue, token s
 		return ItemPage{}, err
 	}
 	if token == "" {
-		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(max(seq),0) FROM items`).Scan(&c.Upper); err != nil {
+		if err := s.queryRowContext(ctx, `SELECT coalesce(max(seq),0) FROM items`).Scan(&c.Upper); err != nil {
 			return ItemPage{}, err
 		}
 	}
-	query := `SELECT seq,payload FROM items INDEXED BY ` + index + ` WHERE ` + predicate + ` AND workspace_id=? AND seq>? AND seq<=?`
+	query := `SELECT seq,payload FROM items` + d.indexedBy(index) + ` WHERE ` + predicate + ` AND workspace_id=? AND seq>? AND seq<=?`
 	args := []any{workspaceID, c.After, c.Upper}
 	if queue == "assignment" {
-		query += ` AND ` + assignmentDue + `<=julianday(?)`
-		query += ` AND NOT EXISTS(` + unmetDependencies + `)`
+		query += ` AND ` + assignmentDueSQL(d) + `<=` + d.tsExpr("?")
+		query += ` AND NOT EXISTS(` + unmetDependenciesSQL(d) + `)`
 		args = append(args, stamp(time.Now()))
 	}
 	if queue == "resume" {
-		query += ` AND ` + assignmentDue + `<=julianday(?) AND ` + resumeReadySQL
+		query += ` AND ` + assignmentDueSQL(d) + `<=` + d.tsExpr("?") + ` AND ` + resumeReadyCondSQL(d)
 		args = append(args, stamp(time.Now()))
 	}
 	if queue != "merge" {
-		query += ` AND ` + parentReadySQL
+		query += ` AND ` + parentReadyCondSQL(d)
 	} else {
-		query += ` AND ((json_extract(payload,'$.execution_state')='merge_queued' AND ` + parentReadySQL + `)
- OR (json_extract(payload,'$.execution_state')='close_queued' AND NOT EXISTS (SELECT 1 FROM items AS child WHERE ` + directChildSQL + `
- AND json_extract(child.payload,'$.state')<>'done' AND json_extract(child.payload,'$.execution_state') NOT IN ('cancelled','rejected'))))`
+		query += ` AND ((` + d.jsonText("payload", "execution_state") + `='merge_queued' AND ` + parentReadyCondSQL(d) + `)
+ OR (` + d.jsonText("payload", "execution_state") + `='close_queued' AND NOT EXISTS (SELECT 1 FROM items AS child WHERE ` + directChildCondSQL(d) + `
+ AND ` + d.jsonText("child.payload", "state") + `<>'done' AND coalesce(` + d.jsonText("child.payload", "execution_state") + `,'') NOT IN ('cancelled','rejected'))))`
 	}
 	limit = pageLimit(limit)
 	query += ` ORDER BY seq LIMIT ?`
 	args = append(args, limit+1)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return ItemPage{}, err
 	}
@@ -108,7 +109,9 @@ type TicketLoad struct {
 }
 
 func (s *Store) GetTicketLoad(ctx context.Context, workspaceID string) (TicketLoad, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT json_extract(payload,'$.member_id'),count(*) FROM ticket_attempts WHERE `+activeAttempts+` AND workspace_id=? GROUP BY json_extract(payload,'$.member_id')`, workspaceID)
+	d := s.dialect()
+	memberExpr := d.jsonText("payload", "member_id")
+	rows, err := s.queryContext(ctx, `SELECT `+memberExpr+`,count(*) FROM ticket_attempts WHERE `+activeAttemptsSQL(d)+` AND workspace_id=? GROUP BY `+memberExpr, workspaceID)
 	if err != nil {
 		return TicketLoad{}, err
 	}
@@ -129,7 +132,8 @@ func (s *Store) GetTicketLoad(ctx context.Context, workspaceID string) (TicketLo
 // The coordinator delivers one ready event per project at a time. Historical
 // acknowledged events are absent from this index and never deserialized here.
 func (s *Store) NextPendingInbox(ctx context.Context, workspaceID string) ([]InboxEntry, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT payload FROM manager_inbox_events WHERE `+pendingInbox+` AND workspace_id=? AND coalesce(julianday(json_extract(payload,'$.next_delivery_at')),0)<=julianday(?) ORDER BY julianday(json_extract(payload,'$.created_at')),id LIMIT 1`, workspaceID, stamp(time.Now()))
+	d := s.dialect()
+	rows, err := s.queryContext(ctx, `SELECT payload FROM manager_inbox_events WHERE `+pendingInboxSQL(d)+` AND workspace_id=? AND coalesce(`+d.tsExpr(d.jsonText("payload", "next_delivery_at"))+`,0)<=`+d.tsExpr("?")+` ORDER BY `+d.tsExpr(d.jsonText("payload", "created_at"))+`,id LIMIT 1`, workspaceID, stamp(time.Now()))
 	if err != nil {
 		return nil, err
 	}

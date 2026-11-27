@@ -2,7 +2,6 @@ package workitems
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -81,12 +80,12 @@ func TicketReadyAt(item Item, now time.Time) bool {
 }
 
 // A historical cancelled/rejected run must not be retried beside a newer run.
-func requireExclusiveScheduleRun(ctx context.Context, tx *sql.Tx, item Item) error {
+func requireExclusiveScheduleRun(ctx context.Context, tx *storeTx, item Item) error {
 	if item.ScheduleID == "" {
 		return nil
 	}
 	var pending bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM items INDEXED BY ticket_schedule_runs WHERE `+pendingScheduleRun+` AND json_extract(payload,'$.schedule_id')=? AND id<>? LIMIT 1)`, item.ScheduleID, item.ID).Scan(&pending); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM items`+tx.d.indexedBy("ticket_schedule_runs")+` WHERE `+pendingScheduleRunSQL(tx.d)+` AND `+tx.d.jsonText("payload", "schedule_id")+`=? AND id<>? LIMIT 1)`, item.ScheduleID, item.ID).Scan(&pending); err != nil {
 		return err
 	}
 	if pending {
@@ -102,7 +101,9 @@ func (s *Store) DispatchTicketSchedules(ctx context.Context, workspaceID string,
 	if workspaceID == "" || now.IsZero() {
 		return ItemPage{}, ErrInvalidInput
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM items INDEXED BY ticket_schedule_due WHERE `+recurringScheduleQueue+` AND workspace_id=? AND julianday(json_extract(payload,'$.next_scheduled_at'))<=julianday(?) ORDER BY julianday(json_extract(payload,'$.next_scheduled_at')),seq LIMIT 100`, workspaceID, stamp(now))
+	d := s.dialect()
+	nextDue := d.tsExpr(d.jsonText("payload", "next_scheduled_at"))
+	rows, err := s.queryContext(ctx, `SELECT id FROM items`+d.indexedBy("ticket_schedule_due")+` WHERE `+recurringScheduleQueueSQL(d)+` AND workspace_id=? AND `+nextDue+`<=`+d.tsExpr("?")+` ORDER BY `+nextDue+`,seq LIMIT 100`, workspaceID, stamp(now))
 	if err != nil {
 		return ItemPage{}, err
 	}
@@ -121,7 +122,7 @@ func (s *Store) DispatchTicketSchedules(ctx context.Context, workspaceID string,
 	}
 	out := ItemPage{Items: []Item{}}
 	for _, id := range ids {
-		item, err := mutate(ctx, s, workspaceID, "schedule-dispatch:"+id, "", nil, func(tx *sql.Tx) (Item, error) {
+		item, err := mutate(ctx, s, workspaceID, "schedule-dispatch:"+id, "", nil, func(tx *storeTx) (Item, error) {
 			parent, err := ticketTx(ctx, tx, id)
 			if err != nil {
 				return Item{}, err
@@ -141,13 +142,13 @@ func (s *Store) DispatchTicketSchedules(ctx context.Context, workspaceID string,
 				due = due.Add(-interval)
 			}
 			parent.NextScheduledAt = due.Add(interval)
-			var pending int
-			err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM items INDEXED BY ticket_schedule_runs WHERE `+pendingScheduleRun+` AND json_extract(payload,'$.schedule_id')=? LIMIT 1)`, id).Scan(&pending)
+			var pending bool
+			err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM items`+tx.d.indexedBy("ticket_schedule_runs")+` WHERE `+pendingScheduleRunSQL(tx.d)+` AND `+tx.d.jsonText("payload", "schedule_id")+`=? LIMIT 1)`, id).Scan(&pending)
 			if err != nil {
 				return Item{}, err
 			}
 			var run Item
-			if pending == 0 {
+			if !pending {
 				body, err := decodeRow[Post](tx.QueryRowContext(ctx, `SELECT payload FROM posts WHERE id=?`, parent.BodyPostID))
 				if err != nil {
 					return Item{}, err

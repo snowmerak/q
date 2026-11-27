@@ -2,7 +2,6 @@ package workitems
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +32,7 @@ const unmetDependencies = `SELECT dependency.prerequisite_id FROM ticket_depende
 // item. It is deliberately absent from source revisions and mutation receipts.
 const itemReadPayload = `json_set(items.payload,'$.waiting_on',json((SELECT json_group_array(prerequisite_id) FROM (` + unmetDependencies + ` ORDER BY dependency.prerequisite_id))))`
 
-func setTicketDependencies(ctx context.Context, tx *sql.Tx, item *Item, ids []string, initial bool) error {
+func setTicketDependencies(ctx context.Context, tx *storeTx, item *Item, ids []string, initial bool) error {
 	if item.Kind != Ticket || len(ids) > 64 {
 		return fmt.Errorf("%w: depends_on accepts up to 64 ticket IDs", ErrInvalidInput)
 	}
@@ -68,7 +67,7 @@ func setTicketDependencies(ctx context.Context, tx *sql.Tx, item *Item, ids []st
 	}
 	var cyclic bool
 	err = tx.QueryRowContext(ctx, `WITH RECURSIVE ancestors(id) AS (
- SELECT value FROM json_each(?)
+ `+tx.d.jsonEachArray("?")+`
  UNION SELECT dependency.prerequisite_id FROM ticket_dependencies AS dependency JOIN ancestors ON dependency.ticket_id=ancestors.id
 ) SELECT EXISTS(SELECT 1 FROM ancestors WHERE id=?)`, string(encoded), item.ID).Scan(&cyclic)
 	if err != nil {
@@ -89,9 +88,9 @@ func setTicketDependencies(ctx context.Context, tx *sql.Tx, item *Item, ids []st
 	return nil
 }
 
-func requireReadyDependencies(ctx context.Context, tx *sql.Tx, id string) error {
+func requireReadyDependencies(ctx context.Context, tx *storeTx, id string) error {
 	var waiting bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM items WHERE id=? AND EXISTS(`+unmetDependencies+`))`, id).Scan(&waiting)
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM items WHERE id=? AND EXISTS(`+unmetDependenciesSQL(tx.d)+`))`, id).Scan(&waiting)
 	if err != nil {
 		return err
 	}
@@ -101,11 +100,11 @@ func requireReadyDependencies(ctx context.Context, tx *sql.Tx, id string) error 
 	return nil
 }
 
-func requireNoUnfinishedDependents(ctx context.Context, tx *sql.Tx, item Item) error {
+func requireNoUnfinishedDependents(ctx context.Context, tx *storeTx, item Item) error {
 	var referenced bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(
  SELECT 1 FROM ticket_dependencies AS dependency JOIN items AS dependent ON dependent.id=dependency.ticket_id
- WHERE dependency.prerequisite_id=? AND coalesce(json_extract(dependent.payload,'$.deleted'),0)=0 AND json_extract(dependent.payload,'$.state')<>'done'
+ WHERE dependency.prerequisite_id=? AND `+tx.d.jsonBoolFalse("dependent.payload", "deleted")+` AND `+tx.d.jsonText("dependent.payload", "state")+`<>'done'
 )`, item.ID).Scan(&referenced)
 	if err != nil {
 		return err

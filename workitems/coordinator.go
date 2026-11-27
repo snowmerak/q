@@ -2,7 +2,6 @@ package workitems
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -159,7 +158,7 @@ INSERT OR IGNORE INTO manager_inbox_events SELECT id,workspace_id,attempt_id,pay
 }
 
 func (s *Store) ListMembers(ctx context.Context, workspaceID string) ([]Member, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT payload FROM workspace_member_bindings WHERE workspace_id=? ORDER BY agent_id,definition_root,execution_root`, workspaceID)
+	rows, err := s.queryContext(ctx, `SELECT payload FROM workspace_member_bindings WHERE workspace_id=? ORDER BY agent_id,definition_root,execution_root`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -183,12 +182,12 @@ func (s *Store) PutMember(ctx context.Context, workspaceID string, in MemberInpu
 	if strings.TrimSpace(in.AgentID) == "" || len(in.AgentID) > 256 || !filepath.IsAbs(in.DefinitionRoot) || !filepath.IsAbs(in.ExecutionRoot) {
 		return Member{}, ErrInvalidInput
 	}
-	return mutate(ctx, s, workspaceID, "member", in.RequestID, in, func(tx *sql.Tx) (Member, error) {
+	return mutate(ctx, s, workspaceID, "member", in.RequestID, in, func(tx *storeTx) (Member, error) {
 		return putMemberTx(ctx, tx, workspaceID, in)
 	})
 }
 
-func putMemberTx(ctx context.Context, tx *sql.Tx, workspaceID string, in MemberInput) (Member, error) {
+func putMemberTx(ctx context.Context, tx *storeTx, workspaceID string, in MemberInput) (Member, error) {
 	if strings.TrimSpace(in.AgentID) == "" || len(in.AgentID) > 256 || !filepath.IsAbs(in.DefinitionRoot) || !filepath.IsAbs(in.ExecutionRoot) {
 		return Member{}, ErrInvalidInput
 	}
@@ -220,14 +219,14 @@ func putMemberTx(ctx context.Context, tx *sql.Tx, workspaceID string, in MemberI
 	if err != nil {
 		return Member{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO workspace_member_bindings(id,workspace_id,agent_id,definition_root,execution_root,payload) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET agent_id=excluded.agent_id,definition_root=excluded.definition_root,execution_root=excluded.execution_root,payload=excluded.payload`, value.ID, workspaceID, value.AgentID, value.DefinitionRoot, value.ExecutionRoot, raw)
+	_, err = tx.ExecContext(ctx, `INSERT INTO workspace_member_bindings(id,workspace_id,agent_id,definition_root,execution_root,payload) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET agent_id=excluded.agent_id,definition_root=excluded.definition_root,execution_root=excluded.execution_root,payload=excluded.payload`, value.ID, workspaceID, value.AgentID, value.DefinitionRoot, value.ExecutionRoot, tx.d.jsonArg(raw))
 	if err != nil {
-		return Member{}, mutationError(err)
+		return Member{}, mutationError(tx.d, err)
 	}
 	return value, nil
 }
 
-func ticketTx(ctx context.Context, tx *sql.Tx, id string) (Item, error) {
+func ticketTx(ctx context.Context, tx *storeTx, id string) (Item, error) {
 	item, err := decodeRow[Item](tx.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=? AND kind='ticket'`, id))
 	if err != nil {
 		return item, err
@@ -238,7 +237,7 @@ func ticketTx(ctx context.Context, tx *sql.Tx, id string) (Item, error) {
 	return item, nil
 }
 
-func touchTicket(ctx context.Context, tx *sql.Tx, item Item) (Item, error) {
+func touchTicket(ctx context.Context, tx *storeTx, item Item) (Item, error) {
 	item.Revision++
 	item.UpdatedAt = time.Now().UTC()
 	return item, saveItem(ctx, tx, item)
@@ -249,7 +248,7 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 	if err != nil {
 		return Item{}, err
 	}
-	return mutate(ctx, s, current.WorkspaceID, "ticket-control:"+id, in.RequestID, in, func(tx *sql.Tx) (Item, error) {
+	return mutate(ctx, s, current.WorkspaceID, "ticket-control:"+id, in.RequestID, in, func(tx *storeTx) (Item, error) {
 		item, err := ticketTx(ctx, tx, id)
 		if err != nil {
 			return item, err
@@ -279,7 +278,7 @@ func (s *Store) ControlTicket(ctx context.Context, id string, in TicketAction) (
 			if err != nil {
 				return Item{}, err
 			}
-			entries, err := children(ctx, tx, item.ID, previous.WorktreeID)
+			entries, err := children(ctx, tx, tx.d, item.ID, previous.WorktreeID)
 			if err != nil {
 				return Item{}, err
 			}
@@ -364,7 +363,7 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 	if in.Owner == "" || len(in.Owner) > 256 || in.RequestID == "" || in.DefinitionDigest == "" {
 		return Attempt{}, ErrInvalidInput
 	}
-	return mutate(ctx, s, current.WorkspaceID, "claim:"+id, in.RequestID, in, func(tx *sql.Tx) (Attempt, error) {
+	return mutate(ctx, s, current.WorkspaceID, "claim:"+id, in.RequestID, in, func(tx *storeTx) (Attempt, error) {
 		item, err := ticketTx(ctx, tx, id)
 		if err != nil {
 			return Attempt{}, err
@@ -409,7 +408,7 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 			limit = 3
 		}
 		var active int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ticket_attempts WHERE `+activeAttempts).Scan(&active); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ticket_attempts WHERE `+activeAttemptsSQL(tx.d)).Scan(&active); err != nil {
 			return Attempt{}, err
 		}
 		if active >= limit {
@@ -419,7 +418,7 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 		if err := tx.QueryRowContext(ctx, `SELECT coalesce((SELECT max_parallel_tickets FROM workspace_settings WHERE workspace_id=?),0)`, item.WorkspaceID).Scan(&projectLimit); err != nil {
 			return Attempt{}, err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ticket_attempts WHERE workspace_id=? AND `+activeAttempts, item.WorkspaceID).Scan(&projectActive); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM ticket_attempts WHERE workspace_id=? AND `+activeAttemptsSQL(tx.d), item.WorkspaceID).Scan(&projectActive); err != nil {
 			return Attempt{}, err
 		}
 		if projectActive >= EffectiveParallel(projectLimit, limit) {
@@ -514,24 +513,25 @@ func (s *Store) ClaimTicket(ctx context.Context, id string, in ClaimInput) (Atte
 	})
 }
 
-func saveAttempt(ctx context.Context, tx *sql.Tx, a Attempt, create bool) error {
+func saveAttempt(ctx context.Context, tx *storeTx, a Attempt, create bool) error {
 	raw, err := json.Marshal(a)
 	if err != nil {
 		return err
 	}
+	payload := tx.d.jsonArg(raw)
 	if create {
-		_, err = tx.ExecContext(ctx, `INSERT INTO ticket_attempts(id,workspace_id,ticket_id,payload) VALUES(?,?,?,?)`, a.ID, a.WorkspaceID, a.TicketID, raw)
+		_, err = tx.ExecContext(ctx, `INSERT INTO ticket_attempts(id,workspace_id,ticket_id,payload) VALUES(?,?,?,?)`, a.ID, a.WorkspaceID, a.TicketID, payload)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE ticket_attempts SET payload=? WHERE id=?`, raw, a.ID)
+		_, err = tx.ExecContext(ctx, `UPDATE ticket_attempts SET payload=? WHERE id=?`, payload, a.ID)
 	}
 	return err
 }
 
 func (s *Store) GetAttempt(ctx context.Context, id string) (Attempt, error) {
-	return decodeRow[Attempt](s.db.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, id))
+	return decodeRow[Attempt](s.queryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, id))
 }
 func (s *Store) ListAttempts(ctx context.Context, ticketID string) ([]Attempt, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT payload FROM ticket_attempts WHERE ticket_id=? ORDER BY seq`, ticketID)
+	rows, err := s.queryContext(ctx, `SELECT payload FROM ticket_attempts WHERE ticket_id=? ORDER BY seq`, ticketID)
 	if err != nil {
 		return nil, err
 	}
@@ -554,7 +554,7 @@ func (s *Store) ListAttempts(ctx context.Context, ticketID string) ([]Attempt, e
 // UpdateAttempt validates the current reservation on every heartbeat and
 // checkpoint publication. A stale worker cannot complete a newer attempt.
 func (s *Store) UpdateAttempt(ctx context.Context, id string, in AttemptUpdate) (Attempt, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return Attempt{}, err
 	}
@@ -728,7 +728,7 @@ func cancelledAttemptStatus(a Attempt) string {
 	return "cancelled"
 }
 
-func putInbox(ctx context.Context, tx *sql.Tx, a Attempt) error {
+func putInbox(ctx context.Context, tx *storeTx, a Attempt) error {
 	item, err := ticketTx(ctx, tx, a.TicketID)
 	if err != nil || item.ParentTicketID != "" {
 		return err
@@ -743,12 +743,12 @@ func putInbox(ctx context.Context, tx *sql.Tx, a Attempt) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO manager_inbox_events(id,workspace_id,attempt_id,payload) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING`, entry.ID, entry.WorkspaceID, a.ID, raw)
+	_, err = tx.ExecContext(ctx, `INSERT INTO manager_inbox_events(id,workspace_id,attempt_id,payload) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING`, entry.ID, entry.WorkspaceID, a.ID, tx.d.jsonArg(raw))
 	return err
 }
 
 func (s *Store) ListInbox(ctx context.Context, workspaceID string) ([]InboxEntry, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT payload FROM manager_inbox_events WHERE workspace_id=? ORDER BY id`, workspaceID)
+	rows, err := s.queryContext(ctx, `SELECT payload FROM manager_inbox_events WHERE workspace_id=? ORDER BY id`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -770,7 +770,7 @@ func (s *Store) ListInbox(ctx context.Context, workspaceID string) ([]InboxEntry
 }
 
 func (s *Store) AcknowledgeInbox(ctx context.Context, id, managerID string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return err
 	}
@@ -789,14 +789,14 @@ func (s *Store) AcknowledgeInbox(ctx context.Context, id, managerID string) erro
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE manager_inbox_events SET payload=? WHERE id=?`, raw, id); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE manager_inbox_events SET payload=? WHERE id=?`, tx.d.jsonArg(raw), id); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (s *Store) DeferInbox(ctx context.Context, id, managerID, reason string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return err
 	}
@@ -818,7 +818,7 @@ func (s *Store) DeferInbox(ctx context.Context, id, managerID, reason string) er
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE manager_inbox_events SET payload=? WHERE id=?`, raw, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE manager_inbox_events SET payload=? WHERE id=?`, tx.d.jsonArg(raw), id); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -832,7 +832,7 @@ func (s *Store) ReviewAttempt(ctx context.Context, id string, in ReviewInput) (A
 	if in.RequestID == "" || len(in.Feedback) > 65536 {
 		return Attempt{}, ErrInvalidInput
 	}
-	return mutate(ctx, s, current.WorkspaceID, "review:"+id, in.RequestID, in, func(tx *sql.Tx) (Attempt, error) {
+	return mutate(ctx, s, current.WorkspaceID, "review:"+id, in.RequestID, in, func(tx *storeTx) (Attempt, error) {
 		var managerID string
 		if err := tx.QueryRowContext(ctx, `SELECT manager_session_id FROM workspaces WHERE id=?`, current.WorkspaceID).Scan(&managerID); err != nil {
 			return Attempt{}, err
@@ -929,7 +929,7 @@ func (s *Store) ReviewAttempt(ctx context.Context, id string, in ReviewInput) (A
 	})
 }
 
-func appendCoordinatorPost(ctx context.Context, tx *sql.Tx, item Item, author, content string, refs []string) error {
+func appendCoordinatorPost(ctx context.Context, tx *storeTx, item Item, author, content string, refs []string) error {
 	now := time.Now().UTC()
 	post := Post{ID: uuid.NewString(), WorkspaceID: item.WorkspaceID, ItemID: item.ID, Kind: "reply", Content: content, Author: author, Refs: refs, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err := tx.QueryRowContext(ctx, `SELECT MAX(seq)+1 FROM posts WHERE item_id=?`, item.ID).Scan(&post.Seq); err != nil {
@@ -941,12 +941,12 @@ func appendCoordinatorPost(ctx context.Context, tx *sql.Tx, item Item, author, c
 // RecoverExpired records uncertain executions without replaying them. The
 // per-ticket filesystem lock remains the side-effect exclusion boundary.
 func (s *Store) RecoverExpired(ctx context.Context) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	rows, err := tx.QueryContext(ctx, `SELECT payload FROM ticket_attempts WHERE `+leasedAttempts+` AND julianday(json_extract(payload,'$.lease_until'))<julianday(?)`, stamp(time.Now()))
+	rows, err := tx.QueryContext(ctx, `SELECT payload FROM ticket_attempts WHERE `+leasedAttemptsSQL(tx.d)+` AND `+tx.d.tsExpr(tx.d.jsonText("payload", "lease_until"))+`<`+tx.d.tsExpr("?"), stamp(time.Now()))
 	if err != nil {
 		return err
 	}
@@ -1021,7 +1021,7 @@ func (s *Store) ClaimMerge(ctx context.Context, id, owner string) (Attempt, erro
 	if owner == "" {
 		return Attempt{}, ErrInvalidInput
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return Attempt{}, err
 	}
@@ -1050,7 +1050,7 @@ func (s *Store) ClaimMerge(ctx context.Context, id, owner string) (Attempt, erro
 		}
 	}
 	if a.Status == "close_queued" {
-		entries, err := children(ctx, tx, item.ID, a.WorktreeID)
+		entries, err := children(ctx, tx, tx.d, item.ID, a.WorktreeID)
 		if err != nil {
 			return Attempt{}, err
 		}

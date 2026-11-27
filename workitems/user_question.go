@@ -2,7 +2,6 @@ package workitems
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -37,7 +36,7 @@ type AnswerInput struct {
 	RequestID  string `json:"request_id"`
 }
 
-func awaitingTicketDecision(ctx context.Context, tx *sql.Tx, item Item) (bool, error) {
+func awaitingTicketDecision(ctx context.Context, tx *storeTx, item Item) (bool, error) {
 	if item.ExecutionState == WaitingUser {
 		return true, nil
 	}
@@ -62,7 +61,7 @@ func (s *Store) AnswerQuestion(ctx context.Context, id string, in AnswerInput) (
 	if in.QuestionID == "" || in.RequestID == "" || in.Answer == "" || len(in.Answer) > 8192 {
 		return Item{}, ErrInvalidInput
 	}
-	return mutate(ctx, s, attempt.WorkspaceID, "ticket-answer:"+id, in.RequestID, in, func(tx *sql.Tx) (Item, error) {
+	return mutate(ctx, s, attempt.WorkspaceID, "ticket-answer:"+id, in.RequestID, in, func(tx *storeTx) (Item, error) {
 		item, err := ticketTx(ctx, tx, attempt.TicketID)
 		if err != nil {
 			return Item{}, err

@@ -2,7 +2,6 @@ package workitems
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -47,7 +46,7 @@ INSERT OR IGNORE INTO workspace_defaults VALUES(1,1,'[]'); PRAGMA user_version=7
 	return err
 }
 
-func saveProjectLimits(ctx context.Context, tx *sql.Tx, id string, limits ProjectLimits) error {
+func saveProjectLimits(ctx context.Context, tx *storeTx, id string, limits ProjectLimits) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO workspace_settings VALUES(?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET max_parallel_tickets=excluded.max_parallel_tickets,max_parallel_subagents=excluded.max_parallel_subagents`, id, limits.MaxParallelTickets, limits.MaxParallelSubagents)
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `INSERT INTO workspace_start_approval VALUES(?,?) ON CONFLICT(workspace_id) DO UPDATE SET required=excluded.required`, id, limits.RequireTicketApproval)
@@ -55,13 +54,13 @@ func saveProjectLimits(ctx context.Context, tx *sql.Tx, id string, limits Projec
 	return err
 }
 
-func projectRequiresStartApproval(ctx context.Context, tx *sql.Tx, workspace string) (bool, error) {
+func projectRequiresStartApproval(ctx context.Context, tx *storeTx, workspace string) (bool, error) {
 	var required bool
-	err := tx.QueryRowContext(ctx, `SELECT coalesce((SELECT required FROM workspace_start_approval WHERE workspace_id=?),0)`, workspace).Scan(&required)
+	err := tx.QueryRowContext(ctx, `SELECT coalesce((SELECT required FROM workspace_start_approval WHERE workspace_id=?),`+tx.d.boolFalseLit()+`)`, workspace).Scan(&required)
 	return required, err
 }
 
-func projectDefaultsTx(ctx context.Context, tx *sql.Tx) (ProjectDefaults, error) {
+func projectDefaultsTx(ctx context.Context, tx *storeTx) (ProjectDefaults, error) {
 	var value ProjectDefaults
 	var raw []byte
 	if err := tx.QueryRowContext(ctx, `SELECT revision,agent_ids FROM workspace_defaults WHERE id=1`).Scan(&value.Revision, &raw); err != nil {
@@ -72,7 +71,7 @@ func projectDefaultsTx(ctx context.Context, tx *sql.Tx) (ProjectDefaults, error)
 }
 
 func (s *Store) GetProjectDefaults(ctx context.Context) (ProjectDefaults, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := s.beginReadTx(ctx)
 	if err != nil {
 		return ProjectDefaults{}, err
 	}
@@ -98,7 +97,7 @@ func (s *Store) UpdateProjectDefaults(ctx context.Context, value ProjectDefaults
 	if err != nil {
 		return value, err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE workspace_defaults SET revision=revision+1,agent_ids=? WHERE id=1 AND revision=?`, raw, value.Revision)
+	result, err := s.execContext(ctx, `UPDATE workspace_defaults SET revision=revision+1,agent_ids=? WHERE id=1 AND revision=?`, s.dialect().jsonArg(raw), value.Revision)
 	if err != nil {
 		return value, err
 	}

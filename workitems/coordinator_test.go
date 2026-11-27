@@ -132,7 +132,7 @@ func TestExpiredAttemptBecomesUnknownAndDoesNotReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -200,7 +200,7 @@ func validItemText(labels, acceptance []string) bool {
 	return true
 }
 
-func requireWorkspace(ctx context.Context, tx *sql.Tx, id string) error {
+func requireWorkspace(ctx context.Context, tx *storeTx, id string) error {
 	var found int
 	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM workspaces WHERE id=? AND archived_at IS NULL`, id).Scan(&found); errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
@@ -211,12 +211,12 @@ func requireWorkspace(ctx context.Context, tx *sql.Tx, id string) error {
 
 // mutate commits a receipt with the source mutation. Reusing a key with a
 // different operation or input is a conflict, including after process restart.
-func mutate[T any](ctx context.Context, s *Store, workspaceID, operation, requestID string, input any, action func(*sql.Tx) (T, error)) (_ T, returnErr error) {
+func mutate[T any](ctx context.Context, s *Store, workspaceID, operation, requestID string, input any, action func(*storeTx) (T, error)) (_ T, returnErr error) {
 	var zero T
 	if len(requestID) > 256 {
 		return zero, ErrInvalidInput
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return zero, err
 	}
@@ -263,36 +263,38 @@ func mutate[T any](ctx context.Context, s *Store, workspaceID, operation, reques
 	return value, nil
 }
 
-func saveItem(ctx context.Context, tx *sql.Tx, item Item) error {
+func saveItem(ctx context.Context, tx *storeTx, item Item) error {
 	item.WaitingOn = nil
 	body, err := json.Marshal(item)
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE items SET payload=? WHERE id=?`, body, item.ID); err != nil {
+	payload := tx.d.jsonArg(body)
+	if _, err = tx.ExecContext(ctx, `UPDATE items SET payload=? WHERE id=?`, payload, item.ID); err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO item_revisions VALUES(?,?,?)`, item.ID, item.Revision, body); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO item_revisions VALUES(?,?,?)`, item.ID, item.Revision, payload); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO changes(workspace_id,item_id,post_id) VALUES(?,?,'')`, item.WorkspaceID, item.ID)
 	return err
 }
 
-func savePost(ctx context.Context, tx *sql.Tx, post Post, create bool) error {
+func savePost(ctx context.Context, tx *storeTx, post Post, create bool) error {
 	body, err := json.Marshal(post)
 	if err != nil {
 		return err
 	}
+	payload := tx.d.jsonArg(body)
 	if create {
-		_, err = tx.ExecContext(ctx, `INSERT INTO posts VALUES(?,?,?,?,?,?)`, post.ID, post.WorkspaceID, post.ItemID, post.Seq, post.Revision, body)
+		_, err = tx.ExecContext(ctx, `INSERT INTO posts VALUES(?,?,?,?,?,?)`, post.ID, post.WorkspaceID, post.ItemID, post.Seq, post.Revision, payload)
 	} else {
-		_, err = tx.ExecContext(ctx, `UPDATE posts SET revision=?,payload=? WHERE id=?`, post.Revision, body, post.ID)
+		_, err = tx.ExecContext(ctx, `UPDATE posts SET revision=?,payload=? WHERE id=?`, post.Revision, payload, post.ID)
 	}
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO post_revisions VALUES(?,?,?)`, post.ID, post.Revision, body); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO post_revisions VALUES(?,?,?)`, post.ID, post.Revision, payload); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO changes(workspace_id,item_id,post_id) VALUES(?,?,?)`, post.WorkspaceID, post.ItemID, post.ID)
@@ -355,7 +357,7 @@ func (s *Store) CreateItem(ctx context.Context, in CreateInput) (Item, error) {
 		receiptInput.ParentWorker = nil
 		receiptInput.Author = "agent"
 	}
-	return mutate(ctx, s, in.WorkspaceID, operation, in.RequestID, receiptInput, func(tx *sql.Tx) (Item, error) {
+	return mutate(ctx, s, in.WorkspaceID, operation, in.RequestID, receiptInput, func(tx *storeTx) (Item, error) {
 		return createItemTx(ctx, tx, in, "", time.Time{})
 	})
 }
@@ -371,7 +373,7 @@ func normalizeRequestedRole(kind, role string) (string, error) {
 	return role, nil
 }
 
-func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID string, scheduledFor time.Time) (Item, error) {
+func createItemTx(ctx context.Context, tx *storeTx, in CreateInput, scheduleID string, scheduledFor time.Time) (Item, error) {
 	now := time.Now().UTC()
 	item := Item{ScheduleID: scheduleID, ScheduledFor: scheduledFor, ID: uuid.NewString(), WorkspaceID: in.WorkspaceID, Kind: in.Kind, Title: in.Title, State: "open", Labels: in.Labels, Revision: 1, SourceRevision: 1, CreatedAt: now, UpdatedAt: now}
 	if item.Labels == nil {
@@ -422,7 +424,7 @@ func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID st
 	}
 	post := Post{ID: uuid.NewString(), WorkspaceID: item.WorkspaceID, ItemID: item.ID, Kind: "body", Seq: 1, Content: in.Content, Author: in.Author, Refs: in.Refs, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	item.BodyPostID = post.ID
-	if _, err := tx.ExecContext(ctx, `INSERT INTO items(id,workspace_id,kind,number,payload) VALUES(?,?,?,?,?)`, item.ID, item.WorkspaceID, item.Kind, item.Number, []byte(`{}`)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO items(id,workspace_id,kind,number,payload) VALUES(?,?,?,?,?)`, item.ID, item.WorkspaceID, item.Kind, item.Number, tx.d.jsonArg([]byte(`{}`))); err != nil {
 		return Item{}, err
 	}
 	if err := savePost(ctx, tx, post, true); err != nil {
@@ -437,7 +439,7 @@ func createItemTx(ctx context.Context, tx *sql.Tx, in CreateInput, scheduleID st
 }
 
 func (s *Store) GetItem(ctx context.Context, id string) (Item, error) {
-	return decodeRow[Item](s.db.QueryRowContext(ctx, `SELECT `+itemReadPayload+` FROM items WHERE id=?`, id))
+	return decodeRow[Item](s.queryRowContext(ctx, `SELECT `+s.dialect().itemReadPayload()+` FROM items WHERE id=?`, id))
 }
 
 func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item, error) {
@@ -445,7 +447,7 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 	if err != nil {
 		return Item{}, err
 	}
-	return mutate(ctx, s, current.WorkspaceID, "update:"+id, in.RequestID, in, func(tx *sql.Tx) (Item, error) {
+	return mutate(ctx, s, current.WorkspaceID, "update:"+id, in.RequestID, in, func(tx *storeTx) (Item, error) {
 		item, err := decodeRow[Item](tx.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=?`, id))
 		if err != nil {
 			return Item{}, err
@@ -569,18 +571,18 @@ func (s *Store) UpdateItem(ctx context.Context, id string, in UpdateInput) (Item
 
 // Deletion and ticket transitions share a transaction owner, so an issue cannot
 // disappear while linked work or a recurring template can still execute.
-func requireResolvedIssueTickets(ctx context.Context, tx *sql.Tx, issue Item) error {
+func requireResolvedIssueTickets(ctx context.Context, tx *storeTx, issue Item) error {
 	var unresolved bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(
  SELECT 1 FROM items AS ticket
- LEFT JOIN ticket_attempts AS attempt ON attempt.id=json_extract(ticket.payload,'$.active_attempt_id')
+ LEFT JOIN ticket_attempts AS attempt ON attempt.id=`+tx.d.jsonText("ticket.payload", "active_attempt_id")+`
  WHERE ticket.workspace_id=? AND ticket.kind='ticket'
- AND json_extract(ticket.payload,'$.linked_issue_id')=?
- AND coalesce(json_extract(ticket.payload,'$.deleted'),0)=0
+ AND `+tx.d.jsonText("ticket.payload", "linked_issue_id")+`=?
+ AND `+tx.d.jsonBoolFalse("ticket.payload", "deleted")+`
  AND (
-   (json_extract(ticket.payload,'$.state')<>'done' AND coalesce(json_extract(ticket.payload,'$.execution_state'),'') NOT IN ('cancelled','rejected'))
-   OR json_extract(attempt.payload,'$.status') IN ('reserved','running','merging','closing')
-   OR (json_extract(attempt.payload,'$.change_request') IS NOT NULL AND coalesce(json_extract(attempt.payload,'$.change_request.status'),'') NOT IN ('merged','closed'))
+   (`+tx.d.jsonText("ticket.payload", "state")+`<>'done' AND coalesce(`+tx.d.jsonText("ticket.payload", "execution_state")+`,'') NOT IN ('cancelled','rejected'))
+   OR `+tx.d.jsonText("attempt.payload", "status")+` IN ('reserved','running','merging','closing')
+   OR (`+tx.d.jsonPresent("attempt.payload", "change_request")+` AND coalesce(`+tx.d.jsonText("attempt.payload", "change_request.status")+`,'') NOT IN ('merged','closed'))
  ) LIMIT 1)`, issue.WorkspaceID, issue.ID).Scan(&unresolved)
 	if err != nil {
 		return err
@@ -591,7 +593,7 @@ func requireResolvedIssueTickets(ctx context.Context, tx *sql.Tx, issue Item) er
 	return nil
 }
 
-func requireTicketIssue(ctx context.Context, tx *sql.Tx, item Item) error {
+func requireTicketIssue(ctx context.Context, tx *storeTx, item Item) error {
 	if item.LinkedIssueID == "" {
 		return nil
 	}
@@ -613,7 +615,7 @@ func (s *Store) AddPost(ctx context.Context, itemID string, in PostInput) (Post,
 	if err := validateContent(in.Content, in.Author); err != nil {
 		return Post{}, err
 	}
-	return mutate(ctx, s, current.WorkspaceID, "reply:"+itemID, in.RequestID, in, func(tx *sql.Tx) (Post, error) {
+	return mutate(ctx, s, current.WorkspaceID, "reply:"+itemID, in.RequestID, in, func(tx *storeTx) (Post, error) {
 		item, err := decodeRow[Item](tx.QueryRowContext(ctx, `SELECT payload FROM items WHERE id=?`, itemID))
 		if err != nil {
 			return Post{}, err
@@ -644,9 +646,9 @@ func (s *Store) AddPost(ctx context.Context, itemID string, in PostInput) (Post,
 
 func (s *Store) GetPost(ctx context.Context, id string, revision int64) (Post, error) {
 	if revision > 0 {
-		return decodeRow[Post](s.db.QueryRowContext(ctx, `SELECT payload FROM post_revisions WHERE post_id=? AND revision=?`, id, revision))
+		return decodeRow[Post](s.queryRowContext(ctx, `SELECT payload FROM post_revisions WHERE post_id=? AND revision=?`, id, revision))
 	}
-	return decodeRow[Post](s.db.QueryRowContext(ctx, `SELECT payload FROM posts WHERE id=?`, id))
+	return decodeRow[Post](s.queryRowContext(ctx, `SELECT payload FROM posts WHERE id=?`, id))
 }
 
 func (s *Store) UpdatePost(ctx context.Context, id string, in PostInput) (Post, error) {
@@ -659,7 +661,7 @@ func (s *Store) UpdatePost(ctx context.Context, id string, in PostInput) (Post, 
 			return Post{}, err
 		}
 	}
-	return mutate(ctx, s, current.WorkspaceID, "post:"+id, in.RequestID, in, func(tx *sql.Tx) (Post, error) {
+	return mutate(ctx, s, current.WorkspaceID, "post:"+id, in.RequestID, in, func(tx *storeTx) (Post, error) {
 		post, err := decodeRow[Post](tx.QueryRowContext(ctx, `SELECT payload FROM posts WHERE id=?`, id))
 		if err != nil {
 			return Post{}, err
@@ -756,11 +758,11 @@ func (s *Store) ListItems(ctx context.Context, workspaceID, kind, token string, 
 	}
 	limit = pageLimit(limit)
 	if token == "" {
-		if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM items`).Scan(&c.Upper); err != nil {
+		if err := s.queryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM items`).Scan(&c.Upper); err != nil {
 			return ItemPage{}, err
 		}
 	}
-	query := `SELECT seq,` + itemReadPayload + ` FROM items WHERE seq>? AND seq<=? AND kind=?`
+	query := `SELECT seq,` + s.dialect().itemReadPayload() + ` FROM items WHERE seq>? AND seq<=? AND kind=?`
 	args := []any{c.After, c.Upper, kind}
 	if workspaceID != "" {
 		query += ` AND workspace_id=?`
@@ -782,17 +784,18 @@ func (s *Store) ListBoardTickets(ctx context.Context, workspaceID, view, token s
 		return ItemPage{}, err
 	}
 	if token == "" {
-		if err := s.db.QueryRowContext(ctx, `SELECT coalesce(max(seq),0) FROM items`).Scan(&c.Upper); err != nil {
+		if err := s.queryRowContext(ctx, `SELECT coalesce(max(seq),0) FROM items`).Scan(&c.Upper); err != nil {
 			return ItemPage{}, err
 		}
 	}
+	d := s.dialect()
 	limit = pageLimit(limit)
-	prefix := `SELECT seq,` + itemReadPayload + ` FROM items WHERE workspace_id=? AND seq<=? AND `
+	prefix := `SELECT seq,` + d.itemReadPayload() + ` FROM items WHERE workspace_id=? AND seq<=? AND `
 	if view == "active" {
-		query := prefix + activeBoardTickets + ` AND seq>? ORDER BY seq LIMIT ?`
+		query := prefix + activeBoardTicketsSQL(d) + ` AND seq>? ORDER BY seq LIMIT ?`
 		return s.readItemPage(ctx, c, limit, query, workspaceID, c.Upper, c.After, limit+1)
 	}
-	query := prefix + doneBoardTickets
+	query := prefix + doneBoardTicketsSQL(d)
 	args := []any{workspaceID, c.Upper}
 	if c.After > 0 {
 		query += ` AND seq<?`
@@ -802,7 +805,7 @@ func (s *Store) ListBoardTickets(ctx context.Context, workspaceID, view, token s
 }
 
 func (s *Store) readItemPage(ctx context.Context, c pageCursor, limit int, query string, args ...any) (ItemPage, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return ItemPage{}, err
 	}
@@ -839,11 +842,11 @@ func (s *Store) ReadThread(ctx context.Context, id, token string, limit int) (Th
 	}
 	limit = pageLimit(limit)
 	if token == "" {
-		if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM posts WHERE item_id=?`, id).Scan(&c.Upper); err != nil {
+		if err := s.queryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM posts WHERE item_id=?`, id).Scan(&c.Upper); err != nil {
 			return Thread{}, err
 		}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT payload FROM posts WHERE item_id=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?`, id, c.After, c.Upper, limit+1)
+	rows, err := s.queryContext(ctx, `SELECT payload FROM posts WHERE item_id=? AND seq>? AND seq<=? ORDER BY seq LIMIT ?`, id, c.After, c.Upper, limit+1)
 	if err != nil {
 		return Thread{}, err
 	}
@@ -910,7 +913,7 @@ func (s *Store) ReadContent(ctx context.Context, id, token string, limit int) (C
 }
 
 func (s *Store) Changes(ctx context.Context, after int64, limit int) ([]Change, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT seq,workspace_id,item_id,post_id FROM changes WHERE seq>? ORDER BY seq LIMIT ?`, after, pageLimit(limit))
+	rows, err := s.queryContext(ctx, `SELECT seq,workspace_id,item_id,post_id FROM changes WHERE seq>? ORDER BY seq LIMIT ?`, after, pageLimit(limit))
 	if err != nil {
 		return nil, err
 	}
@@ -927,23 +930,23 @@ func (s *Store) Changes(ctx context.Context, after int64, limit int) ([]Change, 
 }
 func (s *Store) Applied(ctx context.Context, projection string) (int64, error) {
 	var seq int64
-	err := s.db.QueryRowContext(ctx, `SELECT applied_seq FROM projection_receipts WHERE projection=?`, projection).Scan(&seq)
+	err := s.queryRowContext(ctx, `SELECT applied_seq FROM projection_receipts WHERE projection=?`, projection).Scan(&seq)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
 	return seq, err
 }
 func (s *Store) ApplyReceipt(ctx context.Context, projection string, seq int64) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO projection_receipts VALUES(?,?) ON CONFLICT(projection) DO UPDATE SET applied_seq=MAX(applied_seq,excluded.applied_seq)`, projection, seq)
+	_, err := s.execContext(ctx, `INSERT INTO projection_receipts VALUES(?,?) ON CONFLICT(projection) DO UPDATE SET applied_seq=`+s.dialect().max2("projection_receipts.applied_seq", "excluded.applied_seq"), projection, seq)
 	return err
 }
 
 func (s *Store) LatestChange(ctx context.Context) (int64, error) {
 	var seq int64
-	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM changes`).Scan(&seq)
+	err := s.queryRowContext(ctx, `SELECT COALESCE(MAX(seq),0) FROM changes`).Scan(&seq)
 	return seq, err
 }
 func (s *Store) ResetReceipt(ctx context.Context, projection string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM projection_receipts WHERE projection=?`, projection)
+	_, err := s.execContext(ctx, `DELETE FROM projection_receipts WHERE projection=?`, projection)
 	return err
 }

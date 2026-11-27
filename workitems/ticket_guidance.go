@@ -2,7 +2,6 @@ package workitems
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -35,7 +34,7 @@ func (s *Store) QueueTicketGuidance(ctx context.Context, id string, in TicketGui
 	if err != nil {
 		return TicketGuidance{}, err
 	}
-	return mutate(ctx, s, attempt.WorkspaceID, "ticket-guidance:"+id, in.RequestID, in, func(tx *sql.Tx) (TicketGuidance, error) {
+	return mutate(ctx, s, attempt.WorkspaceID, "ticket-guidance:"+id, in.RequestID, in, func(tx *storeTx) (TicketGuidance, error) {
 		a, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, id))
 		if err != nil {
 			return TicketGuidance{}, err

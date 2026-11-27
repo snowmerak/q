@@ -3,7 +3,6 @@ package workitems
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -28,7 +27,7 @@ func resetStartApproval(item *Item) {
 	item.ExecutionReason = ""
 }
 
-func approveTicketStart(ctx context.Context, tx *sql.Tx, item Item, action TicketAction) (Item, error) {
+func approveTicketStart(ctx context.Context, tx *storeTx, item Item, action TicketAction) (Item, error) {
 	if !item.RequireStartApproval || item.ExecutionState != WaitingApproval || item.ActiveAttemptID != "" || action.RequestID == "" {
 		return Item{}, ErrConflict
 	}

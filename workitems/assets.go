@@ -42,7 +42,7 @@ func (s *Store) PutAsset(ctx context.Context, workspace string, data []byte, ima
 	}
 	digest := sha256.Sum256(data)
 	asset := Asset{ID: hex.EncodeToString(digest[:]), MIME: mime}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return Asset{}, err
 	}
@@ -62,7 +62,7 @@ func (s *Store) PutAsset(ctx context.Context, workspace string, data []byte, ima
 
 func (s *Store) GetAsset(ctx context.Context, workspace, id string) (Asset, error) {
 	asset := Asset{ID: id}
-	err := s.db.QueryRowContext(ctx, `SELECT mime, data FROM work_assets WHERE workspace_id=? AND id=?`, workspace, id).Scan(&asset.MIME, &asset.Data)
+	err := s.queryRowContext(ctx, `SELECT mime, data FROM work_assets WHERE workspace_id=? AND id=?`, workspace, id).Scan(&asset.MIME, &asset.Data)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = ErrNotFound
 	}

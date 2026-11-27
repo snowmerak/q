@@ -27,16 +27,17 @@ type HumanInbox struct {
 }
 
 func (s *Store) HumanInbox(ctx context.Context, workspaceID string) (_ HumanInbox, returnErr error) {
-	rows, err := s.db.QueryContext(ctx, `
-SELECT w.name, i.payload, coalesce(a.payload,'{}')
+	d := s.dialect()
+	rows, err := s.queryContext(ctx, `
+SELECT w.name, i.payload, coalesce(a.payload,`+d.emptyJSONLit()+`)
 FROM items i JOIN workspaces w ON w.id=i.workspace_id
-LEFT JOIN ticket_attempts a ON a.id=json_extract(i.payload,'$.active_attempt_id')
+LEFT JOIN ticket_attempts a ON a.id=`+d.jsonText("i.payload", "active_attempt_id")+`
 WHERE i.kind='ticket' AND w.archived_at IS NULL AND (?='' OR w.id=?)
-  AND coalesce(json_extract(i.payload,'$.deleted'),0)=0
-  AND json_extract(i.payload,'$.execution_state') IN
+  AND `+d.jsonBoolFalse("i.payload", "deleted")+`
+  AND `+d.jsonText("i.payload", "execution_state")+` IN
     ('awaiting_review','blocked','failed','unknown','merge_failed','close_failed','waiting_user','waiting_approval')
-  AND (coalesce(json_extract(i.payload,'$.parent_ticket_id'),'')='' OR json_extract(i.payload,'$.execution_state')<>'awaiting_review')
-ORDER BY json_extract(i.payload,'$.updated_at') DESC, i.seq DESC LIMIT 101`, workspaceID, workspaceID)
+  AND (coalesce(`+d.jsonText("i.payload", "parent_ticket_id")+`,'')='' OR `+d.jsonText("i.payload", "execution_state")+`<>'awaiting_review')
+ORDER BY `+d.jsonText("i.payload", "updated_at")+` DESC, i.seq DESC LIMIT 101`, workspaceID, workspaceID)
 	if err != nil {
 		return HumanInbox{}, err
 	}

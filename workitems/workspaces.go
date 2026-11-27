@@ -16,8 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"modernc.org/sqlite"
-	sqlitecode "modernc.org/sqlite/lib"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -48,7 +47,11 @@ type WorkspaceInput struct {
 	WorkspaceRoots []string       `json:"workspace_roots"`
 }
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db     *sql.DB
+	d      sqlDialect
+	ownsDB bool
+}
 
 // Open creates the catalog and imports the old Studio catalog once, in one
 // transaction. The original JSON is retained unchanged as a migration backup.
@@ -63,7 +66,7 @@ func Open(ctx context.Context, configDir string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	store := &Store{db: db}
+	store := &Store{db: db, d: sqliteDialect{}, ownsDB: true}
 	if err := store.initialize(ctx, configDir); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -75,7 +78,12 @@ func Open(ctx context.Context, configDir string) (*Store, error) {
 	return store, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	if s == nil || s.db == nil || !s.ownsDB {
+		return nil
+	}
+	return s.db.Close()
+}
 
 func (s *Store) initialize(ctx context.Context, dir string) error {
 	var version int
@@ -169,7 +177,7 @@ CREATE TABLE IF NOT EXISTS catalog_migrations (name TEXT PRIMARY KEY, completed_
 			return fmt.Errorf("workitems: unsupported legacy Studio catalog version %d", legacy.Version)
 		}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return err
 	}
@@ -206,7 +214,7 @@ func (s *Store) initializeManagerRoles(ctx context.Context, version int) error {
 	if version >= 6 {
 		return nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return err
 	}
@@ -291,42 +299,42 @@ func pathKey(path string) (string, error) {
 
 func stamp(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
 
-func insertWorkspace(ctx context.Context, tx *sql.Tx, value Workspace) error {
+func insertWorkspace(ctx context.Context, tx *storeTx, value Workspace) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO workspaces(id,name,name_key,manager_session_id,coordinator_session_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
 		value.ID, value.Name, strings.ToLower(value.Name), value.ManagerSessionID, value.CoordinatorSessionID, stamp(value.CreatedAt), stamp(value.UpdatedAt)); err != nil {
-		return mutationError(err)
+		return mutationError(tx.d, err)
 	}
 	return insertRoots(ctx, tx, value.ID, value.WorkspaceRoots)
 }
 
-func insertRoots(ctx context.Context, tx *sql.Tx, id string, roots []string) error {
+func insertRoots(ctx context.Context, tx *storeTx, id string, roots []string) error {
 	for position, root := range roots {
 		key, err := pathKey(root)
 		if err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO workspace_roots(workspace_id,position,path,path_key,active) VALUES(?,?,?,?,1)`, id, position, root, key); err != nil {
-			return mutationError(err)
+			return mutationError(tx.d, err)
 		}
 	}
 	return nil
 }
 
-func mutationError(err error) error {
-	var sqliteErr *sqlite.Error
-	if errors.As(err, &sqliteErr) && (sqliteErr.Code() == sqlitecode.SQLITE_CONSTRAINT_UNIQUE || sqliteErr.Code() == sqlitecode.SQLITE_CONSTRAINT_PRIMARYKEY) {
+func mutationError(d sqlDialect, err error) error {
+	if d.isUniqueViolation(err) {
 		return ErrConflict
 	}
 	return err
 }
 
 func (s *Store) ListWorkspaces(ctx context.Context, includeArchived bool) ([]Workspace, error) {
-	query := `SELECT w.id,w.name,w.manager_session_id,w.coordinator_session_id,w.created_at,w.updated_at,w.archived_at,r.path,coalesce(p.max_parallel_tickets,0),coalesce(p.max_parallel_subagents,0),coalesce(a.required,0) FROM workspaces w JOIN workspace_roots r ON r.workspace_id=w.id LEFT JOIN workspace_settings p ON p.workspace_id=w.id LEFT JOIN workspace_start_approval a ON a.workspace_id=w.id`
+	d := s.dialect()
+	query := `SELECT w.id,w.name,w.manager_session_id,w.coordinator_session_id,w.created_at,w.updated_at,w.archived_at,r.path,coalesce(p.max_parallel_tickets,0),coalesce(p.max_parallel_subagents,0),coalesce(a.required,` + d.boolFalseLit() + `) FROM workspaces w JOIN workspace_roots r ON r.workspace_id=w.id LEFT JOIN workspace_settings p ON p.workspace_id=w.id LEFT JOIN workspace_start_approval a ON a.workspace_id=w.id`
 	if !includeArchived {
 		query += ` WHERE w.archived_at IS NULL`
 	}
 	query += ` ORDER BY w.name_key,w.id,r.position`
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.queryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +385,7 @@ func (s *Store) CreateWorkspace(ctx context.Context, input WorkspaceInput) (Work
 	}
 	now := time.Now().UTC()
 	value := Workspace{ID: id.String(), Name: input.Name, WorkspaceRoots: input.WorkspaceRoots, ManagerSessionID: manager.String(), CoordinatorSessionID: uuid.NewString(), CreatedAt: now, UpdatedAt: now}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -429,7 +437,7 @@ func (s *Store) UpdateWorkspace(ctx context.Context, id string, input WorkspaceI
 	if err != nil {
 		return Workspace{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -459,7 +467,7 @@ func (s *Store) UpdateWorkspace(ctx context.Context, id string, input WorkspaceI
 	}
 	value.Name, value.WorkspaceRoots, value.UpdatedAt = input.Name, input.WorkspaceRoots, time.Now().UTC()
 	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET name=?,name_key=?,updated_at=? WHERE id=?`, value.Name, strings.ToLower(value.Name), stamp(value.UpdatedAt), id); err != nil {
-		return Workspace{}, mutationError(err)
+		return Workspace{}, mutationError(tx.d, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_roots WHERE workspace_id=?`, id); err != nil {
 		return Workspace{}, err
@@ -474,7 +482,7 @@ func (s *Store) UpdateWorkspace(ctx context.Context, id string, input WorkspaceI
 }
 
 func (s *Store) ArchiveWorkspace(ctx context.Context, id string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx)
 	if err != nil {
 		return err
 	}

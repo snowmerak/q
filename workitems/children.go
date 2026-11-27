@@ -23,7 +23,7 @@ func (a Attempt) Binding() WorkerBinding {
 	return WorkerBinding{AttemptID: a.ID, Owner: a.Owner, Token: a.Token, Generation: a.Generation}
 }
 
-func boundWorker(ctx context.Context, tx *sql.Tx, in WorkerBinding) (Attempt, error) {
+func boundWorker(ctx context.Context, tx *storeTx, in WorkerBinding) (Attempt, error) {
 	a, err := decodeRow[Attempt](tx.QueryRowContext(ctx, `SELECT payload FROM ticket_attempts WHERE id=?`, in.AttemptID))
 	if err != nil {
 		return Attempt{}, err
@@ -45,12 +45,12 @@ func boundWorker(ctx context.Context, tx *sql.Tx, in WorkerBinding) (Attempt, er
 	return a, nil
 }
 
-func workerMember(ctx context.Context, tx *sql.Tx, workspaceID, memberID string) (Member, error) {
+func workerMember(ctx context.Context, tx *storeTx, workspaceID, memberID string) (Member, error) {
 	return decodeRow[Member](tx.QueryRowContext(ctx, `SELECT payload FROM workspace_member_bindings WHERE id=? AND workspace_id=?`, memberID, workspaceID))
 }
 
 type childQuery interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	queryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 const childPredicate = `kind='ticket' AND coalesce(json_extract(payload,'$.deleted'),0)=0 AND json_extract(payload,'$.parent_ticket_id')=? AND json_extract(payload,'$.parent_worktree_id')=?`
@@ -77,12 +77,12 @@ CREATE INDEX IF NOT EXISTS ticket_parent_resume ON items(workspace_id,seq) WHERE
 }
 
 func (s *Store) ListChildren(ctx context.Context, id, worktree string) (ItemPage, error) {
-	items, err := children(ctx, s.db, id, worktree)
+	items, err := children(ctx, s, s.dialect(), id, worktree)
 	return ItemPage{Items: items}, err
 }
 
-func children(ctx context.Context, db childQuery, id, worktree string) ([]Item, error) {
-	rows, err := db.QueryContext(ctx, `SELECT payload FROM items WHERE `+childPredicate+` ORDER BY seq`, id, worktree)
+func children(ctx context.Context, db childQuery, d sqlDialect, id, worktree string) ([]Item, error) {
+	rows, err := db.queryContext(ctx, `SELECT payload FROM items WHERE `+childPredicateSQL(d)+` ORDER BY seq`, id, worktree)
 	if err != nil {
 		return nil, err
 	}
@@ -102,8 +102,8 @@ func children(ctx context.Context, db childQuery, id, worktree string) ([]Item, 
 	return items, rows.Err()
 }
 
-func childContinuation(ctx context.Context, tx *sql.Tx, previous Attempt) (review string, hasChildren, outstanding bool, err error) {
-	items, err := children(ctx, tx, previous.TicketID, previous.WorktreeID)
+func childContinuation(ctx context.Context, tx *storeTx, previous Attempt) (review string, hasChildren, outstanding bool, err error) {
+	items, err := children(ctx, tx, tx.d, previous.TicketID, previous.WorktreeID)
 	if err != nil {
 		return "", false, false, err
 	}
@@ -119,7 +119,7 @@ func childContinuation(ctx context.Context, tx *sql.Tx, previous Attempt) (revie
 	return review, len(items) > 0, outstanding, nil
 }
 
-func childParent(ctx context.Context, tx *sql.Tx, child Item) (Attempt, error) {
+func childParent(ctx context.Context, tx *storeTx, child Item) (Attempt, error) {
 	parent, err := ticketTx(ctx, tx, child.ParentTicketID)
 	if err != nil {
 		return Attempt{}, err
@@ -142,7 +142,7 @@ func reviewableChild(state string) bool {
 	return false
 }
 
-func cancelTicketTree(ctx context.Context, tx *sql.Tx, item Item, reason string) (Item, error) {
+func cancelTicketTree(ctx context.Context, tx *storeTx, item Item, reason string) (Item, error) {
 	if item.State == "done" {
 		return Item{}, fmt.Errorf("%w: completed tickets cannot be cancelled", ErrConflict)
 	}
@@ -160,7 +160,7 @@ func cancelTicketTree(ctx context.Context, tx *sql.Tx, item Item, reason string)
 	if a.MergeLanded {
 		return Item{}, fmt.Errorf("%w: Git has already applied this merge; retry its cleanup", ErrConflict)
 	}
-	entries, err := children(ctx, tx, item.ID, a.WorktreeID)
+	entries, err := children(ctx, tx, tx.d, item.ID, a.WorktreeID)
 	if err != nil {
 		return Item{}, err
 	}
