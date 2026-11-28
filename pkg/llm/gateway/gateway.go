@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -50,6 +51,7 @@ type route struct {
 	providerKind                   string
 	provider                       llmprovider.Provider
 	models                         []string
+	modelFilter                    *regexp.Regexp
 	modelMetadata                  map[string]llmprovider.ModelMetadata
 	modelCapabilityProfile         string
 	cacheAffinityConfigured        bool
@@ -114,9 +116,14 @@ func NewContext(ctx context.Context, config Config) (*Gateway, error) {
 		}
 		providerKind := effectiveProviderKind(providerConfig)
 		modelCapabilityProfile := providerModelCapabilityProfile(providerConfig)
+		var modelFilter *regexp.Regexp
+		if pattern := strings.TrimSpace(providerConfig.ModelFilterRegex); pattern != "" {
+			modelFilter, _ = regexp.Compile(pattern)
+		}
 		route := &route{
 			id: providerConfig.ID, prefix: prefix, providerType: providerConfig.Type, providerKind: providerKind, provider: provider,
 			models:                         append([]string(nil), providerConfig.Models...),
+			modelFilter:                    modelFilter,
 			modelMetadata:                  cloneModelMetadata(providerConfig.ModelMetadata),
 			modelCapabilityProfile:         modelCapabilityProfile,
 			cacheAffinityConfigured:        providerCacheAffinityConfigured(providerConfig, providerKind),
@@ -380,6 +387,7 @@ func (g *Gateway) discoverRouteModels(ctx context.Context, route *route) ([]llmp
 		if err != nil {
 			return nil, fmt.Errorf("gateway: list models for %q: %w", route.id, err)
 		}
+		listed = filterRouteModels(route, listed)
 		applyKnownModelCapabilities(route, listed)
 		applyModelOverrides(route, listed)
 		return prefixedModels(route, listed), nil
@@ -406,9 +414,23 @@ func (g *Gateway) discoverRouteModels(ctx context.Context, route *route) ([]llmp
 		}
 		listed = append(listed, model)
 	}
+	listed = filterRouteModels(route, listed)
 	applyKnownModelCapabilities(route, listed)
 	applyModelOverrides(route, listed)
 	return prefixedModels(route, listed), nil
+}
+
+func filterRouteModels(route *route, listed []llmprovider.Model) []llmprovider.Model {
+	if route.modelFilter == nil || len(listed) == 0 {
+		return listed
+	}
+	filtered := make([]llmprovider.Model, 0, len(listed))
+	for _, model := range listed {
+		if route.modelFilter.MatchString(model.ID) {
+			filtered = append(filtered, model)
+		}
+	}
+	return filtered
 }
 
 func providerModelCapabilityProfile(config ProviderConfig) string {

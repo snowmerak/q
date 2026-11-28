@@ -97,6 +97,7 @@ type LLMRolesConfig struct {
 
 type EmbeddingsConfig struct {
 	Enabled        bool   `json:"enabled"`
+	ProviderID     string `json:"provider_id,omitempty"`
 	BaseURL        string `json:"base_url,omitempty"`
 	APIKeyEnv      string `json:"api_key_env,omitempty"`
 	Model          string `json:"model,omitempty"`
@@ -374,8 +375,27 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: decisions: %w", err)
 	}
 	if c.Embeddings.Enabled {
-		if strings.TrimSpace(c.Embeddings.BaseURL) == "" || strings.TrimSpace(c.Embeddings.Model) == "" || c.Embeddings.Dimensions < 1 {
-			return errors.New("config: enabled embeddings require base_url, model, and positive dimensions")
+		if strings.TrimSpace(c.Embeddings.Model) == "" || c.Embeddings.Dimensions < 1 {
+			return errors.New("config: enabled embeddings require model and positive dimensions")
+		}
+		if pid := strings.TrimSpace(c.Embeddings.ProviderID); pid != "" {
+			var found *gateway.ProviderConfig
+			for i := range c.LLM.Providers {
+				if strings.TrimSpace(c.LLM.Providers[i].ID) == pid {
+					found = &c.LLM.Providers[i]
+					break
+				}
+			}
+			if found == nil {
+				return fmt.Errorf("config: embeddings provider_id %q not found in llm.providers", pid)
+			}
+			switch found.Type {
+			case "openai-compatible", "openrouter", "grok", "xai":
+			default:
+				return fmt.Errorf("config: embeddings provider_id %q type %q does not support embeddings", pid, found.Type)
+			}
+		} else if strings.TrimSpace(c.Embeddings.BaseURL) == "" {
+			return errors.New("config: enabled embeddings require provider_id or base_url")
 		}
 	}
 	if !c.Tools.ApprovalMode.Valid() {

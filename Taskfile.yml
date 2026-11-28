@@ -48,12 +48,15 @@ tasks:
 
   package:windows:
     desc: Build and package Windows NSIS installer via makensis
+    vars:
+      TARGET_ARCH:
+        sh: go env GOARCH
     deps:
       - build:desktop
     cmds:
       - mkdir -p bin/nsis
       - wails3 generate webview2bootstrapper -dir bin/nsis
-      - makensis desktop/packaging/windows-wails.nsi
+      - makensis -DPRODUCT_ARCH={{.TARGET_ARCH}} desktop/packaging/windows-wails.nsi
 
   package:darwin:
     desc: Stage macOS .app bundle contents using desktop/packaging/darwin-Info.plist

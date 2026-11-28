@@ -186,3 +186,123 @@ func TestEvaluateAcrossProtocols(t *testing.T) {
 		}
 	}
 }
+
+func TestAutoDiscoverAndFilterDecisionsModels(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			if r.Header.Get("x-goog-api-key") != "" {
+				// Gemini models response
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"models": []map[string]any{
+						{
+							"name":                       "models/gemini-2.5-flash",
+							"displayName":                "Gemini 2.5 Flash",
+							"supportedGenerationMethods": []string{"generateContent", "createDecision"},
+						},
+						{
+							"name":                       "models/gemini-embedding-001",
+							"displayName":                "Embedding 001",
+							"supportedGenerationMethods": []string{"embedContent"},
+						},
+						{
+							"name":                       "models/gemini-1.5-pro",
+							"displayName":                "Gemini 1.5 Pro",
+							"supportedGenerationMethods": []string{"createDecision"},
+						},
+					},
+				})
+				return
+			}
+			// OpenAI /decisions models response
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"object": "list",
+				"data": []map[string]any{
+					{"id": "gpt-4.1-mini"},
+					{"id": "gpt-4.1-nano"},
+					{"id": "text-embedding-3-small"},
+				},
+			})
+		case "/v1/decisions":
+			var reqBody map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+				t.Fatalf("decode decision request: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"model": reqBody["model"],
+				"usage": map[string]any{"input_tokens": 5, "output_tokens": 1},
+				"answers": []map[string]any{
+					{"name": "ok", "type": "predicate", "probability": 0.9},
+				},
+			})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := Config{
+		Providers: []ProviderConfig{
+			{
+				ID:               "openai",
+				Label:            "OpenAI",
+				Protocol:         "openai",
+				BaseURL:          srv.URL + "/v1",
+				ModelFilterRegex: `^gpt-4\.1`,
+			},
+			{
+				ID:               "gemini",
+				Label:            "Gemini",
+				Protocol:         "gemini",
+				BaseURL:          srv.URL + "/v1",
+				APIKeyEnv:        "GEM_KEY",
+				ModelFilterRegex: `^gemini-2\.5`,
+			},
+		},
+		DefaultModelID: "openai/gpt-4.1-mini",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("cfg.Validate with discovered default model failed: %v", err)
+	}
+
+	reg, err := NewRegistry(cfg, func(k string) string {
+		if k == "GEM_KEY" {
+			return "gem-secret"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if err := reg.RefreshModels(context.Background()); err != nil {
+		t.Fatalf("RefreshModels: %v", err)
+	}
+
+	models := reg.ListModels()
+	if len(models) != 3 {
+		t.Fatalf("expected 3 discovered & filtered models, got %d: %#v", len(models), models)
+	}
+	if models[0].ID != "openai/gpt-4.1-mini" || models[1].ID != "openai/gpt-4.1-nano" || models[2].ID != "gemini/gemini-2.5-flash" {
+		t.Fatalf("unexpected discovered models: %#v", models)
+	}
+
+	resp, err := reg.Evaluate(context.Background(), "", sdk.Input{State: "hi"}, sdk.Questions{
+		"ok": sdk.NoulQuestion{Instructions: "OK?"},
+	})
+	if err != nil {
+		t.Fatalf("Evaluate discovered default: %v", err)
+	}
+	if pass, err := Positive(resp, "ok"); err != nil || !pass {
+		t.Fatalf("Positive pass=%v err=%v", pass, err)
+	}
+
+	invalidRegexCfg := cfg
+	invalidRegexCfg.Providers = []ProviderConfig{
+		{ID: "bad", Protocol: "openai", BaseURL: srv.URL + "/v1", ModelFilterRegex: "[unclosed"},
+	}
+	invalidRegexCfg.DefaultModelID = ""
+	if err := invalidRegexCfg.Validate(); !errors.Is(err, ErrInvalidCfg) {
+		t.Fatalf("expected ErrInvalidCfg for bad regex, got %v", err)
+	}
+}

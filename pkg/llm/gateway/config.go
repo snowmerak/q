@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +37,7 @@ type ProviderConfig struct {
 	ForwardHeaders         []string                             `json:"forward_headers,omitempty"`
 	ForwardResponseHeaders []string                             `json:"forward_response_headers,omitempty"`
 	Models                 []string                             `json:"models,omitempty"`
+	ModelFilterRegex       string                               `json:"model_filter_regex,omitempty"`
 	ModelMetadata          map[string]llmprovider.ModelMetadata `json:"model_metadata,omitempty"`
 	Codex                  CodexConfig                          `json:"codex,omitempty"`
 	ChatGPT                ChatGPTConfig                        `json:"chatgpt,omitempty"`
@@ -173,6 +175,11 @@ func (p ProviderConfig) validate() error {
 	case "anthropic", "claude", "codex", "codex-app-server", "grok", "xai", "openrouter", "openai-compatible", "chatgpt":
 	default:
 		return fmt.Errorf("provider %q has unsupported type %q", p.ID, p.Type)
+	}
+	if strings.TrimSpace(p.ModelFilterRegex) != "" {
+		if _, err := regexp.Compile(p.ModelFilterRegex); err != nil {
+			return fmt.Errorf("provider %q model_filter_regex: %w", p.ID, err)
+		}
 	}
 	providerKind, supported := canonicalProviderKind(p.Kind)
 	if !supported {

@@ -68,7 +68,7 @@ type App struct {
 	providerMu     sync.RWMutex
 	gateway        *gateway.Gateway
 	decisionsReg   *decisions.Registry
-	embedder       *outbox.HTTPEmbedder
+	embedder       appEmbedder
 	degradedReason string
 
 	reindexRunning atomic.Bool
@@ -317,25 +317,51 @@ func (a *App) reloadProviders(ctx context.Context, cfg config.Config) {
 			degraded = append(degraded, fmt.Sprintf("decisions: %v", err))
 		} else {
 			decReg = reg
+			warmCtx, cancelWarm := context.WithTimeout(ctx, 10*time.Second)
+			_ = decReg.RefreshModels(warmCtx)
+			cancelWarm()
 		}
 	}
 
-	var emb *outbox.HTTPEmbedder
+	var emb appEmbedder
 	if cfg.Embeddings.Enabled {
-		builtEmb, err := outbox.NewHTTPEmbedder(outbox.HTTPEmbedderConfig{
-			BaseURL:        cfg.Embeddings.BaseURL,
-			APIKeyEnv:      cfg.Embeddings.APIKeyEnv,
-			Model:          cfg.Embeddings.Model,
-			Dimensions:     cfg.Embeddings.Dimensions,
-			QueryPrefix:    cfg.Embeddings.QueryPrefix,
-			DocumentPrefix: cfg.Embeddings.DocumentPrefix,
-			Timeout:        time.Duration(cfg.Embeddings.TimeoutMS) * time.Millisecond,
-			LookupEnv:      os.Getenv,
-		})
-		if err != nil {
-			degraded = append(degraded, fmt.Sprintf("embeddings: %v", err))
+		if pid := strings.TrimSpace(cfg.Embeddings.ProviderID); pid != "" {
+			var found *gateway.ProviderConfig
+			for i := range cfg.LLM.Providers {
+				if strings.TrimSpace(cfg.LLM.Providers[i].ID) == pid {
+					found = &cfg.LLM.Providers[i]
+					break
+				}
+			}
+			switch {
+			case found == nil:
+				degraded = append(degraded, fmt.Sprintf("embeddings: provider %q not found", pid))
+			case !found.Enabled || gw == nil:
+				degraded = append(degraded, fmt.Sprintf("embeddings: provider %q is disabled or gateway unavailable", pid))
+			default:
+				builtEmb, err := newGatewayEmbedder(gw, *found, cfg.Embeddings)
+				if err != nil {
+					degraded = append(degraded, fmt.Sprintf("embeddings: %v", err))
+				} else {
+					emb = builtEmb
+				}
+			}
 		} else {
-			emb = builtEmb
+			builtEmb, err := outbox.NewHTTPEmbedder(outbox.HTTPEmbedderConfig{
+				BaseURL:        cfg.Embeddings.BaseURL,
+				APIKeyEnv:      cfg.Embeddings.APIKeyEnv,
+				Model:          cfg.Embeddings.Model,
+				Dimensions:     cfg.Embeddings.Dimensions,
+				QueryPrefix:    cfg.Embeddings.QueryPrefix,
+				DocumentPrefix: cfg.Embeddings.DocumentPrefix,
+				Timeout:        time.Duration(cfg.Embeddings.TimeoutMS) * time.Millisecond,
+				LookupEnv:      os.Getenv,
+			})
+			if err != nil {
+				degraded = append(degraded, fmt.Sprintf("embeddings: %v", err))
+			} else {
+				emb = builtEmb
+			}
 		}
 	}
 
@@ -517,7 +543,11 @@ func (a *App) listModels(ctx context.Context) ([]llmprovider.Model, error) {
 func (a *App) refreshModels(ctx context.Context) ([]llmprovider.Model, error) {
 	a.providerMu.RLock()
 	gw := a.gateway
+	dec := a.decisionsReg
 	a.providerMu.RUnlock()
+	if dec != nil {
+		_ = dec.RefreshModels(ctx)
+	}
 	if gw == nil {
 		return []llmprovider.Model{}, nil
 	}

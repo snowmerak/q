@@ -97,6 +97,7 @@ export interface ProviderConfig {
   forward_headers?: string[];
   forward_response_headers?: string[];
   models?: string[];
+  model_filter_regex?: string;
   model_metadata?: Record<string, unknown>;
   codex?: CodexProviderConfig;
   chatgpt?: ChatGPTProviderConfig;
@@ -108,6 +109,7 @@ export interface DecisionProviderConfig {
   protocol: "openai" | "jev" | "gemini";
   base_url: string;
   api_key_env?: string;
+  model_filter_regex?: string;
   timeout_ms?: number;
 }
 
@@ -177,6 +179,7 @@ export interface ConfigView {
   };
   embeddings: {
     enabled: boolean;
+    provider_id?: string;
     base_url?: string;
     api_key_env?: string;
     model?: string;

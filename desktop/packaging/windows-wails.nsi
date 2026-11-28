@@ -19,8 +19,11 @@ Unicode true
 !ifndef BOOTSTRAP
   !define BOOTSTRAP "..\..\bin\nsis\MicrosoftEdgeWebview2Setup.exe"
 !endif
+!ifndef PRODUCT_ARCH
+  !define PRODUCT_ARCH "amd64"
+!endif
 !ifndef OUT_FILE
-  !define OUT_FILE "..\..\bin\Q-${PRODUCT_VERSION}-windows-amd64-setup.exe"
+  !define OUT_FILE "..\..\bin\Q-${PRODUCT_VERSION}-windows-${PRODUCT_ARCH}-setup.exe"
 !endif
 
 !define UNINST_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
@@ -59,6 +62,22 @@ VIAddVersionKey "CompanyName" "${COMPANY_NAME}"
 
 !insertmacro MUI_LANGUAGE "English"
 
+!macro StopRunningApp
+  DetailPrint "Checking for running ${PRODUCT_EXECUTABLE}..."
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /IM "${PRODUCT_EXECUTABLE}" /T'
+  Pop $0
+  ${If} $0 == 0
+    DetailPrint "Closing running ${PRODUCT_EXECUTABLE}..."
+    Sleep 1000
+  ${EndIf}
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM "${PRODUCT_EXECUTABLE}" /T'
+  Pop $0
+  ${If} $0 == 0
+    DetailPrint "Terminated running ${PRODUCT_EXECUTABLE}."
+    Sleep 1000
+  ${EndIf}
+!macroend
+
 Function .onInit
   ${If} ${RunningX64}
     SetRegView 64
@@ -68,6 +87,7 @@ FunctionEnd
 Section "Q"
   SetShellVarContext current
   Call EnsureWebView2
+  !insertmacro StopRunningApp
 
   SetOutPath "$INSTDIR"
   File "/oname=${PRODUCT_EXECUTABLE}" "${BINARY_PATH}"
@@ -91,6 +111,7 @@ Section "Uninstall"
   ${If} ${RunningX64}
     SetRegView 64
   ${EndIf}
+  !insertmacro StopRunningApp
 
   ExecWait '"$INSTDIR\${PRODUCT_EXECUTABLE}" --unregister-autostart'
   Delete "$INSTDIR\${PRODUCT_EXECUTABLE}"

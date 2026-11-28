@@ -385,15 +385,48 @@ export function SettingsView({ client }: { client: QClient }) {
                   </div>
                 </CardContent>
               </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Discovered Decisions Models ({decisionModels.length})</CardTitle>
+                  <CardDescription>
+                    Automatically discovered from configured Decisions providers and filtered by each provider&apos;s <code>model_filter_regex</code>.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="max-h-56 overflow-auto rounded-md border border-border divide-y divide-border text-xs">
+                    {decisionModels.length === 0 ? (
+                      <div className="p-4 text-muted-foreground">
+                        No Decisions models discovered yet. Configure a Decisions provider in the Providers tab and click Save or Refresh Models.
+                      </div>
+                    ) : (
+                      decisionModels.map((dm) => (
+                        <div key={dm.id} className="flex items-center justify-between px-3 py-2">
+                          <span className="font-mono">{dm.id}</span>
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <Badge variant="outline">{dm.protocol}</Badge>
+                            <span>{dm.model}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
             </TabsContent>
 
             <TabsContent value="providers">
-              <ProvidersSection cfg={cfg} onChange={updateCfg} />
+              <ProvidersSection
+                cfg={cfg}
+                decisionModels={decisionModels}
+                onChange={updateCfg}
+              />
             </TabsContent>
 
             <TabsContent value="embeddings">
               <EmbeddingsSection
                 cfg={cfg}
+                models={models}
                 onChange={updateCfg}
                 onReindex={() => void handleReindex()}
               />

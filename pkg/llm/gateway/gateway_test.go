@@ -1091,3 +1091,46 @@ func TestGatewayPreservesOpenAIErrorEnvelope(t *testing.T) {
 		t.Fatalf("status=%d envelope=%#v", response.Code, envelope)
 	}
 }
+
+func TestModelFilterRegex(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/models" {
+			http.NotFound(writer, request)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"object":"list","data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"},{"id":"dall-e-3"},{"id":"tts-1"}]}`)
+	}))
+	defer upstream.Close()
+
+	gw, err := New(Config{Providers: []ProviderConfig{{
+		ID:               "openai",
+		Type:             "openai-compatible",
+		Prefix:           "openai",
+		Enabled:          true,
+		BaseURL:          upstream.URL + "/v1",
+		ModelFilterRegex: `^gpt-4o`,
+	}}})
+	if err != nil {
+		t.Fatalf("gateway.New: %v", err)
+	}
+	defer gw.Close()
+
+	listed, err := gw.Models(context.Background())
+	if err != nil {
+		t.Fatalf("gw.Models: %v", err)
+	}
+	if len(listed) != 2 || listed[0].ID != "openai/gpt-4o" || listed[1].ID != "openai/gpt-4o-mini" {
+		t.Fatalf("expected only regex-matched models, got %#v", listed)
+	}
+
+	_, err = New(Config{Providers: []ProviderConfig{{
+		ID:               "bad",
+		Type:             "openai-compatible",
+		Enabled:          true,
+		BaseURL:          upstream.URL + "/v1",
+		ModelFilterRegex: "[unclosed",
+	}}})
+	if err == nil {
+		t.Fatal("expected invalid model_filter_regex error")
+	}
+}

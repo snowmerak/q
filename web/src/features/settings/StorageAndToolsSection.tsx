@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Database, Plus, Trash2 } from "lucide-react";
-import type { ApprovalMode, ConfigView, MCPServerConfig } from "@/client/types";
+import type { ApprovalMode, ConfigView, MCPServerConfig, ModelInfo } from "@/client/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ModelSelect } from "@/components/ui/model-select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -15,12 +16,29 @@ function parseIntOpt(raw: string): number | undefined {
   return Number.isFinite(parsed) ? Math.trunc(parsed) : undefined;
 }
 
+const EMBEDDING_CAPABLE_PROVIDER_TYPES = new Set([
+  "openai-compatible",
+  "openrouter",
+  "grok",
+  "xai",
+]);
+
+function stripProviderPrefix(modelId: string, prefix?: string): string {
+  const cleanPrefix = (prefix ?? "").trim();
+  if (cleanPrefix && modelId.startsWith(`${cleanPrefix}/`)) {
+    return modelId.slice(cleanPrefix.length + 1);
+  }
+  return modelId;
+}
+
 export function EmbeddingsSection({
   cfg,
+  models,
   onChange,
   onReindex,
 }: {
   cfg: ConfigView;
+  models: ModelInfo[];
   onChange: (next: ConfigView) => void;
   onReindex: () => void;
 }) {
@@ -28,13 +46,35 @@ export function EmbeddingsSection({
   const updateEmb = (patch: Partial<ConfigView["embeddings"]>) =>
     onChange({ ...cfg, embeddings: { ...emb, ...patch } });
 
+  const embeddingProviders = (cfg.llm.providers ?? []).filter((p) =>
+    EMBEDDING_CAPABLE_PROVIDER_TYPES.has(p.type),
+  );
+  const selectedProviderId = emb.provider_id ?? "";
+  const selectedProvider = embeddingProviders.find((p) => p.id === selectedProviderId);
+  const usingConfiguredProvider = selectedProviderId !== "";
+
+  const providerPrefix = selectedProvider?.prefix?.trim() ?? "";
+  const providerModels = usingConfiguredProvider
+    ? models
+        .filter((m) =>
+          providerPrefix ? m.id.startsWith(`${providerPrefix}/`) : true,
+        )
+        .map((m) => {
+          const stripped = stripProviderPrefix(m.id, providerPrefix);
+          return {
+            id: stripped,
+            label: stripped !== m.id ? `${stripped} (${m.id})` : m.id,
+          };
+        })
+    : [];
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-4">
         <div>
           <CardTitle>Vector Embeddings</CardTitle>
           <CardDescription>
-            Configure OpenAI-compatible <code>/embeddings</code> for hybrid vector search in memory recall and knowledge search.
+            Reuse a configured OpenAI-compatible LLM provider or point to a standalone <code>/embeddings</code> endpoint for hybrid vector recall and knowledge search.
           </CardDescription>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={onReindex}>
@@ -54,32 +94,90 @@ export function EmbeddingsSection({
 
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="emb-url">Base URL</Label>
-            <Input
-              id="emb-url"
-              value={emb.base_url ?? ""}
-              onChange={(e) => updateEmb({ base_url: e.target.value || undefined })}
-              placeholder="https://api.openai.com/v1"
-            />
+            <Label htmlFor="emb-provider">Provider</Label>
+            <select
+              id="emb-provider"
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+              value={selectedProviderId}
+              onChange={(e) => {
+                const nextPid = e.target.value;
+                if (nextPid) {
+                  updateEmb({
+                    provider_id: nextPid,
+                    base_url: undefined,
+                    api_key_env: undefined,
+                  });
+                } else {
+                  updateEmb({ provider_id: undefined });
+                }
+              }}
+            >
+              {embeddingProviders.map((p, idx) => (
+                <option key={idx} value={p.id}>
+                  {p.id} ({p.type}
+                  {p.enabled ? "" : " — disabled"})
+                </option>
+              ))}
+              {usingConfiguredProvider && !selectedProvider && (
+                <option value={selectedProviderId}>
+                  {selectedProviderId} (not in Providers)
+                </option>
+              )}
+              <option value="">Custom standalone endpoint (Base URL)</option>
+            </select>
+            {usingConfiguredProvider && (
+              <p className="text-xs text-muted-foreground">
+                Base URL, API key, and custom headers are inherited from the selected LLM provider.
+              </p>
+            )}
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="emb-key-env">API Key Env Var</Label>
-            <Input
-              id="emb-key-env"
-              value={emb.api_key_env ?? ""}
-              onChange={(e) => updateEmb({ api_key_env: e.target.value || undefined })}
-              placeholder="OPENAI_API_KEY"
-            />
-          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="emb-model">Embedding Model</Label>
-            <Input
-              id="emb-model"
-              value={emb.model ?? ""}
-              onChange={(e) => updateEmb({ model: e.target.value || undefined })}
-              placeholder="text-embedding-3-small"
-            />
+            {usingConfiguredProvider ? (
+              <ModelSelect
+                id="emb-model"
+                value={emb.model ?? ""}
+                options={providerModels}
+                emptyLabel="— Select embedding model —"
+                customPlaceholder="text-embedding-3-small"
+                onChange={(v) => updateEmb({ model: v || undefined })}
+              />
+            ) : (
+              <Input
+                id="emb-model"
+                value={emb.model ?? ""}
+                onChange={(e) => updateEmb({ model: e.target.value || undefined })}
+                placeholder="text-embedding-3-small"
+              />
+            )}
           </div>
+        </div>
+
+        {!usingConfiguredProvider && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="emb-url">Base URL</Label>
+              <Input
+                id="emb-url"
+                value={emb.base_url ?? ""}
+                onChange={(e) => updateEmb({ base_url: e.target.value || undefined })}
+                placeholder="https://api.openai.com/v1"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="emb-key-env">API Key Env Var</Label>
+              <Input
+                id="emb-key-env"
+                value={emb.api_key_env ?? ""}
+                onChange={(e) => updateEmb({ api_key_env: e.target.value || undefined })}
+                placeholder="OPENAI_API_KEY"
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="emb-rev">Revision Tag</Label>
             <Input
@@ -403,7 +501,7 @@ export function ToolsAndMCPSection({
                 };
                 return (
                   <div
-                    key={`${srv.id}-${idx}`}
+                    key={idx}
                     className="rounded-md border border-border p-3 space-y-2.5 bg-background/50"
                   >
                     <div className="grid gap-2 md:grid-cols-4 items-end">

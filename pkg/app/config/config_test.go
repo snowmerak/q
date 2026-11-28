@@ -112,3 +112,41 @@ func TestWatcherRetainsPreviousConfigOnInvalidWrite(t *testing.T) {
 		t.Fatalf("expected hot-reload to apply ApprovalBypass, changed=%d current=%q", changed.Load(), w.Current().Tools.ApprovalMode)
 	}
 }
+
+func TestValidateEmbeddingsProviderID(t *testing.T) {
+	base := Default()
+	base.LLM.Providers = []gateway.ProviderConfig{
+		{ID: "openai", Type: "openai-compatible", Prefix: "openai", Enabled: true, BaseURL: "https://api.openai.com/v1"},
+		{ID: "anthropic", Type: "anthropic", Prefix: "anthropic", Enabled: true, BaseURL: "https://api.anthropic.com"},
+	}
+
+	valid := base
+	valid.Embeddings = EmbeddingsConfig{
+		Enabled:    true,
+		ProviderID: "openai",
+		Model:      "text-embedding-3-small",
+		Dimensions: 1536,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("expected valid provider_id embeddings config, got %v", err)
+	}
+
+	missingProvider := valid
+	missingProvider.Embeddings.ProviderID = "unknown"
+	if err := missingProvider.Validate(); err == nil {
+		t.Fatal("expected error when embeddings.provider_id does not exist in llm.providers")
+	}
+
+	unsupportedType := valid
+	unsupportedType.Embeddings.ProviderID = "anthropic"
+	if err := unsupportedType.Validate(); err == nil {
+		t.Fatal("expected error when embeddings.provider_id points to non-embedding provider type")
+	}
+
+	missingEndpoint := valid
+	missingEndpoint.Embeddings.ProviderID = ""
+	missingEndpoint.Embeddings.BaseURL = ""
+	if err := missingEndpoint.Validate(); err == nil {
+		t.Fatal("expected error when neither embeddings.provider_id nor base_url is configured")
+	}
+}
