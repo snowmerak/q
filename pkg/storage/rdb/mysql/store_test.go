@@ -1,12 +1,14 @@
 package mysql
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	mysqldrv "github.com/go-sql-driver/mysql"
+	"github.com/snowmerak/q/v2/pkg/domain"
 	"github.com/snowmerak/q/v2/pkg/storage"
 	"github.com/snowmerak/q/v2/pkg/storage/contracttest"
 )
@@ -32,13 +34,36 @@ func TestMySQLDialectAndMigrations(t *testing.T) {
 }
 
 func TestMySQLContractLiveEnvGated(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("Q_TEST_MYSQL_DSN"))
-	if dsn == "" {
+	baseDSN := strings.TrimSpace(os.Getenv("Q_TEST_MYSQL_DSN"))
+	if baseDSN == "" {
 		t.Skip("Q_TEST_MYSQL_DSN not set")
 	}
+
 	contracttest.RunRDBContractTests(t, func(t *testing.T) storage.RDBStore {
 		t.Helper()
-		st, err := Open(t.Context(), dsn)
+		parsed, err := mysqldrv.ParseDSN(baseDSN)
+		if err != nil {
+			t.Fatalf("ParseDSN: %v", err)
+		}
+		adminCfg := *parsed
+		adminCfg.DBName = ""
+		adminDB, err := sql.Open("mysql", adminCfg.FormatDSN())
+		if err != nil {
+			t.Fatalf("open admin mysql: %v", err)
+		}
+		dbName := "q_test_" + strings.ReplaceAll(domain.NewID()[:16], "-", "")
+		if _, err := adminDB.Exec("CREATE DATABASE `" + dbName + "` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"); err != nil {
+			_ = adminDB.Close()
+			t.Fatalf("create isolated test db: %v", err)
+		}
+		t.Cleanup(func() {
+			_, _ = adminDB.Exec("DROP DATABASE IF EXISTS `" + dbName + "`")
+			_ = adminDB.Close()
+		})
+
+		scopedCfg := *parsed
+		scopedCfg.DBName = dbName
+		st, err := Open(t.Context(), scopedCfg.FormatDSN())
 		if err != nil {
 			t.Fatalf("mysql.Open: %v", err)
 		}

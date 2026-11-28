@@ -1,6 +1,6 @@
 # ADR-0002: 채팅 버블 기반 멀티캐릭터 룸 + Decisions 조율 및 `observedBy` 격리 프로토콜
 
-- **상태:** 확정 (Accepted — 채팅 버블·Decisions·`observedBy`·실시간 인터럽트 확정 / 세부 스케줄러 파라미터는 M2~M4 제안)
+- **상태:** 확정 및 구현·검증 완료 (Accepted & Verified — M2/M4 완료)
 - **작성일:** 2026-11-28
 - **관련 문서:** [PRD (`REQ-CHAT-01`, `REQ-ROOM-01`, `REQ-MEM-01`)](../prd.md#42-%EA%B8%B0%EB%8A%A5-%EB%B0%8F-%EB%B9%84%EA%B8%B0%EB%8A%A5-%EC%9A%94%EA%B5%AC%EC%82%AC%ED%95%AD), [Blueprint 3장·5장](../blueprint.md#5-%EC%A3%BC%EC%9A%94-%EC%8B%A4%ED%96%89-%ED%9D%90%EB%A6%84-major-flows)
 - **참조 근거:** `rileyayla/evernight` `docs/story-progression-architecture.md` · `docs/simple-chat.md` · `docs/character-values.md`
@@ -65,6 +65,6 @@ Evernight은 `PacedLoop`(다중 캐릭터 + 월드 3인칭 소설 집필)와 `Si
 - **멀티캐릭터 호출 비용:** 참여 캐릭터가 많을수록 `participation`, `memory_recall_gate`, `state_update` 등 `decisions` 호출이 늘어납니다. 1턴 내 최대 발화 횟수 상한과 경량 판단 모델 분리가 필요합니다.
 
 ### 확인 및 검증 기준
-- [ ] 멀티캐릭터 룸에서 비공개/다른 위치 메시지가 `observedBy`에 없는 캐릭터의 LLM 요청 프롬프트에 포함되지 않음을 검증할 것.
-- [ ] 실행 도중 Stop/Cut-in 요청 시 미완료 AI 생성만 취소되고 확정 기록이 보존됨을 검증할 것.
-- [ ] 전원 `wait` 또는 `user_turn == true` 조건에서 정상적으로 사용자 턴으로 종료됨을 검증할 것.
+- [x] 멀티캐릭터 룸에서 비공개/다른 위치 메시지가 `observedBy`에 없는 캐릭터의 LLM 요청 프롬프트에 포함되지 않음을 검증할 것 (`TestGroupTurnParticipationWaitHandoffAndObservedByIsolation`).
+- [x] 실행 도중 Stop/Cut-in 요청 시 미완료 AI 생성만 취소되고 확정 기록이 보존됨을 검증할 것 (`TestInterceptStopAndCutIn`).
+- [x] 전원 `wait` 또는 `user_turn == true` 조건에서 정상적으로 사용자 턴으로 종료됨을 검증할 것 (`TestGroupTurnParticipationWaitHandoffAndObservedByIsolation`, `TestGroupTurnMaxTurnsPerInputCap`).

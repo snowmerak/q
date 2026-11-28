@@ -1,6 +1,6 @@
 # ADR-0001: RDB 단일 권위 + `Bleve + HNSW` / `OpenSearch` 파생 프로젝션 및 Outbox 재색인 계약
 
-- **상태:** 확정 (Accepted — 핵심 저장소 아키텍처 확정 / 세부 테이블·Outbox 스키마는 M1 구현 시 제안안 기준 확정)
+- **상태:** 확정 및 구현·검증 완료 (Accepted & Verified — M1/M4 완료)
 - **작성일:** 2026-11-28
 - **관련 문서:** [PRD (`REQ-STOR-01`, `REQ-MEM-01`)](../prd.md#42-%EA%B8%B0%EB%8A%A5-%EB%B0%8F-%EB%B9%84%EA%B8%B0%EB%8A%A5-%EC%9A%94%EA%B5%AC%EC%82%AC%ED%95%AD), [Blueprint 4장](../blueprint.md#4-%EC%A1%B0%ED%95%A9-%EA%B0%80%EB%8A%A5%ED%95%9C-%EC%A0%80%EC%9E%A5%EC%86%8C-%EC%95%84%ED%82%A4%ED%85%8D%EC%B2%98-data-authority--recovery-view)
 - **참조 근거:** `snowmerak/q` (`main`) `sessionstore/vector.go` · `opensearchindex/index.go`, `rileyayla/evernight` `docs/context-and-memory-design.md`
@@ -66,6 +66,6 @@ q v2는 단일 인스턴스(Single-instance) 코어 엔진과 단일 전역 데�
 - **HNSW 메모리 사용량:** 임베디드 HNSW 그래프가 메모리에 적재되므로 대규모 아카이브 환경에서는 `OpenSearch` 조합을 권장해야 합니다.
 
 ### 확인 및 검증 기준
-- [ ] `pkg/storage` 공통 Contract Test Suite가 6가지 조합(`{SQLite, PostgreSQL, MySQL} × {Bleve+HNSW, OpenSearch}`)에서 모두 통과할 것.
-- [ ] Search 인덱스를 완전히 삭제한 뒤 RDB 기준 재색인으로 키워드 및 벡터 검색이 복구될 것.
-- [ ] 임베딩 서버 차단 상태에서 턴 커밋이 성공하고 키워드 폴백 후 복구 시 Outbox가 벡터를 채울 것.
+- [x] `pkg/storage` 공통 Contract Test Suite가 6가지 조합(`{SQLite, PostgreSQL, MySQL} × {Bleve+HNSW, OpenSearch}`)에서 모두 통과할 것 (`TestStorageSixWayMatrix` 및 각 어댑터 라이브 계약 테스트 통과).
+- [x] Search 인덱스를 완전히 삭제한 뒤 RDB 기준 재색인으로 키워드 및 벡터 검색이 복구될 것.
+- [x] 임베딩 서버 차단 상태에서 턴 커밋이 성공하고 키워드 폴백 후 복구 시 Outbox가 벡터를 채울 것 (`TestOutboxWorkerDegradesToLexicalOnEmbeddingFailureAndRecovers`).

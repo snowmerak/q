@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Q
+Comment=Character-chat-first AI platform
+Exec=/usr/lib/q/q-desktop
+Icon=q
+StartupWMClass=com.snowmerak.q
+Terminal=false
+Categories=Utility;Network;

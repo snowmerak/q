@@ -1,0 +1,22 @@
+version: 3
+project:
+  name: q
+  product_name: Q
+  identifier: com.snowmerak.q
+  binary_name: q-desktop
+  kind: gui
+  version: 2.0.0
+  company: snowmerak
+  description: Character-chat-first AI platform
+  icon: assets/icon.png
+frontend:
+  disabled: true
+build:
+  output: ../bin
+packages:
+  nsis:
+    template: windows-wails.nsi
+  deb:
+    template: nfpm.yaml
+  rpm:
+    template: nfpm.yaml

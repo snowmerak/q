@@ -1,6 +1,6 @@
 # ADR-0003: 1차 내장 도구 7개 영역, 3단계 승인 게이트 및 `browser_control` 계약
 
-- **상태:** 확정 (Accepted — 7대 도구 범위·3단계 승인 게이트·`browser_control` config 확정 / 경로·셸 세부 가드와 fail-closed 기본값은 M3 구현 시 제안안 기준 확정)
+- **상태:** 확정 및 구현·검증 완료 (Accepted & Verified — M3 완료)
 - **작성일:** 2026-11-28
 - **관련 문서:** [PRD (`REQ-TASK-01`)](../prd.md#42-%EA%B8%B0%EB%8A%A5-%EB%B0%8F-%EB%B9%84%EA%B8%B0%EB%8A%A5-%EC%9A%94%EA%B5%AC%EC%82%AC%ED%95%AD), [Blueprint 3장·5장](../blueprint.md#51-%ED%84%B4-%EC%8B%A4%ED%96%89-%EB%B0%8F-%EB%8F%84%EA%B5%AC-%EC%8A%B9%EC%9D%B8-%EA%B2%8C%EC%9D%B4%ED%8A%B8-%ED%9D%90%EB%A6%84-11-%EB%A9%80%ED%8B%B0%EC%BA%90%EB%A6%AD%ED%84%B0-%EB%A3%B8-%EA%B3%B5%ED%86%B5-%EA%B3%A8%EA%B2%A9-%EC%A0%9C%EC%95%88)
 - **참조 근거:** `snowmerak/q` (`main`) `tools/README.md` · `tools/builtin/register.go` · `docs/browser-control.md` · `loom/`
@@ -77,6 +77,6 @@ Q v1(`main:docs/browser-control.md`)과 동일한 설정 구조를 채택합니�
 - **로컬 셸/파일 부수효과:** Git worktree 격리가 v2에서 제외되었으므로 파일 수정·삭제(`edit_file`/`write_file`/`remove_path`)는 실제 로컬 경로에 바로 적용됩니다. 따라서 기본 승인 모드를 `bypass`가 아닌 `auto-detection` 또는 `request`로 두는 것이 안전합니다.
 
 ### 확인 및 검증 기준
-- [ ] 3가지 승인 모드(`bypass` / `auto-detection` / `request`) 각각에 대해 허용/거절/타임아웃 통합 테스트 통과.
-- [ ] `browser_control` config 전환 시 `cdp-q-driver`와 `ego-browser` 간 드라이버 선택이 런타임에 반영됨을 검증할 것.
-- [ ] 대용량 도구 출력이 프롬프트에 통째로 들어가지 않고 Loom 아티팩트 참조로 치환되며 `loom_read`/`loom_eval`로 조회 가능함을 검증할 것.
+- [x] 3가지 승인 모드(`bypass` / `auto-detection` / `request`) 각각에 대해 허용/거절/fail-closed 및 체크포인트 재개 통합 테스트 통과.
+- [x] `browser_control` config 전환 시 `cdp-q-driver`와 `ego-browser` 간 드라이버 선택이 런타임에 반영됨을 검증할 것.
+- [x] 대용량 도구 출력이 프롬프트에 통째로 들어가지 않고 Loom 아티팩트 참조로 치환되며 `loom_read`/`loom_eval`로 조회 가능함을 검증할 것.

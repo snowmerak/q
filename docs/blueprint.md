@@ -1,13 +1,13 @@
 # q v2 프로젝트 청사진 (Blueprint)
 
 - **작성일:** 2026-11-28
-- **상태:** 1차 범위 확정 / 구현 전 설계 기준선 (확정 결정과 세부 구현 제안을 구분하여 표기)
+- **상태:** 1차 구현 및 검증 완료 (M0~M5 완료)
 - **관련 문서:** [제품 요구사항 정의서 (PRD)](./prd.md) · [아키텍처 결정 기록 (ADR)](./adr/README.md) · [구현 스펙 (`docs/specs/`)](./specs/milestones.md)
 - **대상 독자:** q v2 백엔드, 저장소, 프런트엔드, 데스크톱 앱 설계 및 구현자
 - **갱신 조건:** 시스템 경계, 저장소 권위 및 복구 모델, 주요 실행 흐름, 모듈 구성, 마일스톤 방향이 바뀔 때 갱신한다.
 
 > [!IMPORTANT]
-> **현재 상태 안내:** `v2` 브랜치는 1차 제품 범위와 프로젝트 골격을 확정한 **구현 전 문서 선행 단계**이며, 아직 v2 애플리케이션 코드나 테스트는 구현되지 않았습니다. 본 문서에서 **[확정]** 표기는 사용자 합의를 반영한 기준선이고, **[제안]** 표기는 구현 및 ADR을 통해 구체화할 설계 세부안입니다.
+> **현재 상태 안내:** `v2` 브랜치는 M0~M5(코어 통합, 1:1·그룹 룸 런타임, 7대 내장 도구·승인 게이트·지식 저장소, 6종 저장소 조합 검증, Wails v3 데스크톱 셸·트레이·자동 시작·패키징 매니페스트) 구현 및 테스트 검증을 마친 기준선입니다. 본 문서에서 **[확정]** 표기는 사용자 합의 및 구현 완료 기준선이며, 일부 OS별 최종 설치 파일(`makensis`/DMG/`nfpm` 실행)은 대상 OS 패키징 도구 체인에서 수행합니다.
 
 ---
 
@@ -268,6 +268,8 @@ q/                              # Go module: github.com/snowmerak/q/v2
 ├── internal/                   # 외부 비공개 최소 내부 유틸리티
 ├── web/                        # React + TypeScript + Vite + Tailwind + shadcn/ui (dist/는 미커밋)
 ├── desktop/                    # 별도 Go 모듈 (desktop/go.mod) — Wails v3 셸 (pkg/app 직접 import)
+│   ├── assets/                 # 데스크톱 아이콘 (icon.png)
+│   └── packaging/              # Windows NSIS / Linux nfpm(DEB/RPM) / macOS Info.plist 매니페스트
 └── docs/
     ├── prd.md                  # 제품 요구사항 정의서
     ├── blueprint.md            # 본 프로젝트 청사진
@@ -280,18 +282,18 @@ q/                              # Go module: github.com/snowmerak/q/v2
 
 ---
 
-## 8. 단계별 마일스톤, 리스크 및 후속 ADR **[제안]**
+## 8. 단계별 마일스톤, 리스크 및 후속 ADR
 
-### 8.1 제안 마일스톤
+### 8.1 구현 마일스톤 (현황 반영)
 
-| 마일스톤 | 목표 범위 | 완료 기준(초안) |
+| 마일스톤 | 목표 범위 | 완료 기준 및 검증 상태 |
 | --- | --- | --- |
-| **M0. 기반 정렬** | `v2` 브랜치 정리, PRD/Blueprint 확정, 핵심 ADR 작성 | `ADR-0001`~`ADR-0004` 세부 계약 합의 |
-| **M1. 코어 골격 & 통합 패키지 & 최소 저장소** | `pkg/llm` + `cmd/llm-provider`, `pkg/cdp` + `cmd/cdp-q-driver` 코드 이식, `pkg/domain`, `pkg/storage` 포트 + `SQLite` / `Bleve + HNSW`, `pkg/app` + `cmd/q` 골격 | 독립 CLI 2종 빌드, 저장소 계약 테스트 통과, 단일 인스턴스로 LLM/Decisions/하이브리드 검색 동작 |
-| **M2. 1:1 캐릭터 봇 + 기본 UI** | 캐릭터/페르소나 CRUD, 1:1 대화 루프, 기억 회상/가치관 기초, React + shadcn/ui(라이트/다크) 채팅 버블 화면, `web/dist` 빌드 임베드 | 1:1 대화, 테마 전환, 실패 요청 재시도, `web/dist` 임베드 빌드 검증 |
-| **M3. 7대 도구 · 승인 게이트 · 지식/스킬/위임** | `pkg/task` 도구 루프(파일·셸·아카이브/지식·Loom·Skills·MCP/`browser_control`·`ask_to_user`/서브에이전트) + 3단계 승인 게이트, `pkg/knowledge` 수집·검색 | 7개 도구 영역 동작, 승인 게이트 3모드(`bypass`/`auto-detection`/`request`), 브라우저 드라이버 전환 검증 |
-| **M4. 멀티캐릭터 룸 & 확장 저장소** | Decisions 기반 멀티캐릭터 채팅 버블 루프·`observedBy`·실시간 인터럽트, `PostgreSQL` / `MySQL` / `OpenSearch` 어댑터 완성 | 6종 저장소 조합 계약 테스트 및 룸 시나리오 검증 |
-| **M5. Wails v3 데스크톱 패키징 & 릴리스** | `desktop/` Wails v3 셸(`pkg/app` 인프로세스 공유)·트레이·인스톨러(Windows/macOS/Linux) 패키징 | 데스크톱 빌드 및 패키징 스모크 통과 |
+| **M0. 기반 정렬** | `v2` 브랜치 정리, PRD/Blueprint 확정, 핵심 ADR 작성 | **완료** (`ADR-0001`~`ADR-0004` 합의·작성) |
+| **M1. 코어 골격 & 통합 패키지 & 최소 저장소** | `pkg/llm` + `cmd/llm-provider`, `pkg/cdp` + `cmd/cdp-q-driver` 코드 이식, `pkg/domain`, `pkg/storage` 포트 + `SQLite` / `Bleve + HNSW`, `pkg/app` + `cmd/q` 골격 | **완료 및 검증** (독립 CLI 2종·`cmd/q` 빌드, 저장소 계약 테스트, 역참조 차단 통과) |
+| **M2. 1:1 캐릭터 봇 + 기본 UI** | 캐릭터/페르소나 CRUD, 1:1 대화 루프, 기억 회상/가치관 기초, React + shadcn/ui(라이트/다크) 채팅 버블 화면, `web/dist` 빌드 임베드 | **완료 및 검증** (`pnpm typecheck/test/build`, SSE/재시도 테스트, 5개 라이브 프로바이더 세션 검증 통과) |
+| **M3. 7대 도구 · 승인 게이트 · 지식/스킬/위임** | `pkg/task` 도구 루프(파일·셸·아카이브/지식·Loom·Skills·MCP/`browser_control`·`ask_to_user`/서브에이전트) + 3단계 승인 게이트, `pkg/knowledge` 수집·검색 | **완료 및 검증** (7대 도구, 3모드 승인 게이트, 브라우저 드라이버 전환, 지식/도구 UI 통과) |
+| **M4. 멀티캐릭터 룸 & 확장 저장소** | Decisions 기반 멀티캐릭터 채팅 버블 루프·`observedBy`·실시간 인터럽트, `PostgreSQL` / `MySQL` / `OpenSearch` / `S3` 어댑터 완성 | **완료 및 검증** (그룹 런타임·UI, Docker PostgreSQL 18 / MySQL 8.4 / OpenSearch 3.9.0 기준 6종 조합 테스트 통과) |
+| **M5. Wails v3 데스크톱 앱 & 패키징** | `desktop/` Wails v3 셸(`pkg/app` 인프로세스 공유)·트레이·로그인 자동 시작·OS별 패키징 매니페스트(`desktop/packaging/`, `Taskfile.yml`) | **완료 및 검증** (`desktop/` 테스트·빌드 통과; 최종 설치 파일 산출은 각 OS 패키징 도구 체인에서 실행) |
 
 ### 8.2 주요 기술 리스크
 

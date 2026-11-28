@@ -3,6 +3,18 @@
 - **작성일:** 2026-11-28
 - **용도:** Codex에 마일스톤 단위로 작업을 위임할 때 사용하는 작업 분할, 준수 문서, 금지 사항, 검증 명령 체크리스트
 
+## 현재 구현 및 검증 현황 (2026-11-28 기준)
+
+| 마일스톤 | 상태 | 핵심 구현 및 검증 요약 |
+| --- | --- | --- |
+| **M1-A** | **완료** | `pkg/llm`, `pkg/llm/decisions`, `pkg/cdp`, `cmd/llm-provider`, `cmd/cdp-q-driver` 통합 및 역참조 차단(`NO_REVERSE_IMPORTS`) 통과 |
+| **M1-B** | **완료** | `pkg/domain`, `pkg/app/config`, SQLite + Bleve/HNSW + LocalFS + Outbox, `cmd/q` 골격 및 저장소 계약 테스트 통과 |
+| **M2-A** | **완료** | `pkg/memory`, 1:1 `pkg/runtime`, REST/SSE API, Codex/OpenAI/OpenRouter/DeepInfra(v4.1-flash-1017)/Gemini Hydrogen 라이브 세션 테스트(`Q_LIVE_TEST=1`) 통과 |
+| **M2-B** | **완료** | React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui(테마 전환), `web/dist` `//go:embed`, `Taskfile.yml` 통합 |
+| **M3** | **완료** | 7대 내장 도구, 3단계 `ApprovalGate`(`bypass`/`auto-detection`/`request`), Loom(goja `loom_eval`), `pkg/knowledge`, 도구/지식/스킬 UI 구현 및 검증 |
+| **M4** | **완료** | 멀티캐릭터 `group` 런타임·그룹 UI, `sqlcommon`/`postgres`/`mysql`/`opensearch`/`s3` 어댑터 및 Docker 기반 6종 조합 매트릭스(`TestStorageSixWayMatrix`)·실DB 계약 테스트 통과 |
+| **M5** | **완료** | `desktop/go.mod`(Wails `v3.1.0`), `App.StartAsync`, 트레이/숨김/로그인 자동 시작(`--register-autostart`, 트레이 체크박스), `desktop/packaging/` 매니페스트 및 `Taskfile.yml` 타깃 구성(Windows 환경 빌드·단위 테스트 통과; OS별 최종 인스톨러 파일 생성은 각 OS 패키징 도구 체인에서 실행) |
+
 > [!IMPORTANT]
 > **Codex 작업 공통 규칙**
 > 1. 각 작업 시작 전 [Blueprint](../blueprint.md), 해당 ADR([`docs/adr/`](../adr/README.md)), 그리고 `docs/specs/`의 계약 문서를 먼저 읽고 인터페이스/스키마를 자의적으로 변형하지 않는다.

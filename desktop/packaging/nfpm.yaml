@@ -1,0 +1,28 @@
+name: q
+arch: ${GOARCH}
+platform: linux
+version: 2.0.0
+maintainer: snowmerak
+description: Character-chat-first AI platform
+homepage: https://github.com/snowmerak/q
+license: Unspecified
+contents:
+  - src: ../bin/q-desktop
+    dst: /usr/lib/q/q-desktop
+    file_info:
+      mode: 0755
+  - src: /usr/lib/q/q-desktop
+    dst: /usr/bin/q-desktop
+    type: symlink
+  - src: ../assets/icon.png
+    dst: /usr/share/icons/hicolor/64x64/apps/q.png
+  - src: ./q.desktop
+    dst: /usr/share/applications/com.snowmerak.q.desktop
+depends:
+  - libgtk-4-1
+  - libwebkitgtk-6.0-4
+overrides:
+  rpm:
+    depends:
+      - gtk4
+      - webkitgtk6.0

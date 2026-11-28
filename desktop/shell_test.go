@@ -2,8 +2,12 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"image/png"
+	"reflect"
 	"testing"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 func TestFormatLoopbackURL(t *testing.T) {
@@ -26,8 +30,8 @@ func TestAppIconBytesValidPNG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("png.Decode: %v", err)
 	}
-	if b := img.Bounds(); b.Dx() != 32 || b.Dy() != 32 {
-		t.Fatalf("icon dimensions = %dx%d, want 32x32", b.Dx(), b.Dy())
+	if b := img.Bounds(); b.Dx() != 64 || b.Dy() != 64 {
+		t.Fatalf("icon dimensions = %dx%d, want 64x64", b.Dx(), b.Dy())
 	}
 }
 
@@ -40,5 +44,50 @@ func TestShouldHideOnClose(t *testing.T) {
 	}
 	if shouldHideOnClose(false, true) {
 		t.Fatal("expected quit when quitting=true")
+	}
+}
+
+type fakeAutostart struct {
+	enabled  bool
+	lastOpts application.AutostartOptions
+	err      error
+}
+
+func (f *fakeAutostart) IsEnabled() (bool, error) { return f.enabled, f.err }
+func (f *fakeAutostart) EnableWithOptions(opts application.AutostartOptions) error {
+	f.lastOpts = opts
+	if f.err != nil {
+		return f.err
+	}
+	f.enabled = true
+	return nil
+}
+func (f *fakeAutostart) Disable() error {
+	if f.err != nil {
+		return f.err
+	}
+	f.enabled = false
+	return nil
+}
+
+func TestToggleAutostart(t *testing.T) {
+	mgr := &fakeAutostart{}
+	state, err := toggleAutostart(mgr, true)
+	if err != nil || !state || !mgr.enabled {
+		t.Fatalf("enable failed: state=%v enabled=%v err=%v", state, mgr.enabled, err)
+	}
+	if !reflect.DeepEqual(mgr.lastOpts.Arguments, []string{"--start-hidden"}) {
+		t.Fatalf("unexpected autostart arguments: %+v", mgr.lastOpts.Arguments)
+	}
+
+	state, err = toggleAutostart(mgr, false)
+	if err != nil || state || mgr.enabled {
+		t.Fatalf("disable failed: state=%v enabled=%v err=%v", state, mgr.enabled, err)
+	}
+
+	failing := &fakeAutostart{enabled: false, err: errors.New("registry denied")}
+	state, err = toggleAutostart(failing, true)
+	if err == nil || state {
+		t.Fatalf("expected rollback on error: state=%v err=%v", state, err)
 	}
 }

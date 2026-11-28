@@ -46,6 +46,33 @@ tasks:
     cmds:
       - go build -o ../bin/q-desktop{{exeExt}} .
 
+  package:windows:
+    desc: Build and package Windows NSIS installer via desktop/packaging/wails.yaml
+    deps:
+      - build:desktop
+    dir: desktop/packaging
+    cmds:
+      - wails3 package -config wails.yaml
+
+  package:darwin:
+    desc: Stage macOS .app bundle contents using desktop/packaging/darwin-Info.plist
+    deps:
+      - build:desktop
+    cmds:
+      - mkdir -p bin/Q.app/Contents/MacOS bin/Q.app/Contents/Resources
+      - cp bin/q-desktop bin/Q.app/Contents/MacOS/q-desktop
+      - cp desktop/packaging/darwin-Info.plist bin/Q.app/Contents/Info.plist
+      - cp desktop/assets/icon.png bin/Q.app/Contents/Resources/icon.png
+
+  package:linux:
+    desc: Package Linux DEB and RPM bundles using desktop/packaging/nfpm.yaml
+    deps:
+      - build:desktop
+    dir: desktop/packaging
+    cmds:
+      - nfpm pkg -p deb -f nfpm.yaml -t ../../bin/
+      - nfpm pkg -p rpm -f nfpm.yaml -t ../../bin/
+
   build:all:
     desc: Build all Q v2 CLI and desktop binaries
     deps:

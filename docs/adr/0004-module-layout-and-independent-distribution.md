@@ -1,6 +1,6 @@
 # ADR-0004: 공개 `pkg/` 계층, 공유 코어 및 `llm`/`cdp` 독립 배포 모듈 경계
 
-- **상태:** 확정 (Accepted — 단일 루트 `go.mod` + `desktop/go.mod` 분리 채택)
+- **상태:** 확정 및 구현·검증 완료 (Accepted & Verified — 단일 루트 `go.mod` + `desktop/go.mod` 분리)
 - **작성일:** 2026-11-28
 - **관련 문서:** [PRD (`REQ-LLM-01`, `REQ-UI-01`)](../prd.md#42-%EA%B8%B0%EB%8A%A5-%EB%B0%8F-%EB%B9%84%EA%B8%B0%EB%8A%A5-%EC%9A%94%EA%B5%AC%EC%82%AC%ED%95%AD), [Blueprint 2장·6장·7장](../blueprint.md#7-%ED%94%84%EB%A1%9C%EC%A0%9D%ED%8A%B8-%EA%B5%AC%EC%84%B1-%ED%99%95%EC%A0%95--%EC%84%B8%EB%B6%80-%ED%8C%8C%EC%9D%BC-%EB%B0%B0%EC%B9%98%EB%8A%94-%EA%B5%AC%ED%98%84-%EC%8B%9C-%EB%AF%B8%EC%84%B8-%EC%A1%B0%EC%A0%95)
 - **참조 근거:** `snowmerak/llm-provider/go.mod` (직접 의존성 4개), `snowmerak/cdp-q-driver/go.mod` (직접 의존성 2개), `snowmerak/q` (`main`) `go.mod` · `docs/studio-desktop.md`
@@ -56,6 +56,6 @@ q v2 프로젝트 구성에 대해 다음 방향이 요구되었습니다.
 - `pkg/llm`과 `pkg/cdp`의 역참조 금지를 정적 검사로 강제하면, 추후 하위 모듈 분리가 필요해지더라도 코드 이동 없이 `go.mod`만 추가해 전환할 수 있습니다.
 
 ### 확인 기준
-- [ ] `go list -deps ./pkg/llm` 및 `go list -deps ./pkg/cdp` 결과에 `github.com/snowmerak/q/v2/pkg/{app,runtime,task,memory,knowledge,storage}`가 포함되지 않을 것.
-- [ ] `cmd/q`, `cmd/llm-provider`, `cmd/cdp-q-driver`가 각각 독립 바이너리로 빌드될 것.
-- [ ] `desktop/`이 `pkg/app`을 직접 import해 Wails v3 바이너리를 빌드하되, 루트 `go.mod`에는 Wails 의존성이 추가되지 않을 것.
+- [x] `go list -deps ./pkg/llm` 및 `go list -deps ./pkg/cdp` 결과에 `github.com/snowmerak/q/v2/pkg/{app,runtime,task,memory,knowledge,storage}`가 포함되지 않을 것.
+- [x] `cmd/q`, `cmd/llm-provider`, `cmd/cdp-q-driver`가 각각 독립 바이너리로 빌드될 것.
+- [x] `desktop/`이 `pkg/app`을 직접 import해 Wails v3 바이너리를 빌드하되, 루트 `go.mod`에는 Wails 의존성이 추가되지 않을 것.

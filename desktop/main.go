@@ -32,8 +32,22 @@ func run(args []string) int {
 	listen := fs.String("listen", "", "HTTP listen address override")
 	startHidden := fs.Bool("start-hidden", false, "start minimized to the system tray")
 	noTray := fs.Bool("no-tray", false, "disable system tray and quit directly on window close")
+	registerAutostart := fs.Bool("register-autostart", false, "register launch-at-login and exit")
+	unregisterAutostart := fs.Bool("unregister-autostart", false, "unregister launch-at-login and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	if *registerAutostart || *unregisterAutostart {
+		wailsApp := application.New(application.Options{
+			Name:        "Q",
+			Description: "Character-chat-first AI platform",
+		})
+		if _, err := toggleAutostart(wailsApp.Autostart, *registerAutostart && !*unregisterAutostart); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "q-desktop: autostart configuration failed: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	rootCtx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -119,6 +133,15 @@ func run(args []string) int {
 		menu.Add("Open in Browser").OnClick(func(*application.Context) {
 			_ = wailsApp.Browser.OpenURL(baseURL)
 		})
+		autostartEnabled, _ := wailsApp.Autostart.IsEnabled()
+		autoItem := menu.AddCheckbox("Start at Login", autostartEnabled)
+		autoItem.OnClick(func(*application.Context) {
+			next, toggleErr := toggleAutostart(wailsApp.Autostart, autoItem.Checked())
+			if toggleErr != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "q-desktop: autostart toggle failed: %v\n", toggleErr)
+			}
+			autoItem.SetChecked(next)
+		})
 		menu.AddSeparator()
 		menu.Add("Quit Q").OnClick(func(*application.Context) {
 			quitting.Store(true)
@@ -146,6 +169,30 @@ func run(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+type autostartController interface {
+	IsEnabled() (bool, error)
+	EnableWithOptions(application.AutostartOptions) error
+	Disable() error
+}
+
+func toggleAutostart(mgr autostartController, want bool) (bool, error) {
+	if mgr == nil {
+		return false, errors.New("autostart manager is nil")
+	}
+	if want {
+		if err := mgr.EnableWithOptions(application.AutostartOptions{
+			Arguments: []string{"--start-hidden"},
+		}); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := mgr.Disable(); err != nil {
+		return true, err
+	}
+	return false, nil
 }
 
 func formatLoopbackURL(addr string) string {

@@ -15,10 +15,10 @@
 
 | 번호 | 제목 | 상태 | 작성일 |
 | --- | --- | --- | --- |
-| [ADR-0001](./0001-storage-authority-and-hybrid-search.md) | RDB 단일 권위 + `Bleve + HNSW` / `OpenSearch` 파생 프로젝션 및 Outbox 재색인 계약 | 확정 (세부 스키마 제안) | 2026-11-28 |
-| [ADR-0002](./0002-chat-bubble-room-and-decisions-protocol.md) | 채팅 버블 기반 멀티캐릭터 룸 + Decisions 조율 및 `observedBy` 격리 프로토콜 | 확정 (세부 파라미터 제안) | 2026-11-28 |
-| [ADR-0003](./0003-tools-approval-gate-and-browser-control.md) | 1차 내장 도구 7개 영역, 3단계 승인 게이트 및 `browser_control` 계약 | 확정 (세부 가드 제안) | 2026-11-28 |
-| [ADR-0004](./0004-module-layout-and-independent-distribution.md) | 공개 `pkg/` 계층, 공유 코어 및 `llm`/`cdp` 독립 배포 모듈 경계 | 확정 (단일 루트 `go.mod` + `desktop/go.mod`) | 2026-11-28 |
+| [ADR-0001](./0001-storage-authority-and-hybrid-search.md) | RDB 단일 권위 + `Bleve + HNSW` / `OpenSearch` 파생 프로젝션 및 Outbox 재색인 계약 | 확정 및 구현·검증 완료 | 2026-11-28 |
+| [ADR-0002](./0002-chat-bubble-room-and-decisions-protocol.md) | 채팅 버블 기반 멀티캐릭터 룸 + Decisions 조율 및 `observedBy` 격리 프로토콜 | 확정 및 구현·검증 완료 | 2026-11-28 |
+| [ADR-0003](./0003-tools-approval-gate-and-browser-control.md) | 1차 내장 도구 7개 영역, 3단계 승인 게이트 및 `browser_control` 계약 | 확정 및 구현·검증 완료 | 2026-11-28 |
+| [ADR-0004](./0004-module-layout-and-independent-distribution.md) | 공개 `pkg/` 계층, 공유 코어 및 `llm`/`cdp` 독립 배포 모듈 경계 | 확정 및 구현·검증 완료 (`v2` 통합) | 2026-11-28 |
 
 ## 관련 문서
 
