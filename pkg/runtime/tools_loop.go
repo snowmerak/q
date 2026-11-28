@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/snowmerak/q/v2/pkg/domain"
 	llmprovider "github.com/snowmerak/q/v2/pkg/llm"
@@ -17,8 +16,7 @@ import (
 )
 
 const (
-	maxToolRounds     = 12
-	maxSubagentRounds = 6
+	maxToolRounds = 12
 )
 
 var (
@@ -365,25 +363,20 @@ func (e *Engine) processToolCalls(
 		})
 
 		callCtx := task.CallContext{
-			RoomID:             roomID,
-			TurnID:             turn.ID,
-			ActorID:            member.CharacterID,
-			ActorName:          member.CharacterSnapshot.Name,
-			UserRequest:        latestUserText,
-			ApprovalMode:       effectiveMode,
-			AllowedRoots:       snap.Config.Tools.AllowedRoots,
-			DataDir:            dataDir,
-			DelegationDepth:    0,
-			MaxDelegationDepth: snap.Config.Tools.MaxDelegationDepth,
+			RoomID:       roomID,
+			TurnID:       turn.ID,
+			ActorID:      member.CharacterID,
+			ActorName:    member.CharacterSnapshot.Name,
+			UserRequest:  latestUserText,
+			ApprovalMode: effectiveMode,
+			AllowedRoots: snap.Config.Tools.AllowedRoots,
+			DataDir:      dataDir,
 			ProgressFn: func(msg string) {
 				e.events.Publish(roomID, "tool.progress", map[string]any{
 					"turn_id":       turn.ID,
 					"invocation_id": inv.ID,
 					"message":       msg,
 				})
-			},
-			SubagentFn: func(subCtx context.Context, subPrompt, role string, depth int) (string, error) {
-				return e.runSubagentLoop(subCtx, snap, models, room, member, toolReg, dataDir, subPrompt, role, depth)
 			},
 		}
 
@@ -464,109 +457,6 @@ func (e *Engine) processToolCalls(
 		})
 	}
 	return toolLoopContinue, specCtx
-}
-
-func (e *Engine) runSubagentLoop(
-	ctx context.Context,
-	snap ProviderSnapshot,
-	models ResolvedModels,
-	room domain.Room,
-	member domain.RoomMember,
-	toolReg *task.Registry,
-	dataDir string,
-	subPrompt, role string,
-	depth int,
-) (string, error) {
-	if snap.Gateway == nil {
-		return "", errors.New("gateway unavailable")
-	}
-	subModel := strings.TrimSpace(snap.Config.LLM.Roles.SubagentModel)
-	subEffort := strings.TrimSpace(snap.Config.LLM.Roles.SubagentReasoningEffort)
-	if subModel == "" {
-		subModel = models.ChatModel
-		if subEffort == "" {
-			subEffort = models.ReasoningEffort
-		}
-	}
-	msgs := []llmprovider.Message{
-		{
-			Role:    llmprovider.RoleSystem,
-			Content: fmt.Sprintf("You are subagent %q helping character %q complete a focused subtask concisely.", role, member.CharacterSnapshot.Name),
-		},
-		{
-			Role:    llmprovider.RoleUser,
-			Content: subPrompt,
-		},
-	}
-
-	var decEval memory.DecisionEvaluator
-	if snap.Decisions != nil {
-		decEval = snap.Decisions
-	}
-	baseMode := task.EffectiveMode(snap.Config.Tools.ApprovalMode, room.ApprovalModeOverride, member.CharacterSnapshot.ApprovalPolicyOverride, nil, "")
-	allowNested := depth < snap.Config.Tools.MaxDelegationDepth
-
-	for round := 0; round < maxSubagentRounds; round++ {
-		subCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		resp, err := snap.Gateway.Chat(subCtx, llmprovider.ChatRequest{
-			Model:           subModel,
-			Messages:        msgs,
-			Tools:           toolReg.ToolDefinitions(allowNested),
-			ReasoningEffort: subEffort,
-		})
-		cancel()
-		if err != nil {
-			return "", err
-		}
-		if len(resp.Choices) == 0 {
-			return "", errors.New("subagent received empty response")
-		}
-		choice := resp.Choices[0].Message
-		if len(choice.ToolCalls) == 0 {
-			return strings.TrimSpace(choice.TextContent()), nil
-		}
-		msgs = append(msgs, choice)
-		for _, tc := range choice.ToolCalls {
-			spec, ok := toolReg.Lookup(tc.Function.Name)
-			if !ok {
-				msgs = append(msgs, llmprovider.Message{Role: llmprovider.RoleTool, ToolCallID: tc.ID, Content: "unknown tool"})
-				continue
-			}
-			mode := task.EffectiveMode(baseMode, nil, nil, snap.Config.Tools.ToolOverrides, tc.Function.Name)
-			needsApproval, reason := task.EvaluateApproval(ctx, decEval, models.DecisionModel, mode, spec, tc.Function.Arguments, subPrompt)
-			if needsApproval {
-				msgs = append(msgs, llmprovider.Message{
-					Role:       llmprovider.RoleTool,
-					ToolCallID: tc.ID,
-					Content:    fmt.Sprintf("Subagent blocked from executing %s (%s). Return control to parent character if user approval is required.", tc.Function.Name, reason),
-				})
-				continue
-			}
-			out, execErr := toolReg.Execute(ctx, task.CallContext{
-				RoomID:             room.ID,
-				ActorID:            member.CharacterID,
-				ActorName:          role,
-				UserRequest:        subPrompt,
-				ApprovalMode:       mode,
-				AllowedRoots:       snap.Config.Tools.AllowedRoots,
-				DataDir:            dataDir,
-				DelegationDepth:    depth,
-				MaxDelegationDepth: snap.Config.Tools.MaxDelegationDepth,
-				SubagentFn: func(sCtx context.Context, p, r string, d int) (string, error) {
-					return e.runSubagentLoop(sCtx, snap, models, room, member, toolReg, dataDir, p, r, d)
-				},
-			}, tc.Function.Name, tc.Function.Arguments)
-			if execErr != nil {
-				out = task.ToolOutput{Content: execErr.Error(), IsError: true}
-			}
-			msgs = append(msgs, llmprovider.Message{
-				Role:       llmprovider.RoleTool,
-				ToolCallID: tc.ID,
-				Content:    out.Content,
-			})
-		}
-	}
-	return "", errors.New("subagent exceeded max rounds")
 }
 
 func accumulateToolCallChunk(acc map[int]*llmprovider.ToolCall, fragments []llmprovider.ToolCall) {

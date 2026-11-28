@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/snowmerak/q/v2/pkg/domain"
 	llmprovider "github.com/snowmerak/q/v2/pkg/llm"
 	"github.com/snowmerak/q/v2/pkg/memory"
 	"github.com/snowmerak/q/v2/pkg/storage"
@@ -82,13 +81,10 @@ func (r *Registry) Specs() []ToolSpec {
 }
 
 // ToolDefinitions returns OpenAI-compatible function tool descriptors for LLM requests.
-func (r *Registry) ToolDefinitions(allowSubagent bool) []llmprovider.Tool {
+func (r *Registry) ToolDefinitions() []llmprovider.Tool {
 	specs := r.Specs()
 	defs := make([]llmprovider.Tool, 0, len(specs))
 	for _, spec := range specs {
-		if !allowSubagent && spec.Source == domain.ToolSourceSubagent {
-			continue
-		}
 		defs = append(defs, llmprovider.Tool{
 			Type: llmprovider.ToolTypeFunction,
 			Function: llmprovider.FunctionDefinition{

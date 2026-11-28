@@ -65,8 +65,6 @@ export interface LLMRolesConfig {
   memory_model?: string;
   memory_reasoning_effort?: string;
   recall_planner_model?: string;
-  subagent_model?: string;
-  subagent_reasoning_effort?: string;
 }
 
 export interface CodexProviderConfig {
@@ -221,7 +219,6 @@ export interface ConfigView {
     tool_overrides?: Record<string, ApprovalMode>;
     allowed_roots?: string[];
     command_timeout_ms?: number;
-    max_delegation_depth?: number;
     browser_control: {
       enabled: boolean;
       preferred: "cdp-q-driver" | "ego-browser";

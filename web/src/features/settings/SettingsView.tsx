@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Database, RefreshCw, Save } from "lucide-react";
 import type { QClient } from "@/client/api";
 import { QAPIError } from "@/client/api";
@@ -17,6 +17,7 @@ import { ModelSelect } from "@/components/ui/model-select";
 import { ReasoningSelect, reconcileReasoningEffort } from "@/components/ui/reasoning-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { createAutoSaver, type AutoSaveState } from "@/features/settings/autosave";
 import { ModelBehaviorSection } from "@/features/settings/ModelBehaviorSection";
 import { ProvidersSection } from "@/features/settings/ProvidersSection";
 import {
@@ -33,8 +34,23 @@ export function SettingsView({ client }: { client: QClient }) {
   const [decisionModels, setDecisionModels] = useState<DecisionModelInfo[]>([]);
   const [modelFilter, setModelFilter] = useState<string>("");
   const [statusMsg, setStatusMsg] = useState<string>("");
+  const [saveState, setSaveState] = useState<AutoSaveState>("idle");
   const [restartFields, setRestartFields] = useState<string[]>([]);
-  const [dirty, setDirty] = useState<boolean>(false);
+
+  const refreshRuntimeState = useCallback(async () => {
+    try {
+      const [h, m, dm] = await Promise.all([
+        client.health(),
+        client.listModels(),
+        client.listDecisionModels(),
+      ]);
+      setHealth(h);
+      setModels(m.models);
+      setDecisionModels(dm.models);
+    } catch {
+      // Runtime refresh failure must not discard local editing state.
+    }
+  }, [client]);
 
   const loadAll = useCallback(async () => {
     try {
@@ -49,11 +65,41 @@ export function SettingsView({ client }: { client: QClient }) {
       setRawJson(JSON.stringify(c, null, 2));
       setModels(m.models);
       setDecisionModels(dm.models);
-      setDirty(false);
+      setSaveState("idle");
     } catch (err) {
       setStatusMsg(err instanceof Error ? err.message : "Failed to load settings");
     }
   }, [client]);
+
+  const autoSaverRef = useRef<ReturnType<typeof createAutoSaver<ConfigView>> | null>(null);
+
+  useEffect(() => {
+    const saver = createAutoSaver({
+      delayMs: 500,
+      save: (nextCfg: ConfigView) => client.putConfig(nextCfg),
+      onStateChange: (nextState) => {
+        setSaveState(nextState);
+        if (nextState === "saving") {
+          setStatusMsg("");
+        }
+      },
+      onSuccess: (res) => {
+        setRestartFields(res.restart_required_fields);
+        setStatusMsg("Auto-saved & applied.");
+        void refreshRuntimeState();
+      },
+      onError: (err) => {
+        setStatusMsg(err instanceof QAPIError ? `${err.code}: ${err.message}` : "Auto-save failed");
+      },
+    });
+    autoSaverRef.current = saver;
+    return () => {
+      saver.dispose();
+      if (autoSaverRef.current === saver) {
+        autoSaverRef.current = null;
+      }
+    };
+  }, [client, refreshRuntimeState]);
 
   useEffect(() => {
     void loadAll();
@@ -62,20 +108,12 @@ export function SettingsView({ client }: { client: QClient }) {
   const updateCfg = (next: ConfigView) => {
     setCfg(next);
     setRawJson(JSON.stringify(next, null, 2));
-    setDirty(true);
+    autoSaverRef.current?.schedule(next);
   };
 
   const handleSaveStructured = async () => {
-    if (!cfg) return;
-    setStatusMsg("");
-    try {
-      const res = await client.putConfig(cfg);
-      setRestartFields(res.restart_required_fields);
-      setStatusMsg("Configuration saved & applied.");
-      await loadAll();
-    } catch (err) {
-      setStatusMsg(err instanceof QAPIError ? `${err.code}: ${err.message}` : "Save failed");
-    }
+    if (!cfg || !autoSaverRef.current) return;
+    await autoSaverRef.current.flush(cfg);
   };
 
   const handleSaveRawJson = async () => {
@@ -87,6 +125,7 @@ export function SettingsView({ client }: { client: QClient }) {
       setStatusMsg("Raw JSON configuration saved.");
       await loadAll();
     } catch (err) {
+      setSaveState("error");
       setStatusMsg(err instanceof Error ? err.message : "Invalid JSON");
     }
   };
@@ -94,9 +133,12 @@ export function SettingsView({ client }: { client: QClient }) {
   const handleRefreshModels = async () => {
     setStatusMsg("");
     try {
+      if (cfg && (saveState === "pending" || saveState === "error")) {
+        await autoSaverRef.current?.flush(cfg);
+      }
       const res = await client.refreshModels();
       setStatusMsg(`Refreshed ${res.count} models.`);
-      await loadAll();
+      await refreshRuntimeState();
     } catch (err) {
       setStatusMsg(err instanceof Error ? err.message : "Refresh failed");
     }
@@ -141,15 +183,24 @@ export function SettingsView({ client }: { client: QClient }) {
           <div>
             <h1 className="text-xl font-semibold tracking-tight">Settings &amp; Configuration</h1>
             <p className="text-sm text-muted-foreground">
-              Manage LLM providers, model roles, embeddings, Decisions, tools/MCP, and storage backends.
+              Structured changes auto-save &amp; hot-reload automatically. Manage providers, models, embeddings, Decisions, tools/MCP, and storage.
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {statusMsg && <Badge variant="outline">{statusMsg}</Badge>}
-            {cfg && (
-              <Button onClick={() => void handleSaveStructured()}>
+            {saveState === "saving" && <Badge variant="secondary">Saving…</Badge>}
+            {saveState === "pending" && <Badge variant="outline">Pending auto-save…</Badge>}
+            {saveState === "saved" && !statusMsg && (
+              <Badge variant="outline">All changes saved</Badge>
+            )}
+            {statusMsg && (
+              <Badge variant={saveState === "error" ? "destructive" : "outline"}>
+                {statusMsg}
+              </Badge>
+            )}
+            {cfg && (saveState === "pending" || saveState === "error") && (
+              <Button size="sm" variant="outline" onClick={() => void handleSaveStructured()}>
                 <Save className="h-4 w-4" />
-                {dirty ? "Save Changes *" : "Save Changes"}
+                {saveState === "error" ? "Retry Save" : "Save Now"}
               </Button>
             )}
           </div>
@@ -311,57 +362,6 @@ export function SettingsView({ client }: { client: QClient }) {
                               roles: {
                                 ...cfg.llm.roles,
                                 memory_reasoning_effort: effort || undefined,
-                              },
-                            },
-                          })
-                        }
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="role-sub">Subagent Model</Label>
-                      <ModelSelect
-                        id="role-sub"
-                        value={cfg.llm.roles.subagent_model ?? ""}
-                        options={llmModelOptions}
-                        emptyLabel="— Same as Chat Model —"
-                        onChange={(v) => {
-                          const nextSub = v || undefined;
-                          const effectiveSub = v || cfg.llm.roles.chat_model || "";
-                          const nextEffort = reconcileReasoningEffort(
-                            effectiveSub,
-                            cfg.llm.roles.subagent_reasoning_effort ?? "",
-                            models,
-                          );
-                          updateCfg({
-                            ...cfg,
-                            llm: {
-                              ...cfg.llm,
-                              roles: {
-                                ...cfg.llm.roles,
-                                subagent_model: nextSub,
-                                subagent_reasoning_effort: nextEffort || undefined,
-                              },
-                            },
-                          });
-                        }}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="role-sub-effort">Subagent Reasoning Effort</Label>
-                      <ReasoningSelect
-                        id="role-sub-effort"
-                        modelId={cfg.llm.roles.subagent_model || cfg.llm.roles.chat_model || ""}
-                        models={models}
-                        value={cfg.llm.roles.subagent_reasoning_effort ?? ""}
-                        emptyLabel="Same as Chat / Provider default"
-                        onChange={(effort) =>
-                          updateCfg({
-                            ...cfg,
-                            llm: {
-                              ...cfg.llm,
-                              roles: {
-                                ...cfg.llm.roles,
-                                subagent_reasoning_effort: effort || undefined,
                               },
                             },
                           })

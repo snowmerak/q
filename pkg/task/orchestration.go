@@ -113,46 +113,4 @@ func registerOrchestrationTools(r *Registry) {
 			return ToolOutput{Content: fmt.Sprintf("Task completed: %s (%s)", strings.TrimSpace(args.Title), strings.TrimSpace(args.Summary))}, nil
 		},
 	})
-
-	r.register(ToolSpec{
-		Name:        "delegate_task",
-		Description: "Delegate a bounded focused subtask to an in-process subagent loop inheriting this room's approval gate policy.",
-		Source:      domain.ToolSourceSubagent,
-		Risk:        RiskExternal,
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"prompt": map[string]any{"type": "string"},
-				"role":   map[string]any{"type": "string"},
-			},
-			"required": []string{"prompt"},
-		},
-		Handler: func(ctx context.Context, call CallContext, argsJSON string) (ToolOutput, error) {
-			var args struct {
-				Prompt string `json:"prompt"`
-				Role   string `json:"role"`
-			}
-			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-				return ToolOutput{Content: "invalid args: " + err.Error(), IsError: true}, nil
-			}
-			if call.DelegationDepth >= call.MaxDelegationDepth {
-				return ToolOutput{
-					Content: fmt.Sprintf("delegate_task rejected: depth %d reached max_delegation_depth %d", call.DelegationDepth, call.MaxDelegationDepth),
-					IsError: true,
-				}, nil
-			}
-			if call.SubagentFn == nil {
-				return ToolOutput{Content: "delegate_task runtime unavailable", IsError: true}, nil
-			}
-			role := strings.TrimSpace(args.Role)
-			if role == "" {
-				role = "Subagent"
-			}
-			res, err := call.SubagentFn(ctx, strings.TrimSpace(args.Prompt), role, call.DelegationDepth+1)
-			if err != nil {
-				return ToolOutput{Content: "subagent failed: " + err.Error(), IsError: true}, nil
-			}
-			return ToolOutput{Content: res}, nil
-		},
-	})
 }

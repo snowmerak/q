@@ -95,8 +95,6 @@ type LLMRolesConfig struct {
 	MemoryModel           string `json:"memory_model,omitempty"`
 	MemoryReasoningEffort string `json:"memory_reasoning_effort,omitempty"`
 	RecallPlannerModel    string `json:"recall_planner_model,omitempty"`
-	SubagentModel         string `json:"subagent_model,omitempty"`
-	SubagentReasoningEffort string `json:"subagent_reasoning_effort,omitempty"`
 }
 
 type EmbeddingsConfig struct {
@@ -113,13 +111,12 @@ type EmbeddingsConfig struct {
 }
 
 type ToolsConfig struct {
-	ApprovalMode       domain.ApprovalMode            `json:"approval_mode"`
-	ToolOverrides      map[string]domain.ApprovalMode `json:"tool_overrides,omitempty"`
-	AllowedRoots       []string                       `json:"allowed_roots,omitempty"`
-	CommandTimeoutMS   int                            `json:"command_timeout_ms,omitempty"`
-	MaxDelegationDepth int                            `json:"max_delegation_depth,omitempty"`
-	BrowserControl     BrowserControlConfig           `json:"browser_control"`
-	MCPServers         []MCPServerConfig              `json:"mcp_servers,omitempty"`
+	ApprovalMode     domain.ApprovalMode            `json:"approval_mode"`
+	ToolOverrides    map[string]domain.ApprovalMode `json:"tool_overrides,omitempty"`
+	AllowedRoots     []string                       `json:"allowed_roots,omitempty"`
+	CommandTimeoutMS int                            `json:"command_timeout_ms,omitempty"`
+	BrowserControl   BrowserControlConfig           `json:"browser_control"`
+	MCPServers       []MCPServerConfig              `json:"mcp_servers,omitempty"`
 }
 
 type BrowserControlConfig struct {
@@ -190,8 +187,7 @@ func Default() Config {
 				"run_command": domain.ApprovalAutoDetection,
 				"read_file":   domain.ApprovalBypass,
 			},
-			CommandTimeoutMS:   120000,
-			MaxDelegationDepth: 2,
+			CommandTimeoutMS: 120000,
 			BrowserControl: BrowserControlConfig{
 				Enabled:   true,
 				Preferred: "cdp-q-driver",
@@ -241,6 +237,10 @@ func Load(path string) (Config, error) {
 
 // Parse strictly decodes and validates JSON config bytes.
 func Parse(data []byte) (Config, error) {
+	data, err := stripRemovedLegacyFields(data)
+	if err != nil {
+		return Config{}, err
+	}
 	var cfg Config
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -259,6 +259,51 @@ func Parse(data []byte) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func stripRemovedLegacyFields(data []byte) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var doc any
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	if dec.More() {
+		return nil, errors.New("decode config: trailing data")
+	}
+	var extra any
+	if err := dec.Decode(&extra); err == nil {
+		return nil, errors.New("decode config: trailing JSON value")
+	}
+	obj, ok := doc.(map[string]any)
+	if !ok {
+		return data, nil
+	}
+	changed := false
+	if llmMap, ok := obj["llm"].(map[string]any); ok {
+		if rolesMap, ok := llmMap["roles"].(map[string]any); ok {
+			for _, key := range []string{"subagent_model", "subagent_reasoning_effort"} {
+				if _, exists := rolesMap[key]; exists {
+					delete(rolesMap, key)
+					changed = true
+				}
+			}
+		}
+	}
+	if toolsMap, ok := obj["tools"].(map[string]any); ok {
+		if _, exists := toolsMap["max_delegation_depth"]; exists {
+			delete(toolsMap, "max_delegation_depth")
+			changed = true
+		}
+	}
+	if !changed {
+		return data, nil
+	}
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	return out, nil
 }
 
 // Save atomically writes cfg as formatted JSON after validation.
@@ -327,9 +372,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.Tools.CommandTimeoutMS == 0 {
 		c.Tools.CommandTimeoutMS = def.Tools.CommandTimeoutMS
-	}
-	if c.Tools.MaxDelegationDepth == 0 {
-		c.Tools.MaxDelegationDepth = def.Tools.MaxDelegationDepth
 	}
 	if strings.TrimSpace(c.Tools.BrowserControl.Preferred) == "" {
 		c.Tools.BrowserControl.Preferred = def.Tools.BrowserControl.Preferred
@@ -410,8 +452,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: invalid tool_overrides entry %q=%q", name, mode)
 		}
 	}
-	if c.Tools.CommandTimeoutMS < 100 || c.Tools.MaxDelegationDepth < 0 {
-		return errors.New("config: invalid tools timeout or delegation depth")
+	if c.Tools.CommandTimeoutMS < 100 {
+		return errors.New("config: invalid tools command timeout")
 	}
 	switch c.Tools.BrowserControl.Preferred {
 	case "cdp-q-driver", "ego-browser":
@@ -442,9 +484,8 @@ func (c Config) Validate() error {
 		}
 	}
 	for role, effort := range map[string]string{
-		"chat_reasoning_effort":     c.LLM.Roles.ChatReasoningEffort,
-		"memory_reasoning_effort":   c.LLM.Roles.MemoryReasoningEffort,
-		"subagent_reasoning_effort": c.LLM.Roles.SubagentReasoningEffort,
+		"chat_reasoning_effort":   c.LLM.Roles.ChatReasoningEffort,
+		"memory_reasoning_effort": c.LLM.Roles.MemoryReasoningEffort,
 	} {
 		if effort != strings.TrimSpace(effort) {
 			return fmt.Errorf("config: llm.roles.%s must not have surrounding whitespace", role)

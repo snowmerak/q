@@ -154,27 +154,50 @@ func TestValidateEmbeddingsProviderID(t *testing.T) {
 func TestValidateRoleReasoningEfforts(t *testing.T) {
 	cfg := Default()
 	cfg.LLM.Roles = LLMRolesConfig{
-		ChatModel:               "openai/gpt-5",
-		ChatReasoningEffort:     "medium",
-		MemoryModel:             "openai/gpt-5-mini",
-		MemoryReasoningEffort:   "low",
-		SubagentModel:           "openai/gpt-5",
-		SubagentReasoningEffort: "high",
+		ChatModel:             "openai/gpt-5",
+		ChatReasoningEffort:   "medium",
+		MemoryModel:           "openai/gpt-5-mini",
+		MemoryReasoningEffort: "low",
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("expected valid role reasoning efforts, got %v", err)
 	}
 
 	for name, mutate := range map[string]func(*LLMRolesConfig){
-		"chat":     func(r *LLMRolesConfig) { r.ChatReasoningEffort = " high" },
-		"memory":   func(r *LLMRolesConfig) { r.MemoryReasoningEffort = "low " },
-		"subagent": func(r *LLMRolesConfig) { r.SubagentReasoningEffort = "\tmedium" },
+		"chat":   func(r *LLMRolesConfig) { r.ChatReasoningEffort = " high" },
+		"memory": func(r *LLMRolesConfig) { r.MemoryReasoningEffort = "low " },
 	} {
 		bad := cfg
 		mutate(&bad.LLM.Roles)
 		if err := bad.Validate(); err == nil {
 			t.Fatalf("expected surrounding whitespace validation error for %s reasoning_effort", name)
 		}
+	}
+}
+
+func TestParseIgnoresRemovedSubagentAndDelegationFields(t *testing.T) {
+	raw := []byte(`{
+		"version": 2,
+		"llm": {
+			"roles": {
+				"chat_model": "openai/gpt-5",
+				"subagent_model": "openai/gpt-5-mini",
+				"subagent_reasoning_effort": "high"
+			}
+		},
+		"tools": {
+			"max_delegation_depth": 2
+		}
+	}`)
+	cfg, err := Parse(raw)
+	if err != nil {
+		t.Fatalf("expected legacy subagent/delegation fields to load cleanly, got %v", err)
+	}
+	if cfg.LLM.Roles.ChatModel != "openai/gpt-5" {
+		t.Fatalf("unexpected chat_model: %q", cfg.LLM.Roles.ChatModel)
+	}
+	if _, err := Parse([]byte(`{"version":2,"unknown_top_level":true}`)); err == nil {
+		t.Fatal("expected unknown top-level field to remain rejected")
 	}
 }
 

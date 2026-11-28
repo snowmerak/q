@@ -587,8 +587,7 @@ func (e *Engine) executeActorStep(
 
 		var toolDefs []llmprovider.Tool
 		if toolReg != nil && (modelMeta.Capabilities == nil || modelMeta.Capabilities.ToolCalling == nil || *modelMeta.Capabilities.ToolCalling) {
-			allowSub := snap.Config.Tools.MaxDelegationDepth > 0
-			toolDefs = toolReg.ToolDefinitions(allowSub)
+			toolDefs = toolReg.ToolDefinitions()
 		}
 
 		// Step 4: Stream response

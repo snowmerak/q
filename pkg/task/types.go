@@ -26,18 +26,15 @@ type ToolOutput struct {
 }
 
 type CallContext struct {
-	RoomID             string
-	TurnID             string
-	ActorID            string
-	ActorName          string
-	UserRequest        string
-	ApprovalMode       domain.ApprovalMode
-	AllowedRoots       []string
-	DataDir            string
-	DelegationDepth    int
-	MaxDelegationDepth int
-	ProgressFn         func(message string)
-	SubagentFn         func(ctx context.Context, prompt, actorName string, depth int) (string, error)
+	RoomID       string
+	TurnID       string
+	ActorID      string
+	ActorName    string
+	UserRequest  string
+	ApprovalMode domain.ApprovalMode
+	AllowedRoots []string
+	DataDir      string
+	ProgressFn   func(message string)
 }
 
 type ToolSpec struct {

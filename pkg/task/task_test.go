@@ -248,17 +248,12 @@ func TestShellLoomArchiveSkillsBrowserAndOrchestration(t *testing.T) {
 	workDir := filepath.Join(dir, "work")
 	_ = os.MkdirAll(workDir, 0o755)
 	call := task.CallContext{
-		RoomID:             room.ID,
-		TurnID:             "t1",
-		ActorID:            char.ID,
-		ActorName:          char.Name,
-		AllowedRoots:       []string{workDir},
-		DataDir:            dir,
-		DelegationDepth:    0,
-		MaxDelegationDepth: 2,
-		SubagentFn: func(_ context.Context, prompt, role string, depth int) (string, error) {
-			return "subagent:" + role + ":" + prompt, nil
-		},
+		RoomID:       room.ID,
+		TurnID:       "t1",
+		ActorID:      char.ID,
+		ActorName:    char.Name,
+		AllowedRoots: []string{workDir},
+		DataDir:      dir,
 	}
 
 	// 1. Archive ObserverID isolation
@@ -335,18 +330,7 @@ func TestShellLoomArchiveSkillsBrowserAndOrchestration(t *testing.T) {
 		t.Fatalf("unexpected ego-browser dispatch: cmd=%q args=%v", lastBrowserCmd, lastBrowserArgs)
 	}
 
-	// 6. Orchestration: delegate_task depth & ask_to_user pause
-	outSub, _ := reg.Execute(ctx, call, "delegate_task", `{"prompt":"check docs","role":"Researcher"}`)
-	if outSub.IsError || outSub.Content != "subagent:Researcher:check docs" {
-		t.Fatalf("delegate_task: %+v", outSub)
-	}
-	deepCall := call
-	deepCall.DelegationDepth = 2
-	outDeep, _ := reg.Execute(ctx, deepCall, "delegate_task", `{"prompt":"too deep"}`)
-	if !outDeep.IsError || !strings.Contains(outDeep.Content, "max_delegation_depth") {
-		t.Fatalf("expected depth rejection, got %+v", outDeep)
-	}
-
+	// 6. Orchestration: ask_to_user pause
 	outAsk, _ := reg.Execute(ctx, call, "ask_to_user", `{"prompt":"Proceed with cleanup?","choices":["Yes","No"]}`)
 	if outAsk.PauseKind != "awaiting_user" || outAsk.UserQuestion == nil || len(outAsk.UserQuestion.Choices) != 2 {
 		t.Fatalf("ask_to_user output: %+v", outAsk)
