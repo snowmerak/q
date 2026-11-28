@@ -2,12 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { Plus, Save, Trash2 } from "lucide-react";
 import type { QClient } from "@/client/api";
 import { QAPIError } from "@/client/api";
-import type { ApprovalMode, Character, ModelInfo, Persona } from "@/client/types";
+import type { ApprovalMode, Character, DecisionModelInfo, ModelInfo, Persona } from "@/client/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ModelSelect } from "@/components/ui/model-select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,6 +19,7 @@ export function CharactersView({ client }: { client: QClient }) {
   const [characters, setCharacters] = useState<Character[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [decisionModels, setDecisionModels] = useState<DecisionModelInfo[]>([]);
   const [selectedCharId, setSelectedCharId] = useState<string>("__new__");
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>("__new__");
   const [banner, setBanner] = useState<string>("");
@@ -30,6 +32,8 @@ export function CharactersView({ client }: { client: QClient }) {
   const [initialValuesText, setInitialValuesText] = useState("");
   const [chatModel, setChatModel] = useState("");
   const [memoryModel, setMemoryModel] = useState("");
+  const [recallPlannerModel, setRecallPlannerModel] = useState("");
+  const [decisionModel, setDecisionModel] = useState("");
   const [approvalOverride, setApprovalOverride] = useState<"" | ApprovalMode>("");
   const [charVersion, setCharVersion] = useState<number>(1);
 
@@ -41,14 +45,16 @@ export function CharactersView({ client }: { client: QClient }) {
 
   const loadAll = useCallback(async () => {
     try {
-      const [cRes, pRes, mRes] = await Promise.all([
+      const [cRes, pRes, mRes, dRes] = await Promise.all([
         client.listCharacters(),
         client.listPersonas(),
         client.listModels(),
+        client.listDecisionModels(),
       ]);
       setCharacters(cRes.items);
       setPersonas(pRes.items);
       setModels(mRes.models);
+      setDecisionModels(dRes.models);
     } catch (err) {
       setBanner(err instanceof Error ? err.message : "Failed to load catalog");
     }
@@ -69,6 +75,8 @@ export function CharactersView({ client }: { client: QClient }) {
       setInitialValuesText("");
       setChatModel("");
       setMemoryModel("");
+      setRecallPlannerModel("");
+      setDecisionModel("");
       setApprovalOverride("");
       setCharVersion(1);
       return;
@@ -81,6 +89,8 @@ export function CharactersView({ client }: { client: QClient }) {
     setInitialValuesText((c.initial_values ?? []).join("\n"));
     setChatModel(c.model_prefs?.chat_model ?? "");
     setMemoryModel(c.model_prefs?.memory_model ?? "");
+    setRecallPlannerModel(c.model_prefs?.recall_planner_model ?? "");
+    setDecisionModel(c.model_prefs?.decision_model ?? "");
     setApprovalOverride(c.approval_policy_override ?? "");
     setCharVersion(c.version);
   };
@@ -112,19 +122,21 @@ export function CharactersView({ client }: { client: QClient }) {
       .split("\n")
       .map((s) => s.trim())
       .filter(Boolean);
+    const hasPrefs = chatModel || memoryModel || recallPlannerModel || decisionModel;
     const payload = {
       name: charName.trim(),
       personality,
       background,
       appearance,
       initial_values: values,
-      model_prefs:
-        chatModel || memoryModel
-          ? {
-              ...(chatModel ? { chat_model: chatModel } : {}),
-              ...(memoryModel ? { memory_model: memoryModel } : {}),
-            }
-          : undefined,
+      model_prefs: hasPrefs
+        ? {
+            ...(chatModel ? { chat_model: chatModel } : {}),
+            ...(memoryModel ? { memory_model: memoryModel } : {}),
+            ...(recallPlannerModel ? { recall_planner_model: recallPlannerModel } : {}),
+            ...(decisionModel ? { decision_model: decisionModel } : {}),
+          }
+        : undefined,
       ...(approvalOverride ? { approval_policy_override: approvalOverride } : {}),
     };
     try {
@@ -314,28 +326,64 @@ export function CharactersView({ client }: { client: QClient }) {
                       placeholder="Keep promises carefully.&#10;Verify coordinates before acting."
                     />
                   </div>
-                  <div className="grid gap-4 md:grid-cols-3">
+                  <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-1.5">
                       <Label htmlFor="char-chat-model">Chat Model Override</Label>
-                      <Input
+                      <ModelSelect
                         id="char-chat-model"
-                        list="discovered-models"
                         value={chatModel}
-                        onChange={(e) => setChatModel(e.target.value)}
-                        placeholder="Default global role"
+                        onChange={setChatModel}
+                        options={models.map((m) => ({
+                          id: m.id,
+                          label: m.owned_by ? `${m.id} (${m.owned_by})` : m.id,
+                        }))}
+                        emptyLabel="Default global role"
+                        customPlaceholder="provider/chat-model"
                       />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="char-mem-model">Memory Model Override</Label>
-                      <Input
+                      <ModelSelect
                         id="char-mem-model"
-                        list="discovered-models"
                         value={memoryModel}
-                        onChange={(e) => setMemoryModel(e.target.value)}
-                        placeholder="Default global role"
+                        onChange={setMemoryModel}
+                        options={models.map((m) => ({
+                          id: m.id,
+                          label: m.owned_by ? `${m.id} (${m.owned_by})` : m.id,
+                        }))}
+                        emptyLabel="Default global role"
+                        customPlaceholder="provider/memory-model"
                       />
                     </div>
                     <div className="space-y-1.5">
+                      <Label htmlFor="char-recall-model">Recall Planner Model Override</Label>
+                      <ModelSelect
+                        id="char-recall-model"
+                        value={recallPlannerModel}
+                        onChange={setRecallPlannerModel}
+                        options={models.map((m) => ({
+                          id: m.id,
+                          label: m.owned_by ? `${m.id} (${m.owned_by})` : m.id,
+                        }))}
+                        emptyLabel="Default global role"
+                        customPlaceholder="provider/recall-model"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="char-decision-model">Decision Model Override</Label>
+                      <ModelSelect
+                        id="char-decision-model"
+                        value={decisionModel}
+                        onChange={setDecisionModel}
+                        options={decisionModels.map((m) => ({
+                          id: m.id,
+                          label: m.label ? `${m.label} (${m.id})` : m.id,
+                        }))}
+                        emptyLabel="Default decisions model"
+                        customPlaceholder="provider/decision-model"
+                      />
+                    </div>
+                    <div className="space-y-1.5 md:col-span-2">
                       <Label htmlFor="char-approval">Approval Policy</Label>
                       <select
                         id="char-approval"
@@ -350,11 +398,6 @@ export function CharactersView({ client }: { client: QClient }) {
                       </select>
                     </div>
                   </div>
-                  <datalist id="discovered-models">
-                    {models.map((m) => (
-                      <option key={m.id} value={m.id} />
-                    ))}
-                  </datalist>
                   <div className="flex justify-end">
                     <Button onClick={() => void saveCharacter()}>
                       <Save className="h-4 w-4" />

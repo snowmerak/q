@@ -66,6 +66,23 @@ export interface LLMRolesConfig {
   subagent_model?: string;
 }
 
+export interface CodexProviderConfig {
+  command?: string;
+  args?: string[];
+  environment?: Record<string, string>;
+  model?: string;
+  working_directory?: string;
+  base_instructions?: string;
+  sandbox?: string;
+  approval_policy?: string;
+}
+
+export interface ChatGPTProviderConfig {
+  app_id?: string;
+  app_name?: string;
+  directory?: string;
+}
+
 export interface ProviderConfig {
   id: string;
   type: string;
@@ -73,9 +90,50 @@ export interface ProviderConfig {
   prefix: string;
   enabled: boolean;
   base_url?: string;
+  api_key?: string;
   api_key_env?: string;
+  headers?: Record<string, string>;
+  body?: Record<string, unknown>;
+  forward_headers?: string[];
+  forward_response_headers?: string[];
   models?: string[];
-  [key: string]: unknown;
+  model_metadata?: Record<string, unknown>;
+  codex?: CodexProviderConfig;
+  chatgpt?: ChatGPTProviderConfig;
+}
+
+export interface DecisionProviderConfig {
+  id: string;
+  label?: string;
+  protocol: "openai" | "jev" | "gemini";
+  base_url: string;
+  api_key_env?: string;
+  timeout_ms?: number;
+}
+
+export interface DecisionModelConfig {
+  id: string;
+  label?: string;
+  provider_id: string;
+  model: string;
+  context_window?: number;
+}
+
+export interface OpenSearchConfig {
+  endpoint?: string;
+  index_prefix?: string;
+  username?: string;
+  password_env?: string;
+  bearer_token_env?: string;
+  timeout_ms?: number;
+}
+
+export interface S3Config {
+  endpoint?: string;
+  bucket?: string;
+  region?: string;
+  access_key_env?: string;
+  secret_key_env?: string;
 }
 
 export interface MCPServerConfig {
@@ -97,12 +155,13 @@ export interface ConfigView {
   };
   storage: {
     rdb: { driver: string; sqlite_path?: string; dsn_env?: string };
-    search: { driver: string; opensearch?: Record<string, unknown> };
+    search: { driver: string; opensearch?: OpenSearchConfig };
     blob: {
       driver: string;
       max_upload_bytes?: number;
       loom_max_artifact_bytes?: number;
       loom_max_store_bytes?: number;
+      s3?: S3Config;
     };
   };
   llm: {
@@ -112,8 +171,8 @@ export interface ConfigView {
     roles: LLMRolesConfig;
   };
   decisions: {
-    providers: Array<Record<string, unknown>>;
-    models: Array<Record<string, unknown>>;
+    providers: DecisionProviderConfig[];
+    models: DecisionModelConfig[];
     default_model_id?: string;
   };
   embeddings: {

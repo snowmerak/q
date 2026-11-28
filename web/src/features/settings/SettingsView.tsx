@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { Database, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { Database, RefreshCw, Save } from "lucide-react";
 import type { QClient } from "@/client/api";
 import { QAPIError } from "@/client/api";
 import type {
-  ApprovalMode,
   ConfigView,
   DecisionModelInfo,
   HealthStatus,
-  MCPServerConfig,
   ModelInfo,
 } from "@/client/types";
 import { Badge } from "@/components/ui/badge";
@@ -15,9 +13,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
+import { ModelSelect } from "@/components/ui/model-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { ProvidersSection } from "@/features/settings/ProvidersSection";
+import {
+  EmbeddingsSection,
+  StorageAndServerSection,
+  ToolsAndMCPSection,
+} from "@/features/settings/StorageAndToolsSection";
 
 export function SettingsView({ client }: { client: QClient }) {
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -25,8 +29,10 @@ export function SettingsView({ client }: { client: QClient }) {
   const [rawJson, setRawJson] = useState<string>("");
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [decisionModels, setDecisionModels] = useState<DecisionModelInfo[]>([]);
+  const [modelFilter, setModelFilter] = useState<string>("");
   const [statusMsg, setStatusMsg] = useState<string>("");
   const [restartFields, setRestartFields] = useState<string[]>([]);
+  const [dirty, setDirty] = useState<boolean>(false);
 
   const loadAll = useCallback(async () => {
     try {
@@ -41,6 +47,7 @@ export function SettingsView({ client }: { client: QClient }) {
       setRawJson(JSON.stringify(c, null, 2));
       setModels(m.models);
       setDecisionModels(dm.models);
+      setDirty(false);
     } catch (err) {
       setStatusMsg(err instanceof Error ? err.message : "Failed to load settings");
     }
@@ -49,6 +56,12 @@ export function SettingsView({ client }: { client: QClient }) {
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  const updateCfg = (next: ConfigView) => {
+    setCfg(next);
+    setRawJson(JSON.stringify(next, null, 2));
+    setDirty(true);
+  };
 
   const handleSaveStructured = async () => {
     if (!cfg) return;
@@ -97,17 +110,47 @@ export function SettingsView({ client }: { client: QClient }) {
     }
   };
 
+  const llmModelOptions = models.map((m) => ({
+    id: m.id,
+    label: m.context_length ? `${m.id} · ctx ${m.context_length}` : m.id,
+  }));
+
+  const decisionOptions = [
+    ...decisionModels.map((dm) => ({
+      id: dm.id,
+      label: `${dm.id} (${dm.protocol})`,
+    })),
+    ...(cfg?.decisions.models ?? []).map((dm) => ({
+      id: dm.id,
+      label: dm.label ? `${dm.id} — ${dm.label}` : dm.id,
+    })),
+  ];
+
+  const filteredModels = models.filter((m) =>
+    modelFilter.trim() === ""
+      ? true
+      : m.id.toLowerCase().includes(modelFilter.trim().toLowerCase()),
+  );
+
   return (
     <div className="flex-1 overflow-auto p-6">
       <div className="mx-auto max-w-5xl space-y-5">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Settings &amp; Models</h1>
+            <h1 className="text-xl font-semibold tracking-tight">Settings &amp; Configuration</h1>
             <p className="text-sm text-muted-foreground">
-              Manage default LLM roles, approval gate policy, browser driver preference, and storage health.
+              Manage LLM providers, model roles, embeddings, Decisions, tools/MCP, and storage backends.
             </p>
           </div>
-          {statusMsg && <Badge variant="outline">{statusMsg}</Badge>}
+          <div className="flex items-center gap-2">
+            {statusMsg && <Badge variant="outline">{statusMsg}</Badge>}
+            {cfg && (
+              <Button onClick={() => void handleSaveStructured()}>
+                <Save className="h-4 w-4" />
+                {dirty ? "Save Changes *" : "Save Changes"}
+              </Button>
+            )}
+          </div>
         </div>
 
         {restartFields.length > 0 && (
@@ -118,17 +161,23 @@ export function SettingsView({ client }: { client: QClient }) {
 
         {/* Health & Maintenance */}
         <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
+          <CardHeader className="flex flex-row items-center justify-between gap-4">
             <div>
               <CardTitle>System &amp; Storage Status</CardTitle>
               <CardDescription>
                 {health?.reason || "All configured core services and storage backends"}
               </CardDescription>
             </div>
-            <Button variant="outline" size="sm" onClick={() => void handleReindex()}>
-              <Database className="h-4 w-4" />
-              Reindex Search
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => void handleRefreshModels()}>
+                <RefreshCw className="h-4 w-4" />
+                Refresh Models
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => void handleReindex()}>
+                <Database className="h-4 w-4" />
+                Reindex Search
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
             <Badge variant={health?.status === "ready" ? "default" : "destructive"}>
@@ -141,29 +190,43 @@ export function SettingsView({ client }: { client: QClient }) {
         </Card>
 
         {cfg && (
-          <Tabs defaultValue="general">
-            <TabsList>
-              <TabsTrigger value="general">Roles &amp; Tools</TabsTrigger>
-              <TabsTrigger value="models">Discovered Models ({models.length})</TabsTrigger>
+          <Tabs defaultValue="roles">
+            <TabsList className="flex flex-wrap h-auto">
+              <TabsTrigger value="roles">Models &amp; Roles ({models.length})</TabsTrigger>
+              <TabsTrigger value="providers">
+                Providers ({cfg.llm.providers.length})
+              </TabsTrigger>
+              <TabsTrigger value="embeddings">
+                Embeddings {cfg.embeddings.enabled ? "(On)" : "(Off)"}
+              </TabsTrigger>
+              <TabsTrigger value="tools">Tools &amp; MCP</TabsTrigger>
+              <TabsTrigger value="storage">Storage &amp; Server</TabsTrigger>
               <TabsTrigger value="json">Raw config.json</TabsTrigger>
             </TabsList>
 
-            <TabsContent value="general">
+            <TabsContent value="roles" className="space-y-5">
               <Card>
-                <CardContent className="space-y-5 pt-5">
+                <CardHeader>
+                  <CardTitle>Default Role Models</CardTitle>
+                  <CardDescription>
+                    Select default models discovered from enabled providers. Configure providers in the Providers tab first if this list is empty.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
                   <div className="grid gap-4 md:grid-cols-2">
                     <div className="space-y-1.5">
                       <Label htmlFor="role-chat">Default Chat Model</Label>
-                      <Input
+                      <ModelSelect
                         id="role-chat"
-                        list="settings-models"
                         value={cfg.llm.roles.chat_model ?? ""}
-                        onChange={(e) =>
-                          setCfg({
+                        options={llmModelOptions}
+                        emptyLabel="— Select chat model —"
+                        onChange={(v) =>
+                          updateCfg({
                             ...cfg,
                             llm: {
                               ...cfg.llm,
-                              roles: { ...cfg.llm.roles, chat_model: e.target.value },
+                              roles: { ...cfg.llm.roles, chat_model: v || undefined },
                             },
                           })
                         }
@@ -171,16 +234,17 @@ export function SettingsView({ client }: { client: QClient }) {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="role-mem">Default Memory Model</Label>
-                      <Input
+                      <ModelSelect
                         id="role-mem"
-                        list="settings-models"
                         value={cfg.llm.roles.memory_model ?? ""}
-                        onChange={(e) =>
-                          setCfg({
+                        options={llmModelOptions}
+                        emptyLabel="— Same as Chat Model —"
+                        onChange={(v) =>
+                          updateCfg({
                             ...cfg,
                             llm: {
                               ...cfg.llm,
-                              roles: { ...cfg.llm.roles, memory_model: e.target.value },
+                              roles: { ...cfg.llm.roles, memory_model: v || undefined },
                             },
                           })
                         }
@@ -188,16 +252,17 @@ export function SettingsView({ client }: { client: QClient }) {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="role-recall">Recall Planner Model</Label>
-                      <Input
+                      <ModelSelect
                         id="role-recall"
-                        list="settings-models"
                         value={cfg.llm.roles.recall_planner_model ?? ""}
-                        onChange={(e) =>
-                          setCfg({
+                        options={llmModelOptions}
+                        emptyLabel="— Same as Memory Model —"
+                        onChange={(v) =>
+                          updateCfg({
                             ...cfg,
                             llm: {
                               ...cfg.llm,
-                              roles: { ...cfg.llm.roles, recall_planner_model: e.target.value },
+                              roles: { ...cfg.llm.roles, recall_planner_model: v || undefined },
                             },
                           })
                         }
@@ -205,303 +270,111 @@ export function SettingsView({ client }: { client: QClient }) {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="role-sub">Subagent Model</Label>
-                      <Input
+                      <ModelSelect
                         id="role-sub"
-                        list="settings-models"
                         value={cfg.llm.roles.subagent_model ?? ""}
-                        onChange={(e) =>
-                          setCfg({
+                        options={llmModelOptions}
+                        emptyLabel="— Same as Chat Model —"
+                        onChange={(v) =>
+                          updateCfg({
                             ...cfg,
                             llm: {
                               ...cfg.llm,
-                              roles: { ...cfg.llm.roles, subagent_model: e.target.value },
+                              roles: { ...cfg.llm.roles, subagent_model: v || undefined },
                             },
                           })
                         }
                       />
                     </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="decisions-default-model">Decisions Default Model</Label>
+                      <ModelSelect
+                        id="decisions-default-model"
+                        value={cfg.decisions.default_model_id ?? ""}
+                        options={decisionOptions}
+                        emptyLabel="— No Decisions default —"
+                        customPlaceholder="decisions-model-id"
+                        onChange={(v) =>
+                          updateCfg({
+                            ...cfg,
+                            decisions: { ...cfg.decisions, default_model_id: v || undefined },
+                          })
+                        }
+                      />
+                    </div>
                   </div>
-                  <datalist id="settings-models">
-                    {models.map((m) => (
-                      <option key={m.id} value={m.id} />
-                    ))}
-                  </datalist>
-                  <datalist id="settings-decision-models">
-                    {decisionModels.map((dm) => (
-                      <option key={dm.id} value={dm.id} />
-                    ))}
-                  </datalist>
 
                   <div className="grid gap-4 md:grid-cols-2 pt-2 border-t border-border">
                     <div className="space-y-1.5">
-                      <Label htmlFor="decisions-default-model">Decisions Default Model</Label>
+                      <Label htmlFor="llm-refresh-interval">Model Cache Refresh Interval</Label>
                       <Input
-                        id="decisions-default-model"
-                        list="settings-decision-models"
-                        placeholder="e.g. openai/gpt-decisions"
-                        value={cfg.decisions.default_model_id ?? ""}
+                        id="llm-refresh-interval"
+                        value={cfg.llm.model_cache_refresh_interval ?? ""}
                         onChange={(e) =>
-                          setCfg({
+                          updateCfg({
                             ...cfg,
-                            decisions: { ...cfg.decisions, default_model_id: e.target.value },
-                          })
-                        }
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid gap-4 md:grid-cols-3 pt-2 border-t border-border">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="approval-mode">Tool Approval Mode</Label>
-                      <select
-                        id="approval-mode"
-                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                        value={cfg.tools.approval_mode}
-                        onChange={(e) =>
-                          setCfg({
-                            ...cfg,
-                            tools: { ...cfg.tools, approval_mode: e.target.value as ApprovalMode },
-                          })
-                        }
-                      >
-                        <option value="bypass">bypass</option>
-                        <option value="auto-detection">auto-detection</option>
-                        <option value="request">request</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="browser-preferred">Preferred Browser Driver</Label>
-                      <select
-                        id="browser-preferred"
-                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                        value={cfg.tools.browser_control.preferred}
-                        onChange={(e) =>
-                          setCfg({
-                            ...cfg,
-                            tools: {
-                              ...cfg.tools,
-                              browser_control: {
-                                ...cfg.tools.browser_control,
-                                preferred: e.target.value as "cdp-q-driver" | "ego-browser",
-                              },
+                            llm: {
+                              ...cfg.llm,
+                              model_cache_refresh_interval: e.target.value || undefined,
                             },
                           })
                         }
-                      >
-                        <option value="cdp-q-driver">cdp-q-driver (built-in)</option>
-                        <option value="ego-browser">ego-browser</option>
-                      </select>
+                        placeholder="5m"
+                      />
                     </div>
-                    <div className="flex items-end gap-3 pb-2">
-                      <Switch
-                        id="browser-enabled"
-                        checked={cfg.tools.browser_control.enabled}
-                        onCheckedChange={(checked) =>
-                          setCfg({
+                    <div className="space-y-1.5">
+                      <Label htmlFor="llm-refresh-timeout">Model Cache Refresh Timeout</Label>
+                      <Input
+                        id="llm-refresh-timeout"
+                        value={cfg.llm.model_cache_refresh_timeout ?? ""}
+                        onChange={(e) =>
+                          updateCfg({
                             ...cfg,
-                            tools: {
-                              ...cfg.tools,
-                              browser_control: { ...cfg.tools.browser_control, enabled: checked },
+                            llm: {
+                              ...cfg.llm,
+                              model_cache_refresh_timeout: e.target.value || undefined,
                             },
                           })
                         }
+                        placeholder="15s"
                       />
-                      <Label htmlFor="browser-enabled">Browser Control Enabled</Label>
                     </div>
-                  </div>
-
-                  <div className="space-y-3 pt-2 border-t border-border">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="text-sm font-medium">MCP Servers</div>
-                        <p className="text-xs text-muted-foreground">
-                          Configure external Model Context Protocol stdio or HTTP tool servers.
-                        </p>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const existing = cfg.tools.mcp_servers ?? [];
-                          const next: MCPServerConfig = {
-                            id: `mcp-${existing.length + 1}`,
-                            transport: "stdio",
-                            enabled: true,
-                            command: "",
-                          };
-                          setCfg({
-                            ...cfg,
-                            tools: { ...cfg.tools, mcp_servers: [...existing, next] },
-                          });
-                        }}
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                        Add Server
-                      </Button>
-                    </div>
-                    {(cfg.tools.mcp_servers ?? []).length === 0 ? (
-                      <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
-                        No MCP servers configured.
-                      </div>
-                    ) : (
-                      <div className="space-y-2.5">
-                        {(cfg.tools.mcp_servers ?? []).map((srv, idx) => {
-                          const updateSrv = (patch: Partial<MCPServerConfig>) => {
-                            const nextList = [...(cfg.tools.mcp_servers ?? [])];
-                            nextList[idx] = { ...srv, ...patch };
-                            setCfg({ ...cfg, tools: { ...cfg.tools, mcp_servers: nextList } });
-                          };
-                          return (
-                            <div
-                              key={`${srv.id}-${idx}`}
-                              className="rounded-md border border-border p-3 space-y-2.5 bg-background/50"
-                            >
-                              <div className="grid gap-2 md:grid-cols-4 items-end">
-                                <div className="space-y-1">
-                                  <Label className="text-xs">Server ID</Label>
-                                  <Input
-                                    value={srv.id}
-                                    onChange={(e) => updateSrv({ id: e.target.value })}
-                                    placeholder="filesystem"
-                                  />
-                                </div>
-                                <div className="space-y-1">
-                                  <Label className="text-xs">Transport</Label>
-                                  <select
-                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                                    value={srv.transport}
-                                    onChange={(e) =>
-                                      updateSrv({
-                                        transport: e.target.value as "stdio" | "http",
-                                      })
-                                    }
-                                  >
-                                    <option value="stdio">stdio</option>
-                                    <option value="http">http</option>
-                                  </select>
-                                </div>
-                                <div className="flex items-center gap-2 pb-2">
-                                  <Switch
-                                    checked={srv.enabled}
-                                    onCheckedChange={(checked) => updateSrv({ enabled: checked })}
-                                  />
-                                  <span className="text-xs">Enabled</span>
-                                </div>
-                                <div className="flex justify-end pb-1">
-                                  <Button
-                                    type="button"
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => {
-                                      const nextList = (cfg.tools.mcp_servers ?? []).filter(
-                                        (_, i) => i !== idx,
-                                      );
-                                      setCfg({
-                                        ...cfg,
-                                        tools: { ...cfg.tools, mcp_servers: nextList },
-                                      });
-                                    }}
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                                  </Button>
-                                </div>
-                              </div>
-                              {srv.transport === "http" ? (
-                                <div className="space-y-1">
-                                  <Label className="text-xs">Endpoint URL</Label>
-                                  <Input
-                                    value={srv.url ?? ""}
-                                    onChange={(e) => updateSrv({ url: e.target.value })}
-                                    placeholder="http://127.0.0.1:8090/mcp"
-                                  />
-                                </div>
-                              ) : (
-                                <div className="grid gap-2 md:grid-cols-2">
-                                  <div className="space-y-1">
-                                    <Label className="text-xs">Command</Label>
-                                    <Input
-                                      value={srv.command ?? ""}
-                                      onChange={(e) => updateSrv({ command: e.target.value })}
-                                      placeholder="npx"
-                                    />
-                                  </div>
-                                  <div className="space-y-1">
-                                    <Label className="text-xs">Args (comma-separated)</Label>
-                                    <Input
-                                      value={(srv.args ?? []).join(", ")}
-                                      onChange={(e) =>
-                                        updateSrv({
-                                          args: e.target.value
-                                            .split(",")
-                                            .map((s) => s.trim())
-                                            .filter(Boolean),
-                                        })
-                                      }
-                                      placeholder="-y, @modelcontextprotocol/server-everything"
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex justify-end">
-                    <Button onClick={() => void handleSaveStructured()}>
-                      <Save className="h-4 w-4" />
-                      Save Settings
-                    </Button>
                   </div>
                 </CardContent>
               </Card>
-            </TabsContent>
 
-            <TabsContent value="models">
               <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-row items-center justify-between gap-4">
                   <div>
-                    <CardTitle>Provider Models &amp; Decisions</CardTitle>
+                    <CardTitle>Discovered Models ({filteredModels.length})</CardTitle>
                     <CardDescription>
-                      Live model list cached in pkg/llm/gateway and Decisions registry.
+                      Live model capabilities cached from <code>pkg/llm/gateway</code>.
                     </CardDescription>
                   </div>
-                  <Button variant="outline" size="sm" onClick={() => void handleRefreshModels()}>
-                    <RefreshCw className="h-4 w-4" />
-                    Refresh Models
-                  </Button>
+                  <Input
+                    className="w-60"
+                    placeholder="Filter models…"
+                    value={modelFilter}
+                    onChange={(e) => setModelFilter(e.target.value)}
+                  />
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-1.5">
-                    <div className="text-xs font-semibold text-muted-foreground">
-                      Decisions Models ({decisionModels.length})
-                    </div>
-                    {decisionModels.length === 0 ? (
-                      <div className="text-xs text-muted-foreground">No Decisions models configured.</div>
-                    ) : (
-                      <div className="flex flex-wrap gap-2">
-                        {decisionModels.map((dm) => (
-                          <Badge key={dm.id} variant="secondary">
-                            {dm.id} ({dm.protocol})
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <div className="max-h-96 overflow-auto rounded-md border border-border divide-y divide-border text-xs">
-                    {models.length === 0 ? (
+                <CardContent>
+                  <div className="max-h-72 overflow-auto rounded-md border border-border divide-y divide-border text-xs">
+                    {filteredModels.length === 0 ? (
                       <div className="p-4 text-muted-foreground">
-                        No enabled LLM providers configured yet. Add providers in Raw config.json.
+                        {models.length === 0
+                          ? "No enabled LLM providers or models discovered yet. Add providers in the Providers tab and save."
+                          : "No models match your filter."}
                       </div>
                     ) : (
-                      models.map((m) => (
+                      filteredModels.map((m) => (
                         <div key={m.id} className="flex items-center justify-between px-3 py-2">
                           <span className="font-mono">{m.id}</span>
                           <div className="flex items-center gap-2 text-muted-foreground">
                             {m.context_length ? <span>ctx {m.context_length}</span> : null}
+                            {m.capabilities?.tool_calling && (
+                              <Badge variant="outline">tools</Badge>
+                            )}
                             {m.capabilities?.reasoning?.supported && (
                               <Badge variant="outline">reasoning</Badge>
                             )}
@@ -514,24 +387,44 @@ export function SettingsView({ client }: { client: QClient }) {
               </Card>
             </TabsContent>
 
+            <TabsContent value="providers">
+              <ProvidersSection cfg={cfg} onChange={updateCfg} />
+            </TabsContent>
+
+            <TabsContent value="embeddings">
+              <EmbeddingsSection
+                cfg={cfg}
+                onChange={updateCfg}
+                onReindex={() => void handleReindex()}
+              />
+            </TabsContent>
+
+            <TabsContent value="tools">
+              <ToolsAndMCPSection cfg={cfg} onChange={updateCfg} />
+            </TabsContent>
+
+            <TabsContent value="storage">
+              <StorageAndServerSection cfg={cfg} onChange={updateCfg} />
+            </TabsContent>
+
             <TabsContent value="json">
               <Card>
                 <CardHeader>
-                  <CardTitle>config.json Editor</CardTitle>
+                  <CardTitle>Raw config.json Editor</CardTitle>
                   <CardDescription>
-                    Edit providers, env-var references (*_env), Decisions, or embeddings directly. Secret values remain in environment variables.
+                    Inspect or edit the full JSON document directly. Secret values remain in environment variables (<code>*_env</code>).
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <Textarea
-                    className="min-h-[380px] font-mono text-xs"
+                    className="min-h-[420px] font-mono text-xs"
                     value={rawJson}
                     onChange={(e) => setRawJson(e.target.value)}
                   />
                   <div className="flex justify-end">
                     <Button onClick={() => void handleSaveRawJson()}>
                       <Save className="h-4 w-4" />
-                      Apply config.json
+                      Apply Raw JSON
                     </Button>
                   </div>
                 </CardContent>
