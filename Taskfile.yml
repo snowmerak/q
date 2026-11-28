@@ -38,15 +38,30 @@ tasks:
     cmds:
       - go build -o bin/cdp-q-driver{{exeExt}} ./cmd/cdp-q-driver
 
+  build:desktop:
+    desc: Build Wails v3 desktop shell binary (embeds web/dist via pkg/app)
+    deps:
+      - web:build
+    dir: desktop
+    cmds:
+      - go build -o ../bin/q-desktop{{exeExt}} .
+
   build:all:
-    desc: Build all Q v2 CLI binaries
+    desc: Build all Q v2 CLI and desktop binaries
     deps:
       - build:q
       - build:llm-provider
       - build:cdp-q-driver
+      - build:desktop
 
   test:go:
     desc: Run Go unit and integration tests
+    cmds:
+      - go test ./...
+
+  test:desktop:
+    desc: Run desktop shell Go tests
+    dir: desktop
     cmds:
       - go test ./...
 
@@ -55,6 +70,7 @@ tasks:
     deps:
       - web:typecheck
       - web:test
+      - test:desktop
     cmds:
       - go vet ./...
       - go test ./...

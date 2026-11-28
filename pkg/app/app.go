@@ -424,11 +424,12 @@ func (a *App) resolveValueModel(ctx context.Context, roomID, characterID string)
 	return nil, "", "", 0, fmt.Errorf("app: character %q not found in room %q", characterID, roomID)
 }
 
-// Start binds the HTTP listener and blocks until ctx is cancelled or the server stops.
-func (a *App) Start(ctx context.Context) error {
+// StartAsync binds the HTTP listener synchronously, launches the server in a
+// background goroutine tied to ctx, and returns the bound address and error channel.
+func (a *App) StartAsync(ctx context.Context) (string, <-chan error, error) {
 	ln, err := net.Listen("tcp", a.listenAddr)
 	if err != nil {
-		return fmt.Errorf("listen %s: %w", a.listenAddr, err)
+		return "", nil, fmt.Errorf("listen %s: %w", a.listenAddr, err)
 	}
 	srv := &http.Server{
 		Handler:           a.Handler(),
@@ -442,22 +443,36 @@ func (a *App) Start(ctx context.Context) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		if serveErr := srv.Serve(ln); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
-			errCh <- serveErr
-			return
+		serveErrCh := make(chan error, 1)
+		go func() {
+			if serveErr := srv.Serve(ln); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				serveErrCh <- serveErr
+				return
+			}
+			serveErrCh <- nil
+		}()
+
+		select {
+		case err := <-serveErrCh:
+			errCh <- err
+		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+			errCh <- <-serveErrCh
 		}
-		errCh <- nil
 	}()
 
-	select {
-	case err := <-errCh:
+	return ln.Addr().String(), errCh, nil
+}
+
+// Start binds the HTTP listener and blocks until ctx is cancelled or the server stops.
+func (a *App) Start(ctx context.Context) error {
+	_, errCh, err := a.StartAsync(ctx)
+	if err != nil {
 		return err
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-		return <-errCh
 	}
+	return <-errCh
 }
 
 // Addr returns the bound listener address after Start, or the configured address before Start.

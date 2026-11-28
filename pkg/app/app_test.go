@@ -581,3 +581,41 @@ func TestExtendedStorageDriversWiring(t *testing.T) {
 func writeTestFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o600)
 }
+
+func TestAppStartAsyncLoopbackHealth(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	a, err := app.Open(ctx, app.Options{DataDir: t.TempDir(), ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("app.Open: %v", err)
+	}
+	defer func() { _ = a.Close(context.Background()) }()
+
+	addr, errCh, err := a.StartAsync(ctx)
+	if err != nil {
+		t.Fatalf("StartAsync: %v", err)
+	}
+	if !strings.Contains(addr, ":") || strings.HasSuffix(addr, ":0") {
+		t.Fatalf("expected resolved port in addr, got %q", addr)
+	}
+
+	resp, err := http.Get("http://" + addr + "/api/v1/health")
+	if err != nil {
+		t.Fatalf("GET health: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health status = %d", resp.StatusCode)
+	}
+
+	cancel()
+	select {
+	case serveErr := <-errCh:
+		if serveErr != nil {
+			t.Fatalf("unexpected serve err on cancel: %v", serveErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for StartAsync shutdown")
+	}
+}
