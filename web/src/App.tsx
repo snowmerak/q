@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { MessagesSquare, Monitor, Moon, Settings, Sun, Users } from "lucide-react";
+import { BookOpen, MessagesSquare, Monitor, Moon, Settings, Sun, Users } from "lucide-react";
 import { QClient } from "@/client/api";
 import { ThemeProvider, useTheme, type Theme } from "@/components/theme-provider";
 import { CharactersView } from "@/features/characters/CharactersView";
+import { KnowledgeView } from "@/features/knowledge/KnowledgeView";
 import { RoomsView } from "@/features/rooms/RoomsView";
 import { SettingsView } from "@/features/settings/SettingsView";
 import { cn } from "@/lib/utils";
 
-type NavSection = "rooms" | "characters" | "settings";
+type NavSection = "rooms" | "characters" | "knowledge" | "settings";
 
 function ThemeSwitcher() {
   const { theme, setTheme } = useTheme();
@@ -56,6 +57,7 @@ function WorkspaceShell() {
   const navItems: Array<{ id: NavSection; label: string; icon: typeof MessagesSquare }> = [
     { id: "rooms", label: "Rooms", icon: MessagesSquare },
     { id: "characters", label: "Characters", icon: Users },
+    { id: "knowledge", label: "Knowledge & Skills", icon: BookOpen },
     { id: "settings", label: "Settings", icon: Settings },
   ];
 
@@ -109,6 +111,7 @@ function WorkspaceShell() {
       <div className="flex min-w-0 flex-1 overflow-hidden">
         {section === "rooms" && <RoomsView client={client} />}
         {section === "characters" && <CharactersView client={client} />}
+        {section === "knowledge" && <KnowledgeView client={client} />}
         {section === "settings" && <SettingsView client={client} />}
       </div>
     </div>

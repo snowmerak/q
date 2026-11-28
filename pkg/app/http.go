@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/snowmerak/q/v2/pkg/app/config"
+	"github.com/snowmerak/q/v2/pkg/knowledge"
 	"github.com/snowmerak/q/v2/pkg/runtime"
 	"github.com/snowmerak/q/v2/pkg/storage"
 	"github.com/snowmerak/q/v2/web"
@@ -65,7 +66,15 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/rooms/{id}/stream", a.handleRoomStream)
 	mux.HandleFunc("GET /api/v1/rooms/{id}/memories", a.handleRoomMemories)
 
-	// Media, Artifacts, Reindex
+	// Approvals, Questions, Knowledge, Skills, Media, Artifacts, Reindex
+	mux.HandleFunc("POST /api/v1/rooms/{id}/approvals/{invocationId}", a.handleResolveApproval)
+	mux.HandleFunc("POST /api/v1/rooms/{id}/questions/{questionId}", a.handleResolveQuestion)
+	mux.HandleFunc("GET /api/v1/knowledge", a.handleListKnowledge)
+	mux.HandleFunc("POST /api/v1/knowledge", a.handleCreateKnowledge)
+	mux.HandleFunc("PATCH /api/v1/knowledge/{id}", a.handlePatchKnowledge)
+	mux.HandleFunc("DELETE /api/v1/knowledge/{id}", a.handleDeleteKnowledge)
+	mux.HandleFunc("POST /api/v1/knowledge/search", a.handleSearchKnowledge)
+	mux.HandleFunc("GET /api/v1/skills", a.handleListSkills)
 	mux.HandleFunc("POST /api/v1/media", a.handleUploadMedia)
 	mux.HandleFunc("GET /api/v1/media/{id}", a.handleGetMedia)
 	mux.HandleFunc("GET /api/v1/artifacts/{id}", a.handleGetArtifact)
@@ -254,17 +263,15 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 
 func writeDomainError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, storage.ErrNotFound), errors.Is(err, runtime.ErrRoomNotFound), errors.Is(err, runtime.ErrTurnNotFound):
+	case errors.Is(err, storage.ErrNotFound), errors.Is(err, runtime.ErrRoomNotFound), errors.Is(err, runtime.ErrTurnNotFound), errors.Is(err, runtime.ErrInvocationNotFound), errors.Is(err, runtime.ErrQuestionNotFound):
 		writeError(w, http.StatusNotFound, "not_found", err.Error(), false, nil)
 	case errors.Is(err, runtime.ErrRoomBusy):
 		writeError(w, http.StatusConflict, "session_busy", err.Error(), true, nil)
-	case errors.Is(err, runtime.ErrIdempotencyConflict):
-		writeError(w, http.StatusConflict, "conflict", err.Error(), false, nil)
-	case errors.Is(err, runtime.ErrTurnNotRetryable):
+	case errors.Is(err, runtime.ErrIdempotencyConflict), errors.Is(err, runtime.ErrTurnNotRetryable), errors.Is(err, runtime.ErrNotAwaiting):
 		writeError(w, http.StatusConflict, "conflict", err.Error(), false, nil)
 	case errors.Is(err, storage.ErrConflict):
 		writeError(w, http.StatusConflict, "version_conflict", err.Error(), false, nil)
-	case errors.Is(err, runtime.ErrInvalidInput), errors.Is(err, storage.ErrInvalidInput):
+	case errors.Is(err, runtime.ErrInvalidInput), errors.Is(err, storage.ErrInvalidInput), errors.Is(err, knowledge.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, "invalid_input", err.Error(), false, nil)
 	case errors.Is(err, storage.ErrUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "unavailable", err.Error(), true, nil)

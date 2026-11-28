@@ -1,11 +1,14 @@
 import type {
   APIErrorPayload,
+  ArtifactReadResponse,
   Character,
   CharacterInput,
   CharacterPatch,
   ConfigView,
   DecisionModelInfo,
   HealthStatus,
+  KnowledgeDoc,
+  KnowledgeHit,
   LLMRolesConfig,
   MessageBubble,
   ModelInfo,
@@ -16,7 +19,10 @@ import type {
   RoomMemoriesResponse,
   RoomMode,
   RoomSummary,
+  SkillSummary,
+  ToolInvocation,
   TurnStatus,
+  UserQuestion,
 } from "./types";
 
 export class QAPIError extends Error {
@@ -241,5 +247,58 @@ export class QClient {
       method: "POST",
       body: form,
     });
+  }
+
+  // Approvals, Questions, Artifacts, Knowledge & Skills
+  resolveApproval(roomId: string, invocationId: string, decision: "approve" | "reject", reason = "") {
+    return this.request<ToolInvocation>(
+      `/api/v1/rooms/${encodeURIComponent(roomId)}/approvals/${encodeURIComponent(invocationId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decision, reason }),
+      },
+    );
+  }
+  resolveQuestion(roomId: string, questionId: string, answerText: string) {
+    return this.request<UserQuestion>(
+      `/api/v1/rooms/${encodeURIComponent(roomId)}/questions/${encodeURIComponent(questionId)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ answer_text: answerText }),
+      },
+    );
+  }
+  getArtifact(id: string, offset = 0, limit = 65536) {
+    return this.request<ArtifactReadResponse>(
+      `/api/v1/artifacts/${encodeURIComponent(id)}?offset=${offset}&limit=${limit}`,
+    );
+  }
+  listKnowledge(scope = "") {
+    const qs = scope ? `?scope=${encodeURIComponent(scope)}` : "";
+    return this.request<{ items: KnowledgeDoc[] }>(`/api/v1/knowledge${qs}`);
+  }
+  createKnowledge(input: { scope: string; title: string; content: string; media_type?: string }) {
+    return this.request<KnowledgeDoc>("/api/v1/knowledge", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  patchKnowledge(id: string, input: { expected_revision: number; title?: string; scope?: string; content?: string }) {
+    return this.request<KnowledgeDoc>(`/api/v1/knowledge/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  }
+  deleteKnowledge(id: string) {
+    return this.request<void>(`/api/v1/knowledge/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+  searchKnowledge(input: { query: string; mode?: "hybrid" | "lexical" | "semantic"; scopes?: string[]; limit?: number }) {
+    return this.request<{ hits: KnowledgeHit[] }>("/api/v1/knowledge/search", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+  listSkills() {
+    return this.request<{ items: SkillSummary[] }>("/api/v1/skills");
   }
 }

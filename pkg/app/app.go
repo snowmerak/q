@@ -19,6 +19,7 @@ import (
 
 	"github.com/snowmerak/q/v2/internal/fsutil"
 	"github.com/snowmerak/q/v2/pkg/app/config"
+	"github.com/snowmerak/q/v2/pkg/knowledge"
 	llmprovider "github.com/snowmerak/q/v2/pkg/llm"
 	"github.com/snowmerak/q/v2/pkg/llm/decisions"
 	"github.com/snowmerak/q/v2/pkg/llm/gateway"
@@ -29,6 +30,7 @@ import (
 	"github.com/snowmerak/q/v2/pkg/storage/outbox"
 	"github.com/snowmerak/q/v2/pkg/storage/rdb/sqlite"
 	"github.com/snowmerak/q/v2/pkg/storage/search/blevehnsw"
+	"github.com/snowmerak/q/v2/pkg/task"
 )
 
 type Options struct {
@@ -50,6 +52,13 @@ type App struct {
 	blob        storage.BlobStore
 	outbox      *outbox.Worker
 	valueWorker *memory.ValueWorker
+	knowledge   *knowledge.Service
+	loom        *task.LoomStore
+	commands    *task.CommandManager
+	skills      *task.SkillStore
+	mcp         *task.MCPManager
+	browser     *task.BrowserController
+	tools       *task.Registry
 	engine      *runtime.Engine
 
 	providerMu     sync.RWMutex
@@ -122,6 +131,23 @@ func Open(ctx context.Context, opts Options) (*App, error) {
 	a.outbox = outbox.NewWorker(a.rdb, a.search, nil, outbox.WithErrorHandler(func(err error) {
 		a.logger.Warn("outbox worker error", "error", err)
 	}))
+	a.knowledge = knowledge.NewService(a.rdb, a.search, a.currentQueryEmbedder)
+	a.loom = task.NewLoomStore(a.rdb, a.blob, cfg.Storage.Blob.LoomMaxArtifactBytes)
+	a.commands = task.NewCommandManager(time.Duration(cfg.Tools.CommandTimeoutMS) * time.Millisecond)
+	a.skills = task.NewSkillStore(filepath.Join(a.dataDir, "skills"))
+	a.mcp = task.NewMCPManager()
+	a.browser = task.NewBrowserController(a.currentBrowserControl, nil)
+	a.tools = task.NewRegistry(task.RegistryDeps{
+		RDB:        a.rdb,
+		Search:     a.search,
+		Loom:       a.loom,
+		Commands:   a.commands,
+		Skills:     a.skills,
+		MCP:        a.mcp,
+		Browser:    a.browser,
+		EmbedderFn: a.currentQueryEmbedder,
+	})
+
 	a.reloadProviders(ctx, cfg)
 	a.outbox.Start(ctx)
 
@@ -144,6 +170,7 @@ func Open(ctx context.Context, opts Options) (*App, error) {
 	a.watcher = watcher
 
 	a.engine = runtime.NewEngine(a.rdb, a.search, a, a.logger)
+	a.engine.SetTools(a.tools, a.dataDir)
 
 	cleanupOnErr = false
 	return a, nil
@@ -238,6 +265,14 @@ func (a *App) reloadProviders(ctx context.Context, cfg config.Config) {
 		}
 	}
 
+	if a.mcp != nil {
+		for _, st := range a.mcp.Configure(ctx, cfg.Tools.MCPServers) {
+			if st.Error != "" {
+				degraded = append(degraded, fmt.Sprintf("mcp(%s): %s", st.ID, st.Error))
+			}
+		}
+	}
+
 	a.providerMu.Lock()
 	oldGW := a.gateway
 	a.gateway = gw
@@ -256,6 +291,20 @@ func (a *App) reloadProviders(ctx context.Context, cfg config.Config) {
 	if oldGW != nil {
 		_ = oldGW.Close()
 	}
+}
+
+func (a *App) currentQueryEmbedder() memory.QueryEmbedder {
+	a.providerMu.RLock()
+	emb := a.embedder
+	a.providerMu.RUnlock()
+	if emb == nil {
+		return nil
+	}
+	return emb
+}
+
+func (a *App) currentBrowserControl() config.BrowserControlConfig {
+	return a.currentConfig().Tools.BrowserControl
 }
 
 // Snapshot satisfies runtime.ProviderSource with the current hot-reloadable backends.
@@ -400,7 +449,7 @@ func (a *App) listDecisionModels() ([]decisions.ModelInfo, string) {
 	return models, reg.DefaultModelID()
 }
 
-// Close shuts down the HTTP server, runtime engine, background workers, storage backends, and instance lock.
+// Close shuts down the HTTP server, runtime engine, tools, background workers, storage backends, and instance lock.
 func (a *App) Close(ctx context.Context) error {
 	var closeErr error
 	a.closeOnce.Do(func() {
@@ -416,6 +465,12 @@ func (a *App) Close(ctx context.Context) error {
 		}
 		if a.engine != nil {
 			a.engine.Close()
+		}
+		if a.commands != nil {
+			a.commands.Close()
+		}
+		if a.mcp != nil {
+			a.mcp.Close()
 		}
 		if a.valueWorker != nil {
 			a.valueWorker.Stop()

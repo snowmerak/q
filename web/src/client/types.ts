@@ -275,12 +275,97 @@ export interface RoomSummary {
   members: RoomMember[];
 }
 
+export interface ToolInvocation {
+  id: string;
+  turn_id: string;
+  room_id: string;
+  actor_id: string;
+  call_id: string;
+  tool_name: string;
+  tool_source: "builtin" | "mcp" | "browser" | "subagent";
+  args_json: string;
+  gate_mode: ApprovalMode;
+  decision_reason?: string;
+  status:
+    | "pending_approval"
+    | "approved"
+    | "rejected"
+    | "running"
+    | "completed"
+    | "failed"
+    | "cancelled";
+  result_summary?: string;
+  artifact_id?: string;
+  error_message?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface UserQuestion {
+  id: string;
+  turn_id: string;
+  room_id: string;
+  actor_id: string;
+  prompt: string;
+  choices?: string[];
+  allow_freeform: boolean;
+  status: "pending" | "answered" | "cancelled";
+  answer_text?: string;
+  created_at: number;
+  answered_at?: number;
+}
+
+export interface KnowledgeDoc {
+  id: string;
+  scope: string;
+  title: string;
+  source_uri?: string;
+  media_type: string;
+  content: string;
+  content_sha256: string;
+  revision: number;
+  status: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface KnowledgeHit {
+  chunk_id: string;
+  doc_id: string;
+  doc_title: string;
+  scope: string;
+  doc_revision: number;
+  chunk_ordinal: number;
+  char_offset: number;
+  text: string;
+  score: number;
+}
+
+export interface SkillSummary {
+  name: string;
+  description: string;
+  path: string;
+}
+
+export interface ArtifactReadResponse {
+  artifact: {
+    id: string;
+    kind: string;
+    media_type: string;
+    byte_size: number;
+    sha256: string;
+    created_at: number;
+  };
+  content: string;
+  truncated: boolean;
+}
+
 export interface RoomDetail {
   room: Room;
   members: RoomMember[];
   turns: Turn[];
-  pending_approvals: unknown[];
-  pending_questions: unknown[];
+  pending_approvals: ToolInvocation[];
+  pending_questions: UserQuestion[];
   active_turn: boolean;
 }
 

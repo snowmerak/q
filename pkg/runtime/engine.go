@@ -18,6 +18,7 @@ import (
 	"github.com/snowmerak/q/v2/pkg/memory"
 	"github.com/snowmerak/q/v2/pkg/storage"
 	"github.com/snowmerak/q/v2/pkg/storage/outbox"
+	"github.com/snowmerak/q/v2/pkg/task"
 )
 
 var (
@@ -56,9 +57,15 @@ type SubmitTurnResult struct {
 }
 
 type turnCheckpoint struct {
-	UserMessageID string `json:"user_message_id,omitempty"`
-	ActorID       string `json:"actor_id,omitempty"`
-	Phase         string `json:"phase,omitempty"`
+	UserMessageID       string                 `json:"user_message_id,omitempty"`
+	ActorID             string                 `json:"actor_id,omitempty"`
+	Phase               string                 `json:"phase,omitempty"`
+	ToolHistory         []llmprovider.Message  `json:"tool_history,omitempty"`
+	PendingInvocationID string                 `json:"pending_invocation_id,omitempty"`
+	PendingQuestionID   string                 `json:"pending_question_id,omitempty"`
+	PendingToolCallID   string                 `json:"pending_tool_call_id,omitempty"`
+	RemainingCalls      []llmprovider.ToolCall `json:"remaining_calls,omitempty"`
+	ToolRounds          int                    `json:"tool_rounds,omitempty"`
 }
 
 // Engine executes 1:1 character turns, broadcasts SSE events, and schedules
@@ -71,9 +78,11 @@ type Engine struct {
 	hub       *InterceptHub
 	events    *EventBus
 
-	bgWG   sync.WaitGroup
-	mu     sync.Mutex
-	closed bool
+	bgWG    sync.WaitGroup
+	mu      sync.Mutex
+	tools   *task.Registry
+	dataDir string
+	closed  bool
 }
 
 func NewEngine(rdb storage.RDBStore, search storage.SearchIndex, providers ProviderSource, logger *slog.Logger) *Engine {
@@ -358,6 +367,8 @@ func (e *Engine) launchTurn(roomID string, turn domain.Turn, specCtx context.Con
 
 func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx context.Context) {
 	baseCtx := context.Background()
+	var cp turnCheckpoint
+	_ = json.Unmarshal([]byte(turn.CheckpointJSON), &cp)
 
 	for {
 		if e.hub.IsStopped(roomID, turn.ID) {
@@ -397,8 +408,8 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			e.finishFailed(baseCtx, roomID, &turn, "model_unavailable", "no chat model configured for character, room, or defaults", false)
 			return
 		}
-		if _, err := snap.Gateway.Model(baseCtx, models.ChatModel); err != nil {
-			// Check whether prefix itself exists or model is simply missing from cache.
+		modelMeta, err := snap.Gateway.Model(baseCtx, models.ChatModel)
+		if err != nil {
 			e.finishFailed(baseCtx, roomID, &turn, "model_unavailable", fmt.Sprintf("configured chat model %q is unavailable: %v", models.ChatModel, err), false)
 			return
 		}
@@ -417,58 +428,78 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			}
 		}
 
-		// Step 1: Memory Recall
-		e.events.Publish(roomID, "actor.status", map[string]any{
-			"turn_id":    turn.ID,
-			"actor_id":   member.CharacterID,
-			"actor_name": member.CharacterSnapshot.Name,
-			"phase":      "recalling",
-		})
+		toolReg, dataDir := e.currentTools()
 
-		recentExcerpts, excludeIDs := buildRecentExcerpts(allMsgs, member.CharacterID, 8)
-		var decEval memory.DecisionEvaluator
-		if snap.Decisions != nil {
-			decEval = snap.Decisions
-		}
-		recalled, _ := memory.Recall(specCtx, e.rdb, e.search, memory.Deps{
-			Chat:      snap.Gateway,
-			Models:    snap.Gateway,
-			Decisions: decEval,
-			Embedder:  snap.Embedder,
-		}, memory.RecallInput{
-			RoomID:             roomID,
-			ActorID:            member.CharacterID,
-			ActorName:          member.CharacterSnapshot.Name,
-			UserName:           room.PersonaSnapshot.Name,
-			CurrentText:        latestUserText,
-			Recent:             recentExcerpts,
-			ExcludeIDs:         excludeIDs,
-			DecisionModel:      models.DecisionModel,
-			RecallPlannerModel: models.RecallPlannerModel,
-			OwnBudget:          models.ContextWindow,
-			NowMS:              domain.NowMS(),
-		})
-
-		if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
-			return
-		} else if interrupted == interceptCutIn {
-			specCtx = nextCtx
-			continue
+		// Step 0: Resume any pending approved/rejected/answered tool calls before starting a new LLM step.
+		if len(cp.RemainingCalls) > 0 && toolReg != nil {
+			outcome, nextCtx := e.processToolCalls(baseCtx, specCtx, roomID, &turn, &cp, room, members, *member, snap, models, latestUserText, toolReg, dataDir)
+			switch outcome {
+			case toolLoopPaused, toolLoopStopped, toolLoopFailed:
+				return
+			case toolLoopCutIn:
+				specCtx = nextCtx
+				cp = turnCheckpoint{}
+				continue
+			}
 		}
 
-		// Step 2: 85% budget compaction if needed
-		updatedMember, compacted, compErr := CompactIfNeeded(specCtx, e.rdb, snap.Gateway, room, *member, recalled, allMsgs, models, turn.ID)
-		if compErr == nil && compacted {
-			*member = updatedMember
-		}
-		if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
-			return
-		} else if interrupted == interceptCutIn {
-			specCtx = nextCtx
-			continue
+		// Step 1: Memory Recall (skip redundant recall inside multi-step tool loop).
+		var recalled []memory.RecalledItem
+		if len(cp.ToolHistory) == 0 {
+			e.events.Publish(roomID, "actor.status", map[string]any{
+				"turn_id":    turn.ID,
+				"actor_id":   member.CharacterID,
+				"actor_name": member.CharacterSnapshot.Name,
+				"phase":      "recalling",
+			})
+
+			recentExcerpts, excludeIDs := buildRecentExcerpts(allMsgs, member.CharacterID, 8)
+			var decEval memory.DecisionEvaluator
+			if snap.Decisions != nil {
+				decEval = snap.Decisions
+			}
+			recalled, _ = memory.Recall(specCtx, e.rdb, e.search, memory.Deps{
+				Chat:      snap.Gateway,
+				Models:    snap.Gateway,
+				Decisions: decEval,
+				Embedder:  snap.Embedder,
+			}, memory.RecallInput{
+				RoomID:             roomID,
+				ActorID:            member.CharacterID,
+				ActorName:          member.CharacterSnapshot.Name,
+				UserName:           room.PersonaSnapshot.Name,
+				CurrentText:        latestUserText,
+				Recent:             recentExcerpts,
+				ExcludeIDs:         excludeIDs,
+				DecisionModel:      models.DecisionModel,
+				RecallPlannerModel: models.RecallPlannerModel,
+				OwnBudget:          models.ContextWindow,
+				NowMS:              domain.NowMS(),
+			})
+
+			if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
+				return
+			} else if interrupted == interceptCutIn {
+				specCtx = nextCtx
+				cp = turnCheckpoint{}
+				continue
+			}
+
+			// Step 2: 85% budget compaction if needed
+			updatedMember, compacted, compErr := CompactIfNeeded(specCtx, e.rdb, snap.Gateway, room, *member, recalled, allMsgs, models, turn.ID)
+			if compErr == nil && compacted {
+				*member = updatedMember
+			}
+			if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
+				return
+			} else if interrupted == interceptCutIn {
+				specCtx = nextCtx
+				cp = turnCheckpoint{}
+				continue
+			}
 		}
 
-		// Step 3: Build Actor Prompt
+		// Step 3: Build Actor Prompt (+ accumulated ToolHistory for this turn)
 		prompt, err := BuildActorPrompt(room, *member, recalled, allMsgs, models.ContextWindow)
 		if err != nil {
 			code := "internal"
@@ -477,6 +508,15 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			}
 			e.finishFailed(baseCtx, roomID, &turn, code, err.Error(), false)
 			return
+		}
+		reqMessages := make([]llmprovider.Message, 0, len(prompt.Messages)+len(cp.ToolHistory))
+		reqMessages = append(reqMessages, prompt.Messages...)
+		reqMessages = append(reqMessages, cp.ToolHistory...)
+
+		var toolDefs []llmprovider.Tool
+		if toolReg != nil && (modelMeta.Capabilities == nil || modelMeta.Capabilities.ToolCalling == nil || *modelMeta.Capabilities.ToolCalling) {
+			allowSub := snap.Config.Tools.MaxDelegationDepth > 0
+			toolDefs = toolReg.ToolDefinitions(allowSub)
 		}
 
 		// Step 4: Stream response
@@ -489,7 +529,8 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 
 		stream, err := snap.Gateway.ChatStream(specCtx, llmprovider.ChatRequest{
 			Model:           models.ChatModel,
-			Messages:        prompt.Messages,
+			Messages:        reqMessages,
+			Tools:           toolDefs,
 			ReasoningEffort: models.ReasoningEffort,
 		})
 		if err != nil {
@@ -497,6 +538,7 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 				return
 			} else if interrupted == interceptCutIn {
 				specCtx = nextCtx
+				cp = turnCheckpoint{}
 				continue
 			}
 			e.finishFailed(baseCtx, roomID, &turn, "provider_error", err.Error(), true)
@@ -505,6 +547,7 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 
 		messageID := domain.NewID()
 		var buf strings.Builder
+		toolCallAcc := make(map[int]*llmprovider.ToolCall)
 		var streamErr error
 		var lastUsage *llmprovider.Usage
 		for {
@@ -526,11 +569,18 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			if len(chunk.Choices) == 0 {
 				continue
 			}
+			ch := chunk.Choices[0]
 			delta := ""
-			if chunk.Choices[0].Delta != nil {
-				delta = chunk.Choices[0].Delta.TextContent()
+			if ch.Delta != nil {
+				delta = ch.Delta.TextContent()
+				if len(ch.Delta.ToolCalls) > 0 {
+					accumulateToolCallChunk(toolCallAcc, ch.Delta.ToolCalls)
+				}
 			} else {
-				delta = chunk.Choices[0].Message.TextContent()
+				delta = ch.Message.TextContent()
+				if len(ch.Message.ToolCalls) > 0 {
+					accumulateToolCallChunk(toolCallAcc, ch.Message.ToolCalls)
+				}
 			}
 			if delta == "" {
 				continue
@@ -550,11 +600,43 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			return
 		} else if interrupted == interceptCutIn {
 			specCtx = nextCtx
+			cp = turnCheckpoint{}
 			continue
 		}
 		if streamErr != nil {
 			e.finishFailed(baseCtx, roomID, &turn, "provider_error", streamErr.Error(), true)
 			return
+		}
+
+		toolCalls := finalizeToolCalls(toolCallAcc)
+		if len(toolCalls) > 0 && toolReg != nil {
+			if cp.ToolRounds >= maxToolRounds {
+				e.finishFailed(baseCtx, roomID, &turn, "provider_error", "exceeded max tool rounds", false)
+				return
+			}
+			cp.ToolHistory = append(cp.ToolHistory, llmprovider.Message{
+				Role:      llmprovider.RoleAssistant,
+				Content:   buf.String(),
+				ToolCalls: toolCalls,
+			})
+			cp.RemainingCalls = toolCalls
+			cp.ToolRounds++
+			cp.Phase = "tool_loop"
+			cpBytes, _ := json.Marshal(cp)
+			turn.CheckpointJSON = string(cpBytes)
+			_ = e.rdb.Turns().Update(baseCtx, turn)
+
+			outcome, nextCtx := e.processToolCalls(baseCtx, specCtx, roomID, &turn, &cp, room, members, *member, snap, models, latestUserText, toolReg, dataDir)
+			switch outcome {
+			case toolLoopPaused, toolLoopStopped, toolLoopFailed:
+				return
+			case toolLoopCutIn:
+				specCtx = nextCtx
+				cp = turnCheckpoint{}
+				continue
+			default:
+				continue
+			}
 		}
 
 		replyText := strings.TrimSpace(buf.String())

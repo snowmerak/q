@@ -382,6 +382,37 @@ func TestAppEndToEndRoomTurnsSSEMediaAndReindex(t *testing.T) {
 	if code := doJSON(http.MethodPost, "/api/v1/storage/reindex", nil, &reindexResp); code != http.StatusAccepted || reindexResp["job_id"] == "" {
 		t.Fatalf("reindex = %d %v", code, reindexResp)
 	}
+
+	// 8. Knowledge CRUD & Search + Skills list
+	var kDoc struct {
+		ID       string `json:"id"`
+		Revision int64  `json:"revision"`
+	}
+	if code := doJSON(http.MethodPost, "/api/v1/knowledge", map[string]any{
+		"scope":   "global",
+		"title":   "Protocol Note",
+		"content": "Always verify harbor coordinates twice.",
+	}, &kDoc); code != http.StatusCreated || kDoc.Revision != 1 {
+		t.Fatalf("create knowledge = %d rev=%d", code, kDoc.Revision)
+	}
+	if code := doJSON(http.MethodPatch, "/api/v1/knowledge/"+kDoc.ID, map[string]any{
+		"expected_revision": kDoc.Revision,
+		"content":           "Updated harbor coordinate checklist.",
+	}, &kDoc); code != http.StatusOK || kDoc.Revision != 2 {
+		t.Fatalf("patch knowledge = %d rev=%d", code, kDoc.Revision)
+	}
+	if code := doJSON(http.MethodGet, "/api/v1/knowledge", nil, nil); code != http.StatusOK {
+		t.Fatalf("list knowledge = %d", code)
+	}
+	if code := doJSON(http.MethodPost, "/api/v1/knowledge/search", map[string]any{"query": "checklist"}, nil); code != http.StatusOK {
+		t.Fatalf("search knowledge = %d", code)
+	}
+	if code := doJSON(http.MethodDelete, "/api/v1/knowledge/"+kDoc.ID, nil, nil); code != http.StatusNoContent {
+		t.Fatalf("delete knowledge = %d", code)
+	}
+	if code := doJSON(http.MethodGet, "/api/v1/skills", nil, nil); code != http.StatusOK {
+		t.Fatalf("list skills = %d", code)
+	}
 }
 
 func TestEmbeddedSPAServingAndAPI404Isolation(t *testing.T) {

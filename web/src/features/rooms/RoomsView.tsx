@@ -22,6 +22,8 @@ import type {
   RoomDetail,
   RoomMemoriesResponse,
   RoomSummary,
+  ToolInvocation,
+  UserQuestion,
 } from "@/client/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,6 +40,12 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  ApprovalRequestCard,
+  LoomArtifactDrawer,
+  ToolInvocationCard,
+  UserQuestionCard,
+} from "@/features/tools/ToolCards";
 import { cn } from "@/lib/utils";
 
 interface StreamingBubble {
@@ -54,6 +62,10 @@ export function RoomsView({ client }: { client: QClient }) {
   const [messages, setMessages] = useState<MessageBubble[]>([]);
   const [nextBeforeSeq, setNextBeforeSeq] = useState<number | undefined>();
   const [memories, setMemories] = useState<RoomMemoriesResponse | null>(null);
+  const [toolInvocations, setToolInvocations] = useState<ToolInvocation[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<ToolInvocation[]>([]);
+  const [pendingQuestions, setPendingQuestions] = useState<UserQuestion[]>([]);
+  const [openArtifactId, setOpenArtifactId] = useState<string | null>(null);
   const [streaming, setStreaming] = useState<StreamingBubble | null>(null);
   const [actorPhase, setActorPhase] = useState<string>("");
   const [composerText, setComposerText] = useState<string>("");
@@ -89,6 +101,8 @@ export function RoomsView({ client }: { client: QClient }) {
         setDetail(null);
         setMessages([]);
         setMemories(null);
+        setPendingApprovals([]);
+        setPendingQuestions([]);
         return;
       }
       try {
@@ -101,6 +115,8 @@ export function RoomsView({ client }: { client: QClient }) {
         setMessages(m.items);
         setNextBeforeSeq(m.next_before_seq);
         setMemories(mem);
+        setPendingApprovals(d.pending_approvals ?? []);
+        setPendingQuestions(d.pending_questions ?? []);
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : "Failed to load room");
       }
@@ -115,6 +131,7 @@ export function RoomsView({ client }: { client: QClient }) {
   useEffect(() => {
     setStreaming(null);
     setActorPhase("");
+    setToolInvocations([]);
     void loadRoomState(selectedRoomId);
   }, [selectedRoomId, loadRoomState]);
 
@@ -170,6 +187,81 @@ export function RoomsView({ client }: { client: QClient }) {
             );
             break;
           }
+          case "tool.started": {
+            const invId = String(payload.invocation_id ?? "");
+            if (!invId) break;
+            setToolInvocations((prev) => {
+              if (prev.some((i) => i.id === invId)) return prev;
+              return [
+                ...prev,
+                {
+                  id: invId,
+                  turn_id: String(payload.turn_id ?? ""),
+                  room_id: selectedRoomId,
+                  actor_id: String(payload.actor_id ?? ""),
+                  call_id: "",
+                  tool_name: String(payload.tool_name ?? "tool"),
+                  tool_source: "builtin",
+                  args_json: "{}",
+                  gate_mode: (payload.gate_mode as ToolInvocation["gate_mode"]) ?? "auto-detection",
+                  status: "running",
+                  created_at: Date.now(),
+                  updated_at: Date.now(),
+                },
+              ];
+            });
+            break;
+          }
+          case "tool.progress": {
+            const invId = String(payload.invocation_id ?? "");
+            const msg = String(payload.message ?? "");
+            if (!invId || !msg) break;
+            setToolInvocations((prev) =>
+              prev.map((i) => (i.id === invId ? { ...i, result_summary: msg } : i)),
+            );
+            break;
+          }
+          case "tool.completed": {
+            const inv = payload.invocation as ToolInvocation | undefined;
+            if (!inv?.id) break;
+            setToolInvocations((prev) => {
+              const exists = prev.some((i) => i.id === inv.id);
+              return exists ? prev.map((i) => (i.id === inv.id ? inv : i)) : [...prev, inv];
+            });
+            break;
+          }
+          case "approval.required": {
+            const inv = payload.invocation as ToolInvocation | undefined;
+            if (!inv?.id) break;
+            setActorPhase("awaiting_approval");
+            setDetail((prev) => (prev ? { ...prev, active_turn: false } : prev));
+            setPendingApprovals((prev) =>
+              prev.some((i) => i.id === inv.id) ? prev : [...prev, inv],
+            );
+            break;
+          }
+          case "approval.resolved": {
+            const invId = String(payload.invocation_id ?? "");
+            setPendingApprovals((prev) => prev.filter((i) => i.id !== invId));
+            setActorPhase("resuming");
+            break;
+          }
+          case "question.required": {
+            const q = payload.question as UserQuestion | undefined;
+            if (!q?.id) break;
+            setActorPhase("awaiting_user");
+            setDetail((prev) => (prev ? { ...prev, active_turn: false } : prev));
+            setPendingQuestions((prev) =>
+              prev.some((existing) => existing.id === q.id) ? prev : [...prev, q],
+            );
+            break;
+          }
+          case "question.resolved": {
+            const qId = String(payload.question_id ?? "");
+            setPendingQuestions((prev) => prev.filter((q) => q.id !== qId));
+            setActorPhase("resuming");
+            break;
+          }
           case "turn.intercepted": {
             setStreaming(null);
             break;
@@ -189,7 +281,7 @@ export function RoomsView({ client }: { client: QClient }) {
 
   useEffect(() => {
     timelineEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, streaming?.content]);
+  }, [messages.length, streaming?.content, pendingApprovals.length, pendingQuestions.length]);
 
   const openCreateDialog = async () => {
     setErrorMsg("");
@@ -302,6 +394,34 @@ export function RoomsView({ client }: { client: QClient }) {
     }
   };
 
+  const handleResolveApproval = async (
+    invocationId: string,
+    decision: "approve" | "reject",
+    reason: string,
+  ) => {
+    if (!selectedRoomId) return;
+    setErrorMsg("");
+    try {
+      await client.resolveApproval(selectedRoomId, invocationId, decision, reason);
+      setPendingApprovals((prev) => prev.filter((i) => i.id !== invocationId));
+      setDetail((prev) => (prev ? { ...prev, active_turn: true } : prev));
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to resolve approval");
+    }
+  };
+
+  const handleAnswerQuestion = async (questionId: string, answerText: string) => {
+    if (!selectedRoomId) return;
+    setErrorMsg("");
+    try {
+      await client.resolveQuestion(selectedRoomId, questionId, answerText);
+      setPendingQuestions((prev) => prev.filter((q) => q.id !== questionId));
+      setDetail((prev) => (prev ? { ...prev, active_turn: true } : prev));
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to submit answer");
+    }
+  };
+
   const onComposerKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -381,8 +501,8 @@ export function RoomsView({ client }: { client: QClient }) {
             <Bot className="h-10 w-10 text-muted-foreground/60" />
             <div className="text-base font-medium">Select or create a chat room</div>
             <p className="max-w-md text-sm text-muted-foreground">
-              Characters converse through chat bubbles, remember observed experiences, and evolve
-              their affect and values across turns.
+              Characters converse through chat bubbles, invoke tools behind an approval gate,
+              remember observed experiences, and evolve their affect and values across turns.
             </p>
             <Button onClick={() => void openCreateDialog()}>Create 1:1 Room</Button>
           </div>
@@ -393,7 +513,7 @@ export function RoomsView({ client }: { client: QClient }) {
                 <div className="flex items-center gap-2.5">
                   <h2 className="truncate text-base font-semibold">{detail.room.title}</h2>
                   <Badge variant="secondary">{primaryMember?.character_snapshot.name ?? "—"}</Badge>
-                  {activeTurn && (
+                  {(activeTurn || actorPhase) && (
                     <Badge variant="default" className="animate-pulse">
                       {actorPhase || "thinking"}
                     </Badge>
@@ -480,6 +600,26 @@ export function RoomsView({ client }: { client: QClient }) {
                     </div>
                   );
                 })}
+
+                {toolInvocations.map((inv) => (
+                  <ToolInvocationCard
+                    key={inv.id}
+                    invocation={inv}
+                    onOpenArtifact={(id) => setOpenArtifactId(id)}
+                  />
+                ))}
+
+                {pendingApprovals.map((inv) => (
+                  <ApprovalRequestCard
+                    key={inv.id}
+                    invocation={inv}
+                    onResolve={handleResolveApproval}
+                  />
+                ))}
+
+                {pendingQuestions.map((q) => (
+                  <UserQuestionCard key={q.id} question={q} onAnswer={handleAnswerQuestion} />
+                ))}
 
                 {streaming && (
                   <div className="flex w-full justify-start gap-2.5">
@@ -717,6 +857,12 @@ export function RoomsView({ client }: { client: QClient }) {
           </div>
         </DialogContent>
       </Dialog>
+
+      <LoomArtifactDrawer
+        client={client}
+        artifactId={openArtifactId}
+        onClose={() => setOpenArtifactId(null)}
+      />
     </div>
   );
 }
