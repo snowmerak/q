@@ -1,0 +1,3 @@
+interface:
+  display_name: "CDP Q Driver"
+  short_description: "Control Chromium with named CDP sessions"
