@@ -1484,3 +1484,115 @@ func (r artifactRepo) Delete(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+func (r artifactRepo) ListByKind(ctx context.Context, kind domain.ArtifactKind) ([]domain.Artifact, error) {
+	q := r.d.Rebind(`SELECT id, kind, media_type, byte_size, sha256, blob_key, source_meta_json, pinned, created_at, last_accessed_at FROM artifacts WHERE kind = ? ORDER BY created_at ASC, id ASC`)
+	rows, err := r.q.QueryContext(ctx, q, string(kind))
+	if err != nil {
+		return nil, r.mapErr(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []domain.Artifact
+	for rows.Next() {
+		var a domain.Artifact
+		var k string
+		var pinnedInt int
+		if err := rows.Scan(&a.ID, &k, &a.MediaType, &a.ByteSize, &a.SHA256, &a.BlobKey, &a.SourceMetaJSON, &pinnedInt, &a.CreatedAt, &a.LastAccessedAt); err != nil {
+			return nil, r.mapErr(err)
+		}
+		a.Kind = domain.ArtifactKind(k)
+		a.Pinned = pinnedInt != 0
+		out = append(out, a)
+	}
+	return out, r.mapErr(rows.Err())
+}
+
+func (r artifactRepo) ListLoomRootCandidates(ctx context.Context) (storage.LoomRootCandidates, error) {
+	var res storage.LoomRootCandidates
+
+	invQ := r.d.Rebind(`
+		SELECT DISTINCT ti.artifact_id
+		FROM tool_invocations ti
+		INNER JOIN turns t ON t.id = ti.turn_id
+		WHERE t.status IN ('running', 'awaiting_approval', 'awaiting_user')
+		  AND ti.artifact_id IS NOT NULL
+		  AND ti.artifact_id <> ''
+	`)
+	invRows, err := r.q.QueryContext(ctx, invQ)
+	if err != nil {
+		return res, r.mapErr(err)
+	}
+	for invRows.Next() {
+		var id string
+		if err := invRows.Scan(&id); err != nil {
+			_ = invRows.Close()
+			return res, r.mapErr(err)
+		}
+		res.ActiveInvocationArtifactIDs = append(res.ActiveInvocationArtifactIDs, id)
+	}
+	if err := invRows.Err(); err != nil {
+		_ = invRows.Close()
+		return res, r.mapErr(err)
+	}
+	_ = invRows.Close()
+
+	cpQ := r.d.Rebind(`
+		SELECT checkpoint_json
+		FROM turns
+		WHERE status IN ('running', 'awaiting_approval', 'awaiting_user')
+		  AND checkpoint_json LIKE '%loom://%'
+	`)
+	cpRows, err := r.q.QueryContext(ctx, cpQ)
+	if err != nil {
+		return res, r.mapErr(err)
+	}
+	for cpRows.Next() {
+		var text string
+		if err := cpRows.Scan(&text); err != nil {
+			_ = cpRows.Close()
+			return res, r.mapErr(err)
+		}
+		res.ReferencedTexts = append(res.ReferencedTexts, text)
+	}
+	if err := cpRows.Err(); err != nil {
+		_ = cpRows.Close()
+		return res, r.mapErr(err)
+	}
+	_ = cpRows.Close()
+
+	msgQ := r.d.Rebind(`
+		SELECT m.content
+		FROM messages m
+		INNER JOIN rooms r ON r.id = m.room_id
+		WHERE r.deleted_at IS NULL
+		  AND m.content LIKE '%loom://%'
+	`)
+	msgRows, err := r.q.QueryContext(ctx, msgQ)
+	if err != nil {
+		return res, r.mapErr(err)
+	}
+	for msgRows.Next() {
+		var text string
+		if err := msgRows.Scan(&text); err != nil {
+			_ = msgRows.Close()
+			return res, r.mapErr(err)
+		}
+		res.ReferencedTexts = append(res.ReferencedTexts, text)
+	}
+	if err := msgRows.Err(); err != nil {
+		_ = msgRows.Close()
+		return res, r.mapErr(err)
+	}
+	_ = msgRows.Close()
+
+	return res, nil
+}
+
+func (r artifactRepo) ClearToolInvocationRefs(ctx context.Context, artifactID string) error {
+	res, err := r.q.ExecContext(ctx, r.d.Rebind(`UPDATE tool_invocations SET artifact_id = NULL WHERE artifact_id = ?`), artifactID)
+	if err != nil {
+		return r.mapErr(err)
+	}
+	_ = res
+	return nil
+}

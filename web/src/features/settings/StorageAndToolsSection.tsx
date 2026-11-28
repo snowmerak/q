@@ -1,6 +1,14 @@
-import { useState } from "react";
-import { Database, Plus, Trash2 } from "lucide-react";
-import type { ApprovalMode, ConfigView, MCPServerConfig, ModelInfo } from "@/client/types";
+import { useCallback, useEffect, useState } from "react";
+import { Database, Plus, RefreshCw, Trash2 } from "lucide-react";
+import type { QClient } from "@/client/api";
+import type {
+  ApprovalMode,
+  ConfigView,
+  LoomGCResult,
+  LoomStats,
+  MCPServerConfig,
+  ModelInfo,
+} from "@/client/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,6 +22,24 @@ function parseIntOpt(raw: string): number | undefined {
   if (!trimmed) return undefined;
   const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? Math.trunc(parsed) : undefined;
+}
+
+function parseFloatOpt(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function formatBytes(bytes: number): string {
+  const mib = 1 << 20;
+  if (bytes >= mib) {
+    return `${(bytes / mib).toFixed(1)} MiB`;
+  }
+  if (bytes >= 1 << 10) {
+    return `${(bytes / (1 << 10)).toFixed(1)} KiB`;
+  }
+  return `${bytes} B`;
 }
 
 const EMBEDDING_CAPABLE_PROVIDER_TYPES = new Set([
@@ -586,12 +612,67 @@ export function ToolsAndMCPSection({
 
 export function StorageAndServerSection({
   cfg,
+  client,
   onChange,
 }: {
   cfg: ConfigView;
+  client?: QClient;
   onChange: (next: ConfigView) => void;
 }) {
   const { server, storage } = cfg;
+  const loomGC = storage.blob.loom_gc ?? {};
+  const [loomStats, setLoomStats] = useState<LoomStats | null>(null);
+  const [loomBusy, setLoomBusy] = useState(false);
+  const [loomStatus, setLoomStatus] = useState("");
+
+  const refreshLoomStats = useCallback(async () => {
+    if (!client) return;
+    try {
+      const stats = await client.getLoomStats();
+      setLoomStats(stats);
+    } catch (err) {
+      setLoomStatus(err instanceof Error ? err.message : "Failed to load Loom stats");
+    }
+  }, [client]);
+
+  useEffect(() => {
+    void refreshLoomStats();
+  }, [refreshLoomStats, storage.blob.loom_max_store_bytes]);
+
+  const handleRunLoomGC = async (dryRun: boolean) => {
+    if (!client) return;
+    setLoomBusy(true);
+    setLoomStatus("");
+    try {
+      const res: LoomGCResult = await client.runLoomGC(dryRun);
+      if (dryRun) {
+        setLoomStatus(
+          `Preview: ${res.artifacts_removed} artifacts, ${res.blobs_removed} blobs (${formatBytes(res.bytes_reclaimed)}) would be reclaimed.`,
+        );
+      } else {
+        setLoomStats(res.after);
+        setLoomStatus(
+          `Collected ${res.artifacts_removed} artifacts, ${res.blobs_removed} blobs (${formatBytes(res.bytes_reclaimed)} reclaimed).`,
+        );
+      }
+    } catch (err) {
+      setLoomStatus(err instanceof Error ? err.message : "Loom GC failed");
+    } finally {
+      setLoomBusy(false);
+    }
+  };
+
+  const updateLoomGC = (patch: Partial<NonNullable<ConfigView["storage"]["blob"]["loom_gc"]>>) =>
+    onChange({
+      ...cfg,
+      storage: {
+        ...storage,
+        blob: {
+          ...storage.blob,
+          loom_gc: { ...loomGC, ...patch },
+        },
+      },
+    });
 
   return (
     <div className="space-y-5">
@@ -1050,6 +1131,118 @@ export function StorageAndServerSection({
                 </div>
               </div>
             )}
+
+            {/* Loom GC */}
+            <div className="space-y-3 pt-3 border-t border-border">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Loom Garbage Collection</div>
+                  <p className="text-xs text-muted-foreground">
+                    {loomStats
+                      ? `${formatBytes(loomStats.bytes)} / ${formatBytes(loomStats.max_store_bytes)} · ${loomStats.artifacts} artifacts · ${loomStats.blobs} blobs${loomStats.pinned_artifacts > 0 ? ` · ${loomStats.pinned_artifacts} pinned` : ""}`
+                      : "Reclaim unreachable Loom tool artifacts while preserving live turn/message roots and recent grace-window entries."}
+                  </p>
+                </div>
+                {client && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={loomBusy}
+                      onClick={() => void refreshLoomStats()}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Refresh
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={loomBusy}
+                      onClick={() => void handleRunLoomGC(true)}
+                    >
+                      Preview GC
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      disabled={loomBusy}
+                      onClick={() => void handleRunLoomGC(false)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Run GC
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-4 items-end">
+                <div className="flex items-center gap-3 pb-2">
+                  <Switch
+                    id="loom-auto-gc"
+                    checked={!(loomGC.disabled ?? false)}
+                    onCheckedChange={(checked) => updateLoomGC({ disabled: !checked })}
+                  />
+                  <Label htmlFor="loom-auto-gc">Automatic GC</Label>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="loom-trigger-ratio" className="text-xs">
+                    GC Trigger Ratio ({Math.round((loomGC.trigger_ratio ?? 0.8) * 100)}%)
+                  </Label>
+                  <Input
+                    id="loom-trigger-ratio"
+                    type="number"
+                    step="0.05"
+                    min={0.05}
+                    max={0.99}
+                    placeholder="0.80"
+                    value={loomGC.trigger_ratio ?? ""}
+                    onChange={(e) =>
+                      updateLoomGC({ trigger_ratio: parseFloatOpt(e.target.value) })
+                    }
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="loom-target-ratio" className="text-xs">
+                    GC Target Ratio ({Math.round((loomGC.target_ratio ?? 0.6) * 100)}%)
+                  </Label>
+                  <Input
+                    id="loom-target-ratio"
+                    type="number"
+                    step="0.05"
+                    min={0.01}
+                    max={0.98}
+                    placeholder="0.60"
+                    value={loomGC.target_ratio ?? ""}
+                    onChange={(e) =>
+                      updateLoomGC({ target_ratio: parseFloatOpt(e.target.value) })
+                    }
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="loom-grace-hours" className="text-xs">
+                    GC Grace Period (Hours)
+                  </Label>
+                  <Input
+                    id="loom-grace-hours"
+                    type="number"
+                    min={1}
+                    max={8760}
+                    placeholder="1"
+                    value={loomGC.grace_hours ?? ""}
+                    onChange={(e) =>
+                      updateLoomGC({ grace_hours: parseIntOpt(e.target.value) })
+                    }
+                  />
+                </div>
+              </div>
+
+              {loomStatus && (
+                <p className="text-xs text-muted-foreground">{loomStatus}</p>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>

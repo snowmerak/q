@@ -232,3 +232,73 @@ func TestValidateModelBehaviors(t *testing.T) {
 		t.Fatal("expected out-of-range top_p validation error")
 	}
 }
+
+func TestLoomGCConfigDefaultsValidationAndReload(t *testing.T) {
+	cfg := Default()
+	if cfg.Storage.Blob.LoomGC.Disabled {
+		t.Fatal("expected default LoomGC.Disabled to be false")
+	}
+	if cfg.Storage.Blob.LoomGC.TriggerRatio != 0.80 || cfg.Storage.Blob.LoomGC.TargetRatio != 0.60 || cfg.Storage.Blob.LoomGC.GraceHours != 1 {
+		t.Fatalf("unexpected default LoomGC: %+v", cfg.Storage.Blob.LoomGC)
+	}
+
+	path := filepath.Join(t.TempDir(), FileName)
+	cfg.Storage.Blob.LoomGC.Disabled = true
+	cfg.Storage.Blob.LoomGC.TriggerRatio = 0.85
+	cfg.Storage.Blob.LoomGC.TargetRatio = 0.55
+	cfg.Storage.Blob.LoomGC.GraceHours = 6
+	if err := Save(path, cfg); err != nil {
+		t.Fatalf("Save LoomGC config: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load LoomGC config: %v", err)
+	}
+	if !loaded.Storage.Blob.LoomGC.Disabled || loaded.Storage.Blob.LoomGC.TriggerRatio != 0.85 || loaded.Storage.Blob.LoomGC.TargetRatio != 0.55 || loaded.Storage.Blob.LoomGC.GraceHours != 6 {
+		t.Fatalf("unexpected loaded LoomGC: %+v", loaded.Storage.Blob.LoomGC)
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"artifact_gt_store", func(c *Config) {
+			c.Storage.Blob.LoomMaxArtifactBytes = 100
+			c.Storage.Blob.LoomMaxStoreBytes = 50
+		}},
+		{"target_non_positive", func(c *Config) { c.Storage.Blob.LoomGC.TargetRatio = -0.1 }},
+		{"trigger_lte_target", func(c *Config) {
+			c.Storage.Blob.LoomGC.TargetRatio = 0.70
+			c.Storage.Blob.LoomGC.TriggerRatio = 0.70
+		}},
+		{"trigger_gte_one", func(c *Config) { c.Storage.Blob.LoomGC.TriggerRatio = 1.0 }},
+		{"grace_too_low", func(c *Config) { c.Storage.Blob.LoomGC.GraceHours = -1 }},
+		{"grace_too_high", func(c *Config) { c.Storage.Blob.LoomGC.GraceHours = 8761 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Default()
+			tc.mutate(&c)
+			if err := c.Validate(); err == nil {
+				t.Fatalf("expected validation error for %s", tc.name)
+			}
+		})
+	}
+
+	prev := Default()
+	next := Default()
+	next.Storage.Blob.MaxUploadBytes = 40 << 20
+	next.Storage.Blob.LoomMaxArtifactBytes = 32 << 20
+	next.Storage.Blob.LoomMaxStoreBytes = 128 << 20
+	next.Storage.Blob.LoomGC.Disabled = true
+	next.Storage.Blob.LoomGC.GraceHours = 4
+	if fields := DiffRestartRequired(prev, next); len(fields) != 0 {
+		t.Fatalf("expected hot-reloadable blob/loom fields not to require restart, got %v", fields)
+	}
+
+	nextDriver := Default()
+	nextDriver.Storage.Blob.Driver = "s3"
+	if fields := DiffRestartRequired(prev, nextDriver); len(fields) != 1 || fields[0] != "storage.blob" {
+		t.Fatalf("expected driver change to require storage.blob restart, got %v", fields)
+	}
+}

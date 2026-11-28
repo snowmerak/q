@@ -126,6 +126,48 @@ func RunRDBContractTests(t *testing.T, newStore func(t *testing.T) storage.RDBSt
 		if err != nil || len(pending) != 1 {
 			t.Fatalf("ListPending outbox: %+v err=%v", pending, err)
 		}
+
+		// Loom artifact listing, root candidate discovery, and FK-safe ref clearing.
+		activeArt := domain.Artifact{
+			ID:        "0123456789abcdef0123456789abcdef",
+			Kind:      domain.ArtifactKindLoom,
+			MediaType: "text/plain",
+			ByteSize:  128,
+			SHA256:    "abc",
+			BlobKey:   "loom/0123456789abcdef0123456789abcdef",
+		}
+		if err := st.Artifacts().Create(ctx, activeArt); err != nil {
+			t.Fatalf("Create active artifact: %v", err)
+		}
+		if err := st.Tools().CreateInvocation(ctx, domain.ToolInvocation{
+			TurnID:     t1.ID,
+			RoomID:     rm.ID,
+			ActorID:    c.ID,
+			CallID:     "call-1",
+			ToolName:   "run_command",
+			ToolSource: domain.ToolSourceBuiltin,
+			GateMode:   domain.ApprovalBypass,
+			Status:     domain.ToolStatusCompleted,
+			ArtifactID: activeArt.ID,
+		}); err != nil {
+			t.Fatalf("CreateInvocation with artifact: %v", err)
+		}
+		listed, err := st.Artifacts().ListByKind(ctx, domain.ArtifactKindLoom)
+		if err != nil || len(listed) != 1 || listed[0].ID != activeArt.ID {
+			t.Fatalf("ListByKind: %+v err=%v", listed, err)
+		}
+		cands, err := st.Artifacts().ListLoomRootCandidates(ctx)
+		if err != nil || len(cands.ActiveInvocationArtifactIDs) != 1 || cands.ActiveInvocationArtifactIDs[0] != activeArt.ID {
+			t.Fatalf("ListLoomRootCandidates: %+v err=%v", cands, err)
+		}
+		if err := st.Tx(ctx, func(tx storage.RDBTx) error {
+			if err := tx.Artifacts().ClearToolInvocationRefs(ctx, activeArt.ID); err != nil {
+				return err
+			}
+			return tx.Artifacts().Delete(ctx, activeArt.ID)
+		}); err != nil {
+			t.Fatalf("ClearToolInvocationRefs + Delete: %v", err)
+		}
 	})
 }
 

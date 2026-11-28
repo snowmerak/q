@@ -11,6 +11,7 @@ import (
 
 	"github.com/snowmerak/q/v2/pkg/domain"
 	"github.com/snowmerak/q/v2/pkg/storage"
+	"github.com/snowmerak/q/v2/pkg/task"
 )
 
 const (
@@ -302,4 +303,44 @@ func (a *App) runReindex(ctx context.Context) error {
 		return emitErr
 	}
 	return rebuildErr
+}
+
+func (a *App) handleLoomStats(w http.ResponseWriter, r *http.Request) {
+	if a.loom == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "loom store unavailable", true, nil)
+		return
+	}
+	stats, err := a.loom.Stats(r.Context())
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+func (a *App) handleLoomGC(w http.ResponseWriter, r *http.Request) {
+	if a.loom == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "loom store unavailable", true, nil)
+		return
+	}
+	var req struct {
+		DryRun bool `json:"dry_run"`
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_input", "failed to read request body", false, nil)
+		return
+	}
+	if len(bytes.TrimSpace(body)) > 0 {
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_input", err.Error(), false, nil)
+			return
+		}
+	}
+	res, err := a.loom.Collect(r.Context(), task.LoomGCOptions{DryRun: req.DryRun})
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }

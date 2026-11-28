@@ -619,3 +619,87 @@ func TestAppStartAsyncLoopbackHealth(t *testing.T) {
 		t.Fatal("timed out waiting for StartAsync shutdown")
 	}
 }
+
+func TestLoomStatsGCAndConfigHotReloadEndpoints(t *testing.T) {
+	ctx := t.Context()
+	a, err := app.Open(ctx, app.Options{DataDir: t.TempDir(), ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close(context.Background()) }()
+
+	h := a.Handler()
+
+	// Seed one Loom artifact directly and verify /api/v1/storage/loom/stats.
+	// Using a fresh room media upload vs LoomStats: stats must ignore media artifacts.
+	var statsBefore struct {
+		Artifacts       int   `json:"artifacts"`
+		Blobs           int   `json:"blobs"`
+		Bytes           int64 `json:"bytes"`
+		MaxStoreBytes   int64 `json:"max_store_bytes"`
+		PinnedArtifacts int   `json:"pinned_artifacts"`
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/storage/loom/stats", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET loom stats = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &statsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if statsBefore.MaxStoreBytes != 256<<20 {
+		t.Fatalf("expected default MaxStoreBytes=256MiB, got %d", statsBefore.MaxStoreBytes)
+	}
+
+	// Dry-run GC endpoint accepts JSON body.
+	gcReq := httptest.NewRequest(http.MethodPost, "/api/v1/storage/loom/gc", strings.NewReader(`{"dry_run":true}`))
+	gcReq.Header.Set("Content-Type", "application/json")
+	gcRec := httptest.NewRecorder()
+	h.ServeHTTP(gcRec, gcReq)
+	if gcRec.Code != http.StatusOK {
+		t.Fatalf("POST loom gc dry_run = %d body=%s", gcRec.Code, gcRec.Body.String())
+	}
+	var gcRes struct {
+		DryRun bool `json:"dry_run"`
+	}
+	if err := json.Unmarshal(gcRec.Body.Bytes(), &gcRes); err != nil || !gcRes.DryRun {
+		t.Fatalf("unexpected dry_run response: %s err=%v", gcRec.Body.String(), err)
+	}
+
+	// PUT /api/v1/config updating loom_gc hot-reloads without restart_required_fields.
+	cfg := config.Default()
+	cfg.Storage.Blob.LoomMaxStoreBytes = 128 << 20
+	cfg.Storage.Blob.LoomGC.Disabled = true
+	cfg.Storage.Blob.LoomGC.TriggerRatio = 0.90
+	cfg.Storage.Blob.LoomGC.TargetRatio = 0.50
+	cfg.Storage.Blob.LoomGC.GraceHours = 3
+	cfgBytes, _ := json.Marshal(cfg)
+
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(cfgBytes))
+	putReq.Header.Set("Content-Type", "application/json")
+	putRec := httptest.NewRecorder()
+	h.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("PUT config = %d body=%s", putRec.Code, putRec.Body.String())
+	}
+	var putResp struct {
+		Applied               bool     `json:"applied"`
+		RestartRequiredFields []string `json:"restart_required_fields"`
+	}
+	if err := json.Unmarshal(putRec.Body.Bytes(), &putResp); err != nil {
+		t.Fatal(err)
+	}
+	if !putResp.Applied || len(putResp.RestartRequiredFields) != 0 {
+		t.Fatalf("expected hot-reload with no restart required, got %+v", putResp)
+	}
+
+	// Verify stats reflect updated MaxStoreBytes immediately.
+	recAfter := httptest.NewRecorder()
+	h.ServeHTTP(recAfter, httptest.NewRequest(http.MethodGet, "/api/v1/storage/loom/stats", nil))
+	if err := json.Unmarshal(recAfter.Body.Bytes(), &statsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if statsBefore.MaxStoreBytes != 128<<20 {
+		t.Fatalf("expected hot-reloaded MaxStoreBytes=128MiB, got %d", statsBefore.MaxStoreBytes)
+	}
+}

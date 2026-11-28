@@ -78,6 +78,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/media", a.handleUploadMedia)
 	mux.HandleFunc("GET /api/v1/media/{id}", a.handleGetMedia)
 	mux.HandleFunc("GET /api/v1/artifacts/{id}", a.handleGetArtifact)
+	mux.HandleFunc("GET /api/v1/storage/loom/stats", a.handleLoomStats)
+	mux.HandleFunc("POST /api/v1/storage/loom/gc", a.handleLoomGC)
 	mux.HandleFunc("POST /api/v1/storage/reindex", a.handleReindex)
 
 	distFS, hasUI := web.DistFS()

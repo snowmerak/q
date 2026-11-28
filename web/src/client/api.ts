@@ -11,6 +11,8 @@ import type {
   KnowledgeDoc,
   KnowledgeHit,
   LLMRolesConfig,
+  LoomGCResult,
+  LoomStats,
   MessageBubble,
   ModelInfo,
   ModelPrefs,
@@ -291,6 +293,15 @@ export class QClient {
     return this.request<ArtifactReadResponse>(
       `/api/v1/artifacts/${encodeURIComponent(id)}?offset=${offset}&limit=${limit}`,
     );
+  }
+  getLoomStats() {
+    return this.request<LoomStats>("/api/v1/storage/loom/stats");
+  }
+  runLoomGC(dryRun = false) {
+    return this.request<LoomGCResult>("/api/v1/storage/loom/gc", {
+      method: "POST",
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
   }
   listKnowledge(scope = "") {
     const qs = scope ? `?scope=${encodeURIComponent(scope)}` : "";

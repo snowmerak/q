@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dop251/goja"
@@ -20,6 +21,12 @@ const (
 	defaultLoomReadBytes        = 64 << 10
 	maxLoomReadBytes            = 1 << 20
 	defaultMaxArtifactBytes     = 64 << 20
+	defaultMaxStoreBytes        = 256 << 20
+	defaultGCTriggerRatio       = 0.80
+	defaultGCTargetRatio        = 0.60
+	defaultGCGracePeriod        = 1 * time.Hour
+	defaultGCInterval           = 15 * time.Minute
+	transientReadLeaseTTL       = 2 * time.Minute
 	loomEvalTimeout             = 2 * time.Second
 	loomEvalMaxOutputBytes      = 64 << 10
 )
@@ -28,28 +35,105 @@ type LoomStore struct {
 	rdb             storage.RDBStore
 	blob            storage.BlobStore
 	inlineThreshold int
-	maxArtifactSize int64
+
+	opMu   sync.Mutex
+	leases map[string]transientLease
+	nowFn  func() time.Time
+
+	cfgMu sync.RWMutex
+	opts  LoomOptions
+
+	gcMu     sync.Mutex
+	gcCancel context.CancelFunc
+	gcWG     sync.WaitGroup
 }
 
+// NewLoomStore constructs a LoomStore with the given single-artifact cap and default store/GC options.
 func NewLoomStore(rdb storage.RDBStore, blob storage.BlobStore, maxArtifactBytes int64) *LoomStore {
 	if maxArtifactBytes <= 0 {
 		maxArtifactBytes = defaultMaxArtifactBytes
 	}
+	maxStore := int64(defaultMaxStoreBytes)
+	if maxArtifactBytes > maxStore {
+		maxStore = maxArtifactBytes
+	}
+	return NewLoomStoreWithOptions(rdb, blob, LoomOptions{
+		MaxArtifactBytes: maxArtifactBytes,
+		MaxStoreBytes:    maxStore,
+		AutoGC:           true,
+		GCTriggerRatio:   defaultGCTriggerRatio,
+		GCTargetRatio:    defaultGCTargetRatio,
+		GCGracePeriod:    defaultGCGracePeriod,
+	})
+}
+
+// NewLoomStoreWithOptions constructs a LoomStore configured with explicit limits and GC settings.
+func NewLoomStoreWithOptions(rdb storage.RDBStore, blob storage.BlobStore, opts LoomOptions) *LoomStore {
 	return &LoomStore{
 		rdb:             rdb,
 		blob:            blob,
 		inlineThreshold: defaultInlineThresholdBytes,
-		maxArtifactSize: maxArtifactBytes,
+		leases:          make(map[string]transientLease),
+		nowFn:           func() time.Time { return time.Now().UTC() },
+		opts:            normalizeLoomOptions(opts),
 	}
+}
+
+// Configure updates store limits and GC behavior dynamically for hot-reload.
+func (l *LoomStore) Configure(opts LoomOptions) {
+	if l == nil {
+		return
+	}
+	normalized := normalizeLoomOptions(opts)
+	l.cfgMu.Lock()
+	l.opts = normalized
+	l.cfgMu.Unlock()
+}
+
+func (l *LoomStore) currentOptions() LoomOptions {
+	l.cfgMu.RLock()
+	opts := l.opts
+	l.cfgMu.RUnlock()
+	return opts
 }
 
 func (l *LoomStore) Put(ctx context.Context, content, mediaType string, meta map[string]any) (domain.Artifact, error) {
 	if l == nil || l.rdb == nil || l.blob == nil {
 		return domain.Artifact{}, errors.New("loom: artifact store unavailable")
 	}
-	if int64(len(content)) > l.maxArtifactSize {
-		return domain.Artifact{}, fmt.Errorf("loom: content size %d exceeds max %d", len(content), l.maxArtifactSize)
+
+	l.opMu.Lock()
+	defer l.opMu.Unlock()
+
+	opts := l.currentOptions()
+	incoming := int64(len(content))
+	if incoming > opts.MaxArtifactBytes {
+		return domain.Artifact{}, fmt.Errorf("loom: content size %d exceeds max %d", incoming, opts.MaxArtifactBytes)
 	}
+
+	if opts.MaxStoreBytes > 0 {
+		artifacts, err := l.rdb.Artifacts().ListByKind(ctx, domain.ArtifactKindLoom)
+		if err != nil {
+			return domain.Artifact{}, err
+		}
+		stats := summarizeLoomArtifacts(artifacts, opts.MaxStoreBytes)
+		currentBytes := stats.Bytes
+		triggerBytes := int64(float64(opts.MaxStoreBytes) * opts.GCTriggerRatio)
+		if opts.AutoGC && currentBytes+incoming > triggerBytes {
+			targetBytes := int64(float64(opts.MaxStoreBytes) * opts.GCTargetRatio)
+			gcRes, err := l.collectLocked(ctx, opts, LoomGCOptions{
+				TargetBytes: targetBytes,
+			})
+			if err != nil {
+				return domain.Artifact{}, fmt.Errorf("loom: auto-gc failed: %w", err)
+			}
+			currentBytes = gcRes.After.Bytes
+		}
+		if currentBytes+incoming > opts.MaxStoreBytes {
+			return domain.Artifact{}, fmt.Errorf("loom: store size %d + %d exceeds max_store_bytes %d", currentBytes, incoming, opts.MaxStoreBytes)
+		}
+	}
+
 	if mediaType == "" {
 		mediaType = "text/plain; charset=utf-8"
 	}
@@ -60,7 +144,7 @@ func (l *LoomStore) Put(ctx context.Context, content, mediaType string, meta map
 		return domain.Artifact{}, err
 	}
 	metaBytes, _ := json.Marshal(meta)
-	now := domain.NowMS()
+	now := l.nowFn().UTC().UnixMilli()
 	art := domain.Artifact{
 		ID:             id,
 		Kind:           domain.ArtifactKindLoom,
@@ -105,6 +189,9 @@ func NormalizeLoomID(ref string) string {
 
 func (l *LoomStore) ReadAll(ctx context.Context, ref string) (domain.Artifact, []byte, error) {
 	id := NormalizeLoomID(ref)
+	lease := l.AcquireLease(transientReadLeaseTTL, id)
+	defer lease.Release()
+
 	art, err := l.rdb.Artifacts().Get(ctx, id)
 	if err != nil {
 		return domain.Artifact{}, nil, err
@@ -118,12 +205,15 @@ func (l *LoomStore) ReadAll(ctx context.Context, ref string) (domain.Artifact, [
 	if err != nil {
 		return domain.Artifact{}, nil, err
 	}
-	_ = l.rdb.Artifacts().Touch(ctx, art.ID, domain.NowMS())
+	_ = l.rdb.Artifacts().Touch(ctx, art.ID, l.nowFn().UTC().UnixMilli())
 	return art, data, nil
 }
 
 func (l *LoomStore) ReadRange(ctx context.Context, ref string, offset, limit int64) (domain.Artifact, string, bool, error) {
 	id := NormalizeLoomID(ref)
+	lease := l.AcquireLease(transientReadLeaseTTL, id)
+	defer lease.Release()
+
 	art, err := l.rdb.Artifacts().Get(ctx, id)
 	if err != nil {
 		return domain.Artifact{}, "", false, err
@@ -156,7 +246,7 @@ func (l *LoomStore) ReadRange(ctx context.Context, ref string, offset, limit int
 	if truncated {
 		buf = buf[:limit]
 	}
-	_ = l.rdb.Artifacts().Touch(ctx, art.ID, domain.NowMS())
+	_ = l.rdb.Artifacts().Touch(ctx, art.ID, l.nowFn().UTC().UnixMilli())
 	return art, string(buf), truncated, nil
 }
 

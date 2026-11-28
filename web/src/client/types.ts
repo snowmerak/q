@@ -162,6 +162,30 @@ export interface S3Config {
   secret_key_env?: string;
 }
 
+export interface LoomGCConfig {
+  disabled?: boolean;
+  trigger_ratio?: number;
+  target_ratio?: number;
+  grace_hours?: number;
+}
+
+export interface LoomStats {
+  artifacts: number;
+  blobs: number;
+  bytes: number;
+  max_store_bytes: number;
+  pinned_artifacts: number;
+}
+
+export interface LoomGCResult {
+  before: LoomStats;
+  after: LoomStats;
+  artifacts_removed: number;
+  blobs_removed: number;
+  bytes_reclaimed: number;
+  dry_run: boolean;
+}
+
 export interface MCPServerConfig {
   id: string;
   transport: "stdio" | "http";
@@ -187,6 +211,7 @@ export interface ConfigView {
       max_upload_bytes?: number;
       loom_max_artifact_bytes?: number;
       loom_max_store_bytes?: number;
+      loom_gc?: LoomGCConfig;
       s3?: S3Config;
     };
   };

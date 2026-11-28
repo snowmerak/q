@@ -548,7 +548,7 @@ export function SettingsView({ client }: { client: QClient }) {
             </TabsContent>
 
             <TabsContent value="storage">
-              <StorageAndServerSection cfg={cfg} onChange={updateCfg} />
+              <StorageAndServerSection cfg={cfg} client={client} onChange={updateCfg} />
             </TabsContent>
 
             <TabsContent value="json">

@@ -66,11 +66,19 @@ type OpenSearchConfig struct {
 }
 
 type BlobConfig struct {
-	Driver               string   `json:"driver"` // "local" | "s3"
-	MaxUploadBytes       int64    `json:"max_upload_bytes,omitempty"`
-	LoomMaxArtifactBytes int64    `json:"loom_max_artifact_bytes,omitempty"`
-	LoomMaxStoreBytes    int64    `json:"loom_max_store_bytes,omitempty"`
-	S3                   S3Config `json:"s3,omitempty"`
+	Driver               string       `json:"driver"` // "local" | "s3"
+	MaxUploadBytes       int64        `json:"max_upload_bytes,omitempty"`
+	LoomMaxArtifactBytes int64        `json:"loom_max_artifact_bytes,omitempty"`
+	LoomMaxStoreBytes    int64        `json:"loom_max_store_bytes,omitempty"`
+	LoomGC               LoomGCConfig `json:"loom_gc,omitempty"`
+	S3                   S3Config     `json:"s3,omitempty"`
+}
+
+type LoomGCConfig struct {
+	Disabled     bool    `json:"disabled,omitempty"`
+	TriggerRatio float64 `json:"trigger_ratio,omitempty"`
+	TargetRatio  float64 `json:"target_ratio,omitempty"`
+	GraceHours   int     `json:"grace_hours,omitempty"`
 }
 
 type S3Config struct {
@@ -165,6 +173,12 @@ func Default() Config {
 				MaxUploadBytes:       20 << 20,
 				LoomMaxArtifactBytes: 64 << 20,
 				LoomMaxStoreBytes:    256 << 20,
+				LoomGC: LoomGCConfig{
+					Disabled:     false,
+					TriggerRatio: 0.80,
+					TargetRatio:  0.60,
+					GraceHours:   1,
+				},
 			},
 		},
 		LLM: LLMConfig{
@@ -358,6 +372,15 @@ func (c Config) withDefaults() Config {
 	if c.Storage.Blob.LoomMaxStoreBytes == 0 {
 		c.Storage.Blob.LoomMaxStoreBytes = def.Storage.Blob.LoomMaxStoreBytes
 	}
+	if c.Storage.Blob.LoomGC.TriggerRatio == 0 {
+		c.Storage.Blob.LoomGC.TriggerRatio = def.Storage.Blob.LoomGC.TriggerRatio
+	}
+	if c.Storage.Blob.LoomGC.TargetRatio == 0 {
+		c.Storage.Blob.LoomGC.TargetRatio = def.Storage.Blob.LoomGC.TargetRatio
+	}
+	if c.Storage.Blob.LoomGC.GraceHours == 0 {
+		c.Storage.Blob.LoomGC.GraceHours = def.Storage.Blob.LoomGC.GraceHours
+	}
 	if strings.TrimSpace(c.LLM.ModelCacheRefreshInterval) == "" {
 		c.LLM.ModelCacheRefreshInterval = def.LLM.ModelCacheRefreshInterval
 	}
@@ -415,6 +438,22 @@ func (c Config) Validate() error {
 		}
 	default:
 		return fmt.Errorf("config: unsupported storage.blob.driver %q", c.Storage.Blob.Driver)
+	}
+	if c.Storage.Blob.LoomMaxArtifactBytes < 1 || c.Storage.Blob.LoomMaxArtifactBytes > 1024<<20 {
+		return errors.New("config: storage.blob.loom_max_artifact_bytes must be between 1 and 1073741824")
+	}
+	if c.Storage.Blob.LoomMaxStoreBytes < 1 || c.Storage.Blob.LoomMaxStoreBytes > 10240<<20 {
+		return errors.New("config: storage.blob.loom_max_store_bytes must be between 1 and 10737418240")
+	}
+	if c.Storage.Blob.LoomMaxArtifactBytes > c.Storage.Blob.LoomMaxStoreBytes {
+		return errors.New("config: storage.blob.loom_max_artifact_bytes cannot exceed loom_max_store_bytes")
+	}
+	loomGC := c.Storage.Blob.LoomGC
+	if !(loomGC.TargetRatio > 0 && loomGC.TriggerRatio > loomGC.TargetRatio && loomGC.TriggerRatio < 1) {
+		return errors.New("config: storage.blob.loom_gc ratios must satisfy 0 < target_ratio < trigger_ratio < 1")
+	}
+	if loomGC.GraceHours < 1 || loomGC.GraceHours > 24*365 {
+		return errors.New("config: storage.blob.loom_gc.grace_hours must be between 1 and 8760")
 	}
 
 	if err := c.Decisions.Validate(); err != nil {
@@ -527,7 +566,7 @@ func DiffRestartRequired(prev, next Config) []string {
 	if prev.Storage.RDB != next.Storage.RDB {
 		fields = append(fields, "storage.rdb")
 	}
-	if prev.Storage.Blob != next.Storage.Blob {
+	if prev.Storage.Blob.Driver != next.Storage.Blob.Driver || prev.Storage.Blob.S3 != next.Storage.Blob.S3 {
 		fields = append(fields, "storage.blob")
 	}
 	return fields

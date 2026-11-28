@@ -133,9 +133,17 @@ type OutboxRepo interface {
 	MarkRetry(ctx context.Context, seq int64, status domain.OutboxStatus, nextAttemptAt int64, lastErr string) error
 }
 
+type LoomRootCandidates struct {
+	ActiveInvocationArtifactIDs []string
+	ReferencedTexts             []string
+}
+
 type ArtifactRepo interface {
 	Create(ctx context.Context, a domain.Artifact) error
 	Get(ctx context.Context, id string) (domain.Artifact, error)
+	ListByKind(ctx context.Context, kind domain.ArtifactKind) ([]domain.Artifact, error)
+	ListLoomRootCandidates(ctx context.Context) (LoomRootCandidates, error)
+	ClearToolInvocationRefs(ctx context.Context, artifactID string) error
 	Touch(ctx context.Context, id string, accessedAt int64) error
 	Delete(ctx context.Context, id string) error
 }

@@ -136,7 +136,7 @@ func Open(ctx context.Context, opts Options) (*App, error) {
 		a.logger.Warn("outbox worker error", "error", err)
 	}))
 	a.knowledge = knowledge.NewService(a.rdb, a.search, a.currentQueryEmbedder)
-	a.loom = task.NewLoomStore(a.rdb, a.blob, cfg.Storage.Blob.LoomMaxArtifactBytes)
+	a.loom = task.NewLoomStoreWithOptions(a.rdb, a.blob, loomOptionsFromConfig(cfg))
 	a.commands = task.NewCommandManager(time.Duration(cfg.Tools.CommandTimeoutMS) * time.Millisecond)
 	a.skills = task.NewSkillStore(filepath.Join(a.dataDir, "skills"))
 	a.mcp = task.NewMCPManager()
@@ -159,6 +159,9 @@ func Open(ctx context.Context, opts Options) (*App, error) {
 		a.logger.Warn("value worker error", "error", err)
 	}))
 	a.valueWorker.Start(ctx)
+	a.loom.StartGCWorker(ctx, 15*time.Minute, func(err error) {
+		a.logger.Warn("loom gc worker error", "error", err)
+	})
 
 	watcher, err := config.StartWatcher(ctx, a.configPath, cfg, func(prev, next config.Config) {
 		if restartFields := config.DiffRestartRequired(prev, next); len(restartFields) > 0 {
@@ -388,8 +391,23 @@ func (a *App) reloadProviders(ctx context.Context, cfg config.Config) {
 			a.outbox.SetEmbedder(nil)
 		}
 	}
+	if a.loom != nil {
+		a.loom.Configure(loomOptionsFromConfig(cfg))
+	}
 	if oldGW != nil {
 		_ = oldGW.Close()
+	}
+}
+
+func loomOptionsFromConfig(cfg config.Config) task.LoomOptions {
+	blob := cfg.Storage.Blob
+	return task.LoomOptions{
+		MaxArtifactBytes: blob.LoomMaxArtifactBytes,
+		MaxStoreBytes:    blob.LoomMaxStoreBytes,
+		AutoGC:           !blob.LoomGC.Disabled,
+		GCTriggerRatio:   blob.LoomGC.TriggerRatio,
+		GCTargetRatio:    blob.LoomGC.TargetRatio,
+		GCGracePeriod:    time.Duration(blob.LoomGC.GraceHours) * time.Hour,
 	}
 }
 
@@ -593,6 +611,9 @@ func (a *App) Close(ctx context.Context) error {
 		}
 		if a.valueWorker != nil {
 			a.valueWorker.Stop()
+		}
+		if a.loom != nil {
+			a.loom.StopGCWorker()
 		}
 		a.reindexWG.Wait()
 		if a.outbox != nil {
