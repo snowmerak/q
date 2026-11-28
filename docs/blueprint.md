@@ -271,7 +271,7 @@ q/                              # Go module: github.com/snowmerak/q/v2
 └── docs/
     ├── prd.md                  # 제품 요구사항 정의서
     ├── blueprint.md            # 본 프로젝트 청사진
-    └── adr/                    # 아키텍처 결정 기록 (예정)
+    └── adr/                    # 아키텍처 결정 기록 (README.md, 0001~0004)
 ```
 
 > [!NOTE]
@@ -303,9 +303,9 @@ q/                              # Go module: github.com/snowmerak/q/v2
 | **RDB 3종(`SQLite`/`PostgreSQL`/`MySQL`) 동시 지원 비용** | SQL 방언, JSON 연산, 마이그레이션 차이로 유지보수 비용 증가 | 단일 인스턴스 전제로 분산 락 SQL을 제거하고, 공통 저장소 계약 테스트(Contract Test Suite)와 단순한 쿼리 계층 유지 |
 | **멀티캐릭터 룸 및 서브에이전트 위임 비용·경합** | 캐릭터 수와 위임 도구가 늘어날수록 모델 호출이 증가하고 사용자 끼어들기 시 상태 오염 위험 | 룸당 활성 참여자·위임 깊이 상한, 경량 판단 모델 분리, 인프로세스 락 + 체크포인트 + `InterceptHub` 원자적 중단 |
 
-### 8.3 후속 작성할 ADR 후보 (`docs/adr/`)
+### 8.3 아키텍처 결정 기록 ([`docs/adr/`](./adr/README.md))
 
-1. **`ADR-0001`: RDB 단일 권위 + `Bleve + HNSW` / `OpenSearch` 파생 프로젝션 및 Outbox 재색인 계약**
-2. **`ADR-0002`: 채팅 버블 기반 멀티캐릭터 룸 + Decisions 조율 및 `observedBy` 격리 프로토콜**
-3. **`ADR-0003`: 1차 내장 도구 7개 영역의 안전 경계(경로/셸/Loom/위임), 승인 게이트 3모드 및 `browser_control` 계약**
-4. **`ADR-0004`: 단일 `go.mod` vs `llm`/`cdp` 하위 모듈 분리 및 공개 패키지 API 경계**
+1. **[`ADR-0001`](./adr/0001-storage-authority-and-hybrid-search.md):** RDB 단일 권위 + `Bleve + HNSW` / `OpenSearch` 파생 프로젝션 및 Outbox 재색인 계약 *(확정 · 세부 스키마 제안)*
+2. **[`ADR-0002`](./adr/0002-chat-bubble-room-and-decisions-protocol.md):** 채팅 버블 기반 멀티캐릭터 룸 + Decisions 조율 및 `observedBy` 격리 프로토콜 *(확정 · 세부 파라미터 제안)*
+3. **[`ADR-0003`](./adr/0003-tools-approval-gate-and-browser-control.md):** 1차 내장 도구 7개 영역, 3단계 승인 게이트 및 `browser_control` 계약 *(확정 · 세부 가드 제안)*
+4. **[`ADR-0004`](./adr/0004-module-layout-and-independent-distribution.md):** 공개 `pkg/` 계층, 공유 코어 및 `llm`/`cdp` 독립 배포 모듈 경계 *(부분 확정 / 모듈 분리 방식 제안)*
