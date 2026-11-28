@@ -244,6 +244,7 @@ export interface ConfigView {
     tool_overrides?: Record<string, ApprovalMode>;
     allowed_roots?: string[];
     command_timeout_ms?: number;
+    max_tool_rounds?: number;
     browser_control: {
       enabled: boolean;
       preferred: "cdp-q-driver" | "ego-browser";
@@ -488,6 +489,7 @@ export interface RoomDetail {
   turns: Turn[];
   pending_approvals: ToolInvocation[];
   pending_questions: UserQuestion[];
+  active_tool_invocations?: ToolInvocation[];
   active_turn: boolean;
 }
 

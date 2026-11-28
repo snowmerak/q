@@ -123,6 +123,7 @@ type ToolsConfig struct {
 	ToolOverrides    map[string]domain.ApprovalMode `json:"tool_overrides,omitempty"`
 	AllowedRoots     []string                       `json:"allowed_roots,omitempty"`
 	CommandTimeoutMS int                            `json:"command_timeout_ms,omitempty"`
+	MaxToolRounds    int                            `json:"max_tool_rounds,omitempty"`
 	BrowserControl   BrowserControlConfig           `json:"browser_control"`
 	MCPServers       []MCPServerConfig              `json:"mcp_servers,omitempty"`
 }
@@ -202,6 +203,7 @@ func Default() Config {
 				"read_file":   domain.ApprovalBypass,
 			},
 			CommandTimeoutMS: 120000,
+			MaxToolRounds:    120,
 			BrowserControl: BrowserControlConfig{
 				Enabled:   true,
 				Preferred: "cdp-q-driver",
@@ -396,6 +398,9 @@ func (c Config) withDefaults() Config {
 	if c.Tools.CommandTimeoutMS == 0 {
 		c.Tools.CommandTimeoutMS = def.Tools.CommandTimeoutMS
 	}
+	if c.Tools.MaxToolRounds == 0 {
+		c.Tools.MaxToolRounds = def.Tools.MaxToolRounds
+	}
 	if strings.TrimSpace(c.Tools.BrowserControl.Preferred) == "" {
 		c.Tools.BrowserControl.Preferred = def.Tools.BrowserControl.Preferred
 	}
@@ -493,6 +498,9 @@ func (c Config) Validate() error {
 	}
 	if c.Tools.CommandTimeoutMS < 100 {
 		return errors.New("config: invalid tools command timeout")
+	}
+	if c.Tools.MaxToolRounds < 1 || c.Tools.MaxToolRounds > 1000 {
+		return errors.New("config: tools.max_tool_rounds must be between 1 and 1000")
 	}
 	switch c.Tools.BrowserControl.Preferred {
 	case "cdp-q-driver", "ego-browser":

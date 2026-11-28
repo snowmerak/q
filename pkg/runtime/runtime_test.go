@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -405,5 +406,119 @@ func TestInterceptStopAndCutIn(t *testing.T) {
 	// Previous user(1) + req-cutin user(1) + cut_in user(1) + assistant(1) = 4
 	if len(msgsFinal) != 4 || msgsFinal[3].Content != "Got it, umbrella packed." {
 		t.Fatalf("unexpected final messages: %+v", msgsFinal)
+	}
+}
+
+func TestThinkingStreamingPersistenceAndCompactionEvent(t *testing.T) {
+	eng, rdb, roomID := newRuntimeFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"chat-1"}]}`)
+		case "/v1/chat/completions":
+			body, _ := io.ReadAll(r.Body)
+			var req struct {
+				Stream   bool `json:"stream"`
+				Messages []struct {
+					Content string `json:"content"`
+				} `json:"messages"`
+			}
+			_ = json.Unmarshal(body, &req)
+			if !req.Stream && len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "running memory summary") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"sum1","object":"chat.completion","model":"chat-1","choices":[{"index":0,"message":{"role":"assistant","content":"Compacted summary."},"finish_reason":"stop"}]}`)
+				return
+			}
+			if !req.Stream {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"r1","object":"chat.completion","model":"chat-1","choices":[{"index":0,"message":{"role":"assistant","content":"[]"},"finish_reason":"stop"}]}`)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"chat-1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"reasoning_content\":\"checking notes; \",\"content\":\"<th\"}}]}\n\n")
+			_, _ = io.WriteString(w, "data: {\"id\":\"c2\",\"object\":\"chat.completion.chunk\",\"model\":\"chat-1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ink>silent step</th\"}}]}\n\n")
+			_, _ = io.WriteString(w, `data: {"id":"c3","object":"chat.completion.chunk","model":"chat-1","choices":[{"index":0,"delta":{"content":"ink>Visible answer."},"finish_reason":"stop"}]}`+"\n\n")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		}
+	}), &domain.ModelPrefs{ContextWindowOverride: 400})
+
+	// Seed long messages so compaction triggers during the turn.
+	members, _ := rdb.Rooms().ListMembers(t.Context(), roomID)
+	actorID := members[0].CharacterID
+	room, _ := rdb.Rooms().Get(t.Context(), roomID)
+	seedTurn, _, err := rdb.Turns().CreateOrGetIdempotent(t.Context(), domain.Turn{
+		RoomID:    roomID,
+		RequestID: "seed-think-req",
+		InputHash: "seed-think-hash",
+		Status:    domain.TurnStatusCompleted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	longChunk := strings.Repeat("compaction trigger log entry ", 18)
+	for range 3 {
+		if _, err := rdb.Messages().Append(t.Context(), domain.Message{
+			RoomID:     roomID,
+			TurnID:     seedTurn.ID,
+			Role:       domain.MessageRoleUser,
+			AuthorID:   room.PersonaID,
+			AuthorName: "Alex",
+			Content:    longChunk,
+			ObservedBy: []string{room.PersonaID, actorID},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ch, unsub := eng.Events().Subscribe(roomID, 0)
+	defer unsub()
+
+	if _, err := eng.SubmitTurn(t.Context(), roomID, runtime.SubmitTurnRequest{
+		RequestID: "req-think",
+		Text:      "Summarize clearly.",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var compEv runtime.Event
+	var thinkDeltas strings.Builder
+	var sawCompleted bool
+	deadline := time.After(5 * time.Second)
+	for !sawCompleted {
+		select {
+		case ev := <-ch:
+			switch ev.Type {
+			case "room.compacted":
+				compEv = ev
+			case "thinking.delta":
+				if m, ok := ev.Data.(map[string]any); ok {
+					thinkDeltas.WriteString(fmt.Sprint(m["delta"]))
+				}
+			case "turn.completed":
+				sawCompleted = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for turn.completed")
+		}
+	}
+
+	compData, _ := compEv.Data.(map[string]any)
+	if compData == nil || compData["character_id"] != actorID || compData["compacted_through_seq"] == nil {
+		t.Fatalf("expected room.compacted event with character_id & compacted_through_seq, got %#v", compEv)
+	}
+	if !strings.Contains(thinkDeltas.String(), "checking notes;") || !strings.Contains(thinkDeltas.String(), "silent step") {
+		t.Fatalf("expected thinking.delta stream, got %q", thinkDeltas.String())
+	}
+
+	msgs, _ := rdb.Messages().List(t.Context(), roomID, 0, 20)
+	last := msgs[len(msgs)-1]
+	if last.Content != "Visible answer." {
+		t.Fatalf("expected <think> stripped from content, got %q", last.Content)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(last.MetadataJSON), &meta); err != nil {
+		t.Fatalf("unmarshal MetadataJSON: %v", err)
+	}
+	if meta["thinking"] != "checking notes; silent step" {
+		t.Fatalf("expected metadata thinking persisted, got %#v", meta)
 	}
 }

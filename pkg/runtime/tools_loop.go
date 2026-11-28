@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	maxToolRounds = 12
+	defaultMaxToolRounds = 120
 )
 
 var (

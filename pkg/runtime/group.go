@@ -404,6 +404,7 @@ func (e *Engine) executeGroupTurn(roomID string, turn domain.Turn, specCtx conte
 			cp.PendingQuestionID = ""
 			cp.PendingToolCallID = ""
 			cp.ToolRounds = 0
+			cp.Thinking = ""
 			cp.GroupWaited = nil
 			cp.ActorID = ""
 			cp.GroupSteps++

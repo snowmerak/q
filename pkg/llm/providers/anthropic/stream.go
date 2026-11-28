@@ -91,6 +91,7 @@ func (s *sseStream) Recv() (*llmprovider.ChatChunk, error) {
 				Delta struct {
 					Type        string `json:"type"`
 					Text        string `json:"text"`
+					Thinking    string `json:"thinking"`
 					PartialJSON string `json:"partial_json"`
 				} `json:"delta"`
 			}
@@ -100,6 +101,8 @@ func (s *sseStream) Recv() (*llmprovider.ChatChunk, error) {
 			switch value.Delta.Type {
 			case "text_delta":
 				return s.chunk(&llmprovider.Message{Role: llmprovider.RoleAssistant, Content: value.Delta.Text}, "", nil), nil
+			case "thinking_delta":
+				return s.chunk(&llmprovider.Message{Role: llmprovider.RoleAssistant, Reasoning: value.Delta.Thinking}, "", nil), nil
 			case "input_json_delta":
 				if strings.TrimSpace(value.Delta.PartialJSON) != "" {
 					s.hasJSON[value.Index] = true

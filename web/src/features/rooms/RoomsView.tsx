@@ -51,13 +51,21 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   ApprovalRequestCard,
   LoomArtifactDrawer,
-  ToolInvocationCard,
+  TurnActivityDisclosure,
   UserQuestionCard,
 } from "@/features/tools/ToolCards";
+import { groupTimelineActivity, mergeToolInvocations } from "./timelineActivity";
 import { cn } from "@/lib/utils";
 
 interface StreamingBubble {
   messageId: string;
+  actorId: string;
+  actorName: string;
+  content: string;
+}
+
+interface ThinkingStream {
+  turnId: string;
   actorId: string;
   actorName: string;
   content: string;
@@ -75,6 +83,7 @@ export function RoomsView({ client }: { client: QClient }) {
   const [pendingQuestions, setPendingQuestions] = useState<UserQuestion[]>([]);
   const [openArtifactId, setOpenArtifactId] = useState<string | null>(null);
   const [streaming, setStreaming] = useState<StreamingBubble | null>(null);
+  const [liveThinking, setLiveThinking] = useState<ThinkingStream | null>(null);
   const [actorPhase, setActorPhase] = useState<string>("");
   const [composerText, setComposerText] = useState<string>("");
   const [showInspector, setShowInspector] = useState<boolean>(true);
@@ -129,6 +138,8 @@ export function RoomsView({ client }: { client: QClient }) {
         setDetail(null);
         setMessages([]);
         setMemories(null);
+        setToolInvocations([]);
+        setLiveThinking(null);
         setPendingApprovals([]);
         setPendingQuestions([]);
         return;
@@ -143,6 +154,9 @@ export function RoomsView({ client }: { client: QClient }) {
         setMessages(m.items);
         setNextBeforeSeq(m.next_before_seq);
         setMemories(mem);
+        setToolInvocations(
+          mergeToolInvocations(m.tool_invocations ?? [], d.active_tool_invocations ?? []),
+        );
         setPendingApprovals(d.pending_approvals ?? []);
         setPendingQuestions(d.pending_questions ?? []);
       } catch (err) {
@@ -158,6 +172,7 @@ export function RoomsView({ client }: { client: QClient }) {
 
   useEffect(() => {
     setStreaming(null);
+    setLiveThinking(null);
     setActorPhase("");
     setToolInvocations([]);
     setInspectedMemberId("");
@@ -179,12 +194,46 @@ export function RoomsView({ client }: { client: QClient }) {
             void client.listMessages(selectedRoomId, { limit: 100 }).then((res) => {
               setMessages(res.items);
               setNextBeforeSeq(res.next_before_seq);
+              if (res.tool_invocations) {
+                setToolInvocations((prev) =>
+                  mergeToolInvocations(prev, res.tool_invocations ?? []),
+                );
+              }
             });
             break;
           }
           case "actor.status": {
             const phase = typeof payload.phase === "string" ? payload.phase : "";
             setActorPhase(phase);
+            break;
+          }
+          case "thinking.delta": {
+            const turnId = String(payload.turn_id ?? "");
+            const actorId = String(payload.actor_id ?? "");
+            const actorName =
+              typeof payload.actor_name === "string" && payload.actor_name
+                ? payload.actor_name
+                : (detail?.members.find((m) => m.character_id === actorId)?.character_snapshot
+                    .name ?? "Character");
+            const delta = String(payload.delta ?? "");
+            const promotedFrom =
+              typeof payload.promoted_from_message_id === "string"
+                ? payload.promoted_from_message_id
+                : "";
+            if (promotedFrom) {
+              setStreaming((prev) => (prev?.messageId === promotedFrom ? null : prev));
+            }
+            if (!delta) break;
+            setLiveThinking((prev) => {
+              if (prev && prev.turnId === turnId && prev.actorId === actorId) {
+                const sep =
+                  promotedFrom && prev.content.trim() && !prev.content.endsWith("\n")
+                    ? "\n\n"
+                    : "";
+                return { ...prev, content: prev.content + sep + delta };
+              }
+              return { turnId, actorId, actorName, content: delta };
+            });
             break;
           }
           case "bubble.delta": {
@@ -211,6 +260,9 @@ export function RoomsView({ client }: { client: QClient }) {
             const msg = payload.message as MessageBubble | undefined;
             if (!msg?.id) break;
             setStreaming((prev) => (prev?.messageId === msg.id ? null : prev));
+            setLiveThinking((prev) =>
+              prev && prev.turnId === msg.turn_id && prev.actorId === msg.author_id ? null : prev,
+            );
             setMessages((prev) =>
               prev.some((existing) => existing.id === msg.id) ? prev : [...prev, msg],
             );
@@ -218,16 +270,19 @@ export function RoomsView({ client }: { client: QClient }) {
           }
           case "tool.started": {
             const invId = String(payload.invocation_id ?? "");
+            const actorId = String(payload.actor_id ?? "");
+            if (actorId) {
+              setStreaming((prev) => (prev?.actorId === actorId ? null : prev));
+            }
             if (!invId) break;
             setToolInvocations((prev) => {
               if (prev.some((i) => i.id === invId)) return prev;
-              return [
-                ...prev,
+              return mergeToolInvocations(prev, [
                 {
                   id: invId,
                   turn_id: String(payload.turn_id ?? ""),
                   room_id: selectedRoomId,
-                  actor_id: String(payload.actor_id ?? ""),
+                  actor_id: actorId,
                   call_id: "",
                   tool_name: String(payload.tool_name ?? "tool"),
                   tool_source: "builtin",
@@ -237,7 +292,7 @@ export function RoomsView({ client }: { client: QClient }) {
                   created_at: Date.now(),
                   updated_at: Date.now(),
                 },
-              ];
+              ]);
             });
             break;
           }
@@ -253,9 +308,29 @@ export function RoomsView({ client }: { client: QClient }) {
           case "tool.completed": {
             const inv = payload.invocation as ToolInvocation | undefined;
             if (!inv?.id) break;
-            setToolInvocations((prev) => {
-              const exists = prev.some((i) => i.id === inv.id);
-              return exists ? prev.map((i) => (i.id === inv.id ? inv : i)) : [...prev, inv];
+            setToolInvocations((prev) => mergeToolInvocations(prev, [inv]));
+            break;
+          }
+          case "room.compacted": {
+            const characterId = String(payload.character_id ?? "");
+            const seq = Number(payload.compacted_through_seq ?? 0);
+            if (!characterId || !seq) break;
+            setDetail((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                members: prev.members.map((m) =>
+                  m.character_id === characterId
+                    ? {
+                        ...m,
+                        actor_state: {
+                          ...m.actor_state,
+                          compacted_through_seq: seq,
+                        },
+                      }
+                    : m,
+                ),
+              };
             });
             break;
           }
@@ -293,11 +368,13 @@ export function RoomsView({ client }: { client: QClient }) {
           }
           case "turn.intercepted": {
             setStreaming(null);
+            setLiveThinking(null);
             break;
           }
           case "turn.completed":
           case "turn.failed": {
             setStreaming(null);
+            setLiveThinking(null);
             setActorPhase("");
             void loadRoomState(selectedRoomId);
             break;
@@ -310,7 +387,14 @@ export function RoomsView({ client }: { client: QClient }) {
 
   useEffect(() => {
     timelineEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, streaming?.content, pendingApprovals.length, pendingQuestions.length]);
+  }, [
+    messages.length,
+    streaming?.content,
+    liveThinking?.content,
+    toolInvocations.length,
+    pendingApprovals.length,
+    pendingQuestions.length,
+  ]);
 
   const openCreateDialog = async () => {
     setErrorMsg("");
@@ -461,6 +545,9 @@ export function RoomsView({ client }: { client: QClient }) {
         const seen = new Set(prev.map((m) => m.id));
         return [...older.items.filter((m) => !seen.has(m.id)), ...prev];
       });
+      if (older.tool_invocations?.length) {
+        setToolInvocations((prev) => mergeToolInvocations(prev, older.tool_invocations ?? []));
+      }
       setNextBeforeSeq(older.next_before_seq);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Failed to load older messages");
@@ -550,6 +637,16 @@ export function RoomsView({ client }: { client: QClient }) {
 
   const activeTurn = detail?.active_turn ?? false;
   const latestTurn = detail?.turns[0];
+  const activeTurnId =
+    activeTurn ||
+    latestTurn?.status === "running" ||
+    latestTurn?.status === "awaiting_approval" ||
+    latestTurn?.status === "awaiting_user"
+      ? latestTurn?.id
+      : undefined;
+  const timelineActivity = detail
+    ? groupTimelineActivity(messages, detail.members, toolInvocations, activeTurnId)
+    : { byMessageId: {}, liveInvocations: [] };
   const failedTurn =
     !activeTurn && latestTurn && (latestTurn.status === "failed" || latestTurn.status === "cancelled")
       ? latestTurn
@@ -708,6 +805,7 @@ export function RoomsView({ client }: { client: QClient }) {
 
                 {messages.map((msg) => {
                   const isUser = msg.role === "user";
+                  const msgActivity = timelineActivity.byMessageId[msg.id];
                   return (
                     <div
                       key={msg.id}
@@ -720,27 +818,43 @@ export function RoomsView({ client }: { client: QClient }) {
                       )}
                       <div
                         className={cn(
-                          "max-w-[78%] rounded-2xl px-4 py-2.5 text-sm shadow-xs",
-                          isUser
-                            ? "bg-primary text-primary-foreground rounded-br-sm"
-                            : "border border-border bg-card text-card-foreground rounded-bl-sm",
+                          "flex max-w-[78%] flex-col gap-1.5",
+                          isUser ? "items-end" : "items-start",
                         )}
                       >
+                        {!isUser &&
+                          msgActivity &&
+                          (msgActivity.thinking || msgActivity.invocations.length > 0) && (
+                            <TurnActivityDisclosure
+                              thinking={msgActivity.thinking}
+                              invocations={msgActivity.invocations}
+                              onOpenArtifact={(id) => setOpenArtifactId(id)}
+                            />
+                          )}
                         <div
                           className={cn(
-                            "mb-1 flex items-center gap-2 text-[11px]",
-                            isUser ? "text-primary-foreground/80" : "text-muted-foreground",
+                            "w-full rounded-2xl px-4 py-2.5 text-sm shadow-xs",
+                            isUser
+                              ? "bg-primary text-primary-foreground rounded-br-sm"
+                              : "border border-border bg-card text-card-foreground rounded-bl-sm",
                           )}
                         >
-                          <span className="font-medium">{msg.author_name}</span>
-                          <span>
-                            {new Date(msg.created_at).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
+                          <div
+                            className={cn(
+                              "mb-1 flex items-center gap-2 text-[11px]",
+                              isUser ? "text-primary-foreground/80" : "text-muted-foreground",
+                            )}
+                          >
+                            <span className="font-medium">{msg.author_name}</span>
+                            <span>
+                              {new Date(msg.created_at).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                          </div>
+                          <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
                         </div>
-                        <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
                       </div>
                       {isUser && (
                         <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
@@ -751,13 +865,22 @@ export function RoomsView({ client }: { client: QClient }) {
                   );
                 })}
 
-                {toolInvocations.map((inv) => (
-                  <ToolInvocationCard
-                    key={inv.id}
-                    invocation={inv}
-                    onOpenArtifact={(id) => setOpenArtifactId(id)}
-                  />
-                ))}
+                {(Boolean(liveThinking?.content.trim()) ||
+                  timelineActivity.liveInvocations.length > 0) && (
+                  <div className="flex w-full justify-start gap-2.5">
+                    <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
+                      <Bot className="h-4 w-4" />
+                    </div>
+                    <div className="max-w-[78%] flex-1">
+                      <TurnActivityDisclosure
+                        thinking={liveThinking?.content}
+                        invocations={timelineActivity.liveInvocations}
+                        isLive={activeTurn}
+                        onOpenArtifact={(id) => setOpenArtifactId(id)}
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {pendingApprovals.map((inv) => (
                   <ApprovalRequestCard

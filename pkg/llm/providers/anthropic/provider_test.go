@@ -159,3 +159,49 @@ func TestListModelsPreservesContextLength(t *testing.T) {
 		t.Fatalf("models = %#v", models)
 	}
 }
+
+func TestThinkingBlockAndStreamDeltaDecode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		if body["stream"] == true {
+			writer.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(writer, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_th\",\"model\":\"claude-sonnet-5\",\"usage\":{\"input_tokens\":5}}}\n\n")
+			_, _ = io.WriteString(writer, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"ponder \"}}\n\n")
+			_, _ = io.WriteString(writer, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n")
+			_, _ = io.WriteString(writer, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n")
+			_, _ = io.WriteString(writer, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			return
+		}
+		_, _ = io.WriteString(writer, `{"id":"msg_th_sync","type":"message","role":"assistant","model":"claude-sonnet-5","content":[{"type":"thinking","thinking":"deep thought"},{"type":"text","text":"answer"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3}}`)
+	}))
+	defer server.Close()
+
+	provider := New(WithBaseURL(server.URL), WithAPIKey("secret"))
+	req := llmprovider.ChatRequest{
+		Model:    "claude-sonnet-5",
+		Messages: []llmprovider.Message{{Role: llmprovider.RoleUser, Content: "hi"}},
+	}
+	resp, err := provider.Chat(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Choices[0].Message.Reasoning != "deep thought" || resp.Choices[0].Message.Content != "answer" {
+		t.Fatalf("unexpected sync response: %#v", resp.Choices[0].Message)
+	}
+
+	stream, err := provider.ChatStream(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+
+	ch1, err := stream.Recv()
+	if err != nil || ch1.Choices[0].Delta.Reasoning != "ponder " {
+		t.Fatalf("chunk 1 = %#v, err = %v", ch1, err)
+	}
+	ch2, err := stream.Recv()
+	if err != nil || ch2.Choices[0].Delta.Content != "done" {
+		t.Fatalf("chunk 2 = %#v, err = %v", ch2, err)
+	}
+}

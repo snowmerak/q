@@ -1,5 +1,15 @@
 import { useEffect, useState } from "react";
-import { Check, FileText, HelpCircle, ShieldAlert, Wrench, X } from "lucide-react";
+import {
+  Brain,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  HelpCircle,
+  ShieldAlert,
+  Wrench,
+  X,
+} from "lucide-react";
 import type { QClient } from "@/client/api";
 import type { ArtifactReadResponse, ToolInvocation, UserQuestion } from "@/client/types";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +24,107 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+
+export function TurnActivityDisclosure({
+  thinking,
+  invocations,
+  isLive = false,
+  onOpenArtifact,
+}: {
+  thinking?: string;
+  invocations: ToolInvocation[];
+  isLive?: boolean;
+  onOpenArtifact: (artifactId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const trimmedThinking = thinking?.trim() ?? "";
+  if (!trimmedThinking && invocations.length === 0) {
+    return null;
+  }
+
+  const runningTool = invocations.find((i) => i.status === "running");
+  const failedCount = invocations.filter(
+    (i) => i.status === "failed" || i.status === "rejected",
+  ).length;
+
+  return (
+    <div className="w-full rounded-xl border border-border/70 bg-muted/25 text-xs">
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        className="flex w-full cursor-pointer items-center justify-between gap-2 px-3 py-1.5 text-left text-muted-foreground hover:text-foreground"
+        aria-expanded={open}
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+          )}
+          {trimmedThinking && (
+            <span className="inline-flex items-center gap-1 font-medium">
+              <Brain className="h-3 w-3 text-primary/80" />
+              Thinking
+            </span>
+          )}
+          {invocations.length > 0 && (
+            <span className="inline-flex items-center gap-1 font-medium">
+              <Wrench className="h-3 w-3 text-primary/80" />
+              {invocations.length} tool {invocations.length === 1 ? "call" : "calls"}
+            </span>
+          )}
+          {runningTool ? (
+            <Badge variant="default" className="animate-pulse font-mono text-[10px]">
+              Running {runningTool.tool_name}
+            </Badge>
+          ) : (
+            isLive &&
+            trimmedThinking && (
+              <Badge variant="secondary" className="animate-pulse text-[10px]">
+                thinking…
+              </Badge>
+            )
+          )}
+          {failedCount > 0 && (
+            <Badge variant="destructive" className="text-[10px]">
+              {failedCount} failed
+            </Badge>
+          )}
+        </div>
+        <span className="shrink-0 text-[11px] text-muted-foreground/80">
+          {open ? "Hide" : "Details"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="space-y-2 border-t border-border/60 px-3 py-2.5">
+          {trimmedThinking && (
+            <div className="space-y-1">
+              <div className="text-[11px] font-medium text-muted-foreground">Thinking</div>
+              <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-border/60 bg-background/70 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+                {trimmedThinking}
+              </div>
+            </div>
+          )}
+          {invocations.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-[11px] font-medium text-muted-foreground">Tool calls</div>
+              <div className="max-h-80 space-y-1.5 overflow-y-auto pr-0.5">
+                {invocations.map((inv) => (
+                  <ToolInvocationCard
+                    key={inv.id}
+                    invocation={inv}
+                    onOpenArtifact={onOpenArtifact}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ToolInvocationCard({
   invocation,

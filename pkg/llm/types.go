@@ -34,6 +34,9 @@ type Message struct {
 	// of Content.
 	Content      string               `json:"-"`
 	ContentParts []MessageContentPart `json:"-"`
+	// Reasoning stores provider-supplied thinking/reasoning text on incoming
+	// responses/chunks. Chat wire serialization intentionally omits it.
+	Reasoning    string               `json:"-"`
 	Name         string               `json:"name,omitempty"`
 	ToolCallID   string               `json:"tool_call_id,omitempty"`
 	ToolCalls    []ToolCall           `json:"tool_calls,omitempty"`
@@ -71,18 +74,24 @@ func (m Message) MarshalJSON() ([]byte, error) {
 
 func (m *Message) UnmarshalJSON(data []byte) error {
 	type wireMessage struct {
-		Role       Role            `json:"role"`
-		Content    json.RawMessage `json:"content"`
-		Name       string          `json:"name,omitempty"`
-		ToolCallID string          `json:"tool_call_id,omitempty"`
-		ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+		Role             Role            `json:"role"`
+		Content          json.RawMessage `json:"content"`
+		ReasoningContent string          `json:"reasoning_content,omitempty"`
+		Reasoning        string          `json:"reasoning,omitempty"`
+		Name             string          `json:"name,omitempty"`
+		ToolCallID       string          `json:"tool_call_id,omitempty"`
+		ToolCalls        []ToolCall      `json:"tool_calls,omitempty"`
 	}
 	var wire wireMessage
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
+	reasoning := wire.ReasoningContent
+	if reasoning == "" {
+		reasoning = wire.Reasoning
+	}
 	m.Role, m.Phase, m.Name, m.ToolCallID, m.ToolCalls = wire.Role, "", wire.Name, wire.ToolCallID, wire.ToolCalls
-	m.Content, m.ContentParts = "", nil
+	m.Content, m.ContentParts, m.Reasoning = "", nil, reasoning
 	if len(wire.Content) == 0 || string(wire.Content) == "null" {
 		return nil
 	}

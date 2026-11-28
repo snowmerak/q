@@ -66,6 +66,7 @@ type turnCheckpoint struct {
 	PendingToolCallID   string                 `json:"pending_tool_call_id,omitempty"`
 	RemainingCalls      []llmprovider.ToolCall `json:"remaining_calls,omitempty"`
 	ToolRounds          int                    `json:"tool_rounds,omitempty"`
+	Thinking            string                 `json:"thinking,omitempty"`
 	GroupGauges         map[string]float64     `json:"group_gauges,omitempty"`
 	GroupWaited         []string               `json:"group_waited,omitempty"`
 	GroupSteps          int                    `json:"group_steps,omitempty"`
@@ -563,6 +564,11 @@ func (e *Engine) executeActorStep(
 			updatedMember, compacted, compErr := CompactIfNeeded(specCtx, e.rdb, snap.Gateway, room, *member, recalled, allMsgs, models, turn.ID)
 			if compErr == nil && compacted {
 				*member = updatedMember
+				e.events.Publish(roomID, "room.compacted", map[string]any{
+					"turn_id":               turn.ID,
+					"character_id":          updatedMember.CharacterID,
+					"compacted_through_seq": updatedMember.ActorState.CompactedThroughSeq,
+				})
 			}
 			if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, turn, room, members); interrupted == interceptStop {
 				return actorStepResult{outcome: actorStepStopped}
@@ -616,9 +622,27 @@ func (e *Engine) executeActorStep(
 
 		messageID := domain.NewID()
 		var buf strings.Builder
+		var roundThinking strings.Builder
+		thinkParser := newThinkStreamParser()
 		toolCallAcc := make(map[int]*llmprovider.ToolCall)
 		var streamErr error
 		var lastUsage *llmprovider.Usage
+		publishThinkingDelta := func(delta, promotedFrom string) {
+			if delta == "" {
+				return
+			}
+			payload := map[string]any{
+				"turn_id":    turn.ID,
+				"message_id": messageID,
+				"actor_id":   member.CharacterID,
+				"actor_name": member.CharacterSnapshot.Name,
+				"delta":      delta,
+			}
+			if promotedFrom != "" {
+				payload["promoted_from_message_id"] = promotedFrom
+			}
+			e.events.Publish(roomID, "thinking.delta", payload)
+		}
 		for {
 			chunk, recvErr := stream.Recv()
 			if errors.Is(recvErr, io.EOF) {
@@ -639,28 +663,40 @@ func (e *Engine) executeActorStep(
 				continue
 			}
 			ch := chunk.Choices[0]
-			delta := ""
+			rawText := ""
+			rawReasoning := ""
 			if ch.Delta != nil {
-				delta = ch.Delta.TextContent()
+				rawText = ch.Delta.TextContent()
+				rawReasoning = ch.Delta.Reasoning
 				if len(ch.Delta.ToolCalls) > 0 {
 					accumulateToolCallChunk(toolCallAcc, ch.Delta.ToolCalls)
 				}
 			} else {
-				delta = ch.Message.TextContent()
+				rawText = ch.Message.TextContent()
+				rawReasoning = ch.Message.Reasoning
 				if len(ch.Message.ToolCalls) > 0 {
 					accumulateToolCallChunk(toolCallAcc, ch.Message.ToolCalls)
 				}
 			}
-			if delta == "" {
-				continue
+			if ch.Phase == "commentary" && rawText != "" {
+				rawReasoning += rawText
+				rawText = ""
 			}
-			buf.WriteString(delta)
-			e.events.Publish(roomID, "bubble.delta", map[string]any{
-				"turn_id":    turn.ID,
-				"message_id": messageID,
-				"actor_id":   member.CharacterID,
-				"delta":      delta,
-			})
+			visDelta, inlineThinkDelta := thinkParser.Feed(rawText)
+			thinkDelta := rawReasoning + inlineThinkDelta
+			if thinkDelta != "" {
+				roundThinking.WriteString(thinkDelta)
+				publishThinkingDelta(thinkDelta, "")
+			}
+			if visDelta != "" {
+				buf.WriteString(visDelta)
+				e.events.Publish(roomID, "bubble.delta", map[string]any{
+					"turn_id":    turn.ID,
+					"message_id": messageID,
+					"actor_id":   member.CharacterID,
+					"delta":      visDelta,
+				})
+			}
 		}
 		_ = stream.Close()
 
@@ -675,11 +711,35 @@ func (e *Engine) executeActorStep(
 			return actorStepResult{outcome: actorStepFailed}
 		}
 
+		visTail, thinkTail := thinkParser.Flush()
+		if thinkTail != "" {
+			roundThinking.WriteString(thinkTail)
+			publishThinkingDelta(thinkTail, "")
+		}
+		if visTail != "" {
+			buf.WriteString(visTail)
+			e.events.Publish(roomID, "bubble.delta", map[string]any{
+				"turn_id":    turn.ID,
+				"message_id": messageID,
+				"actor_id":   member.CharacterID,
+				"delta":      visTail,
+			})
+		}
+		cp.Thinking = appendThinkingBlock(cp.Thinking, roundThinking.String())
+
 		toolCalls := finalizeToolCalls(toolCallAcc)
 		if len(toolCalls) > 0 && toolReg != nil {
-			if cp.ToolRounds >= maxToolRounds {
-				e.finishFailed(baseCtx, roomID, turn, "provider_error", "exceeded max tool rounds", false)
+			maxRounds := snap.Config.Tools.MaxToolRounds
+			if maxRounds <= 0 {
+				maxRounds = defaultMaxToolRounds
+			}
+			if cp.ToolRounds >= maxRounds {
+				e.finishFailed(baseCtx, roomID, turn, "provider_error", fmt.Sprintf("exceeded max tool rounds (%d)", maxRounds), false)
 				return actorStepResult{outcome: actorStepFailed}
+			}
+			if intermediate := strings.TrimSpace(buf.String()); intermediate != "" {
+				cp.Thinking = appendThinkingBlock(cp.Thinking, intermediate)
+				publishThinkingDelta(intermediate, messageID)
 			}
 			cp.ToolHistory = append(cp.ToolHistory, llmprovider.Message{
 				Role:      llmprovider.RoleAssistant,
@@ -725,9 +785,16 @@ func (e *Engine) executeActorStep(
 			}
 		}
 
-		metaJSON := ""
+		meta := make(map[string]any, 2)
 		if lastUsage != nil {
-			if b, err := json.Marshal(map[string]any{"usage": lastUsage}); err == nil {
+			meta["usage"] = lastUsage
+		}
+		if trimmedThink := strings.TrimSpace(cp.Thinking); trimmedThink != "" {
+			meta["thinking"] = trimmedThink
+		}
+		metaJSON := ""
+		if len(meta) > 0 {
+			if b, err := json.Marshal(meta); err == nil {
 				metaJSON = string(b)
 			}
 		}

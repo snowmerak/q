@@ -302,3 +302,27 @@ func TestLoomGCConfigDefaultsValidationAndReload(t *testing.T) {
 		t.Fatalf("expected driver change to require storage.blob restart, got %v", fields)
 	}
 }
+
+func TestMaxToolRoundsConfig(t *testing.T) {
+	cfg := Default()
+	if cfg.Tools.MaxToolRounds != 120 {
+		t.Fatalf("expected default MaxToolRounds=120, got %d", cfg.Tools.MaxToolRounds)
+	}
+	parsed, err := Parse([]byte(`{"version":2,"tools":{"approval_mode":"auto-detection","max_tool_rounds":250}}`))
+	if err != nil {
+		t.Fatalf("Parse valid max_tool_rounds: %v", err)
+	}
+	if parsed.Tools.MaxToolRounds != 250 {
+		t.Fatalf("expected parsed MaxToolRounds=250, got %d", parsed.Tools.MaxToolRounds)
+	}
+	if fields := DiffRestartRequired(cfg, parsed); len(fields) != 0 {
+		t.Fatalf("expected tools.max_tool_rounds hot-reloadable, got restart fields %v", fields)
+	}
+	for _, bad := range []int{-1, 1001} {
+		invalid := Default()
+		invalid.Tools.MaxToolRounds = bad
+		if err := invalid.Validate(); err == nil {
+			t.Fatalf("expected validation error for max_tool_rounds=%d", bad)
+		}
+	}
+}

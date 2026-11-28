@@ -230,9 +230,11 @@ export class QClient {
     if (params?.before_seq) qs.set("before_seq", String(params.before_seq));
     if (params?.limit) qs.set("limit", String(params.limit));
     const suffix = qs.toString() ? `?${qs.toString()}` : "";
-    return this.request<{ items: MessageBubble[]; next_before_seq?: number }>(
-      `/api/v1/rooms/${encodeURIComponent(roomId)}/messages${suffix}`,
-    );
+    return this.request<{
+      items: MessageBubble[];
+      next_before_seq?: number;
+      tool_invocations?: ToolInvocation[];
+    }>(`/api/v1/rooms/${encodeURIComponent(roomId)}/messages${suffix}`);
   }
   submitTurn(roomId: string, input: { request_id: string; text: string; location_tag?: string }) {
     return this.request<{ turn_id: string; status: TurnStatus; user_message_id: string }>(

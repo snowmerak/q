@@ -230,3 +230,47 @@ func TestModelNormalizesOpenRouterReasoningTokenBudget(t *testing.T) {
 		t.Fatalf("model = %#v", model)
 	}
 }
+
+func TestMessageDecodesReasoningWithoutSerializingOutgoing(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "reasoning_content",
+			raw:  `{"role":"assistant","content":"hi","reasoning_content":"step by step"}`,
+			want: "step by step",
+		},
+		{
+			name: "reasoning",
+			raw:  `{"role":"assistant","content":"","reasoning":"hidden trace"}`,
+			want: "hidden trace",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var msg Message
+			if err := json.Unmarshal([]byte(tc.raw), &msg); err != nil {
+				t.Fatal(err)
+			}
+			if msg.Reasoning != tc.want {
+				t.Fatalf("Reasoning = %q, want %q", msg.Reasoning, tc.want)
+			}
+			data, err := json.Marshal(msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire map[string]any
+			if err := json.Unmarshal(data, &wire); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := wire["reasoning_content"]; ok {
+				t.Fatalf("unexpected reasoning_content in wire output: %s", data)
+			}
+			if _, ok := wire["reasoning"]; ok {
+				t.Fatalf("unexpected reasoning in wire output: %s", data)
+			}
+		})
+	}
+}

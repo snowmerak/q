@@ -1,12 +1,14 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -39,12 +41,13 @@ type patchRoomInput struct {
 }
 
 type roomDetailResponse struct {
-	Room             domain.Room             `json:"room"`
-	Members          []domain.RoomMember     `json:"members"`
-	Turns            []domain.Turn           `json:"turns"`
-	PendingApprovals []domain.ToolInvocation `json:"pending_approvals"`
-	PendingQuestions []domain.UserQuestion   `json:"pending_questions"`
-	ActiveTurn       bool                    `json:"active_turn"`
+	Room                  domain.Room             `json:"room"`
+	Members               []domain.RoomMember     `json:"members"`
+	Turns                 []domain.Turn           `json:"turns"`
+	PendingApprovals      []domain.ToolInvocation `json:"pending_approvals"`
+	PendingQuestions      []domain.UserQuestion   `json:"pending_questions"`
+	ActiveToolInvocations []domain.ToolInvocation `json:"active_tool_invocations"`
+	ActiveTurn            bool                    `json:"active_turn"`
 }
 
 func (a *App) handleListRooms(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +319,63 @@ func (a *App) handleDeleteRoom(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type turnActorKey struct {
+	turnID  string
+	actorID string
+}
+
+func compactedSeqByActor(members []domain.RoomMember) (map[string]int64, int64) {
+	byActor := make(map[string]int64, len(members))
+	var minActive int64
+	hasActive := false
+	for _, m := range members {
+		byActor[m.CharacterID] = m.ActorState.CompactedThroughSeq
+		if !m.Active {
+			continue
+		}
+		if !hasActive || m.ActorState.CompactedThroughSeq < minActive {
+			minActive = m.ActorState.CompactedThroughSeq
+			hasActive = true
+		}
+	}
+	if !hasActive {
+		minActive = 0
+	}
+	return byActor, minActive
+}
+
+func isMessageCompacted(m domain.Message, byActor map[string]int64, minActive int64) bool {
+	if m.Role == domain.MessageRoleCharacter {
+		if seq, ok := byActor[m.AuthorID]; ok {
+			return seq > 0 && m.Seq <= seq
+		}
+	}
+	return minActive > 0 && m.Seq <= minActive
+}
+
+func stripThinkingFromMetadata(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return raw
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil || obj == nil {
+		return raw
+	}
+	if _, exists := obj["thinking"]; !exists {
+		return raw
+	}
+	delete(obj, "thinking")
+	if len(obj) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return string(b)
+}
+
 func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	roomID := r.PathValue("id")
 	if _, err := a.rdb.Rooms().Get(r.Context(), roomID); err != nil {
@@ -350,6 +410,11 @@ func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		writeDomainError(w, err)
 		return
 	}
+	members, err := a.rdb.Rooms().ListMembers(r.Context(), roomID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
 	var nextBeforeSeq *int64
 	if len(msgs) > limit {
 		msgs = msgs[len(msgs)-limit:]
@@ -359,7 +424,59 @@ func (a *App) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	if msgs == nil {
 		msgs = []domain.Message{}
 	}
-	resp := map[string]any{"items": msgs}
+
+	byActor, minActive := compactedSeqByActor(members)
+	compactedTurnActors := make(map[turnActorKey]bool)
+	uncompactedTurnActors := make(map[turnActorKey]bool)
+	seenTurn := make(map[string]struct{})
+	uncompactedTurns := make([]string, 0)
+
+	for i := range msgs {
+		msg := msgs[i]
+		compacted := isMessageCompacted(msg, byActor, minActive)
+		if compacted {
+			msgs[i].MetadataJSON = stripThinkingFromMetadata(msg.MetadataJSON)
+			if msg.Role == domain.MessageRoleCharacter && msg.TurnID != "" {
+				compactedTurnActors[turnActorKey{turnID: msg.TurnID, actorID: msg.AuthorID}] = true
+			}
+			continue
+		}
+		if msg.Role == domain.MessageRoleCharacter && msg.TurnID != "" {
+			uncompactedTurnActors[turnActorKey{turnID: msg.TurnID, actorID: msg.AuthorID}] = true
+		}
+		if msg.TurnID != "" {
+			if _, ok := seenTurn[msg.TurnID]; !ok {
+				seenTurn[msg.TurnID] = struct{}{}
+				uncompactedTurns = append(uncompactedTurns, msg.TurnID)
+			}
+		}
+	}
+
+	toolInvs := make([]domain.ToolInvocation, 0)
+	for _, turnID := range uncompactedTurns {
+		invs, err := a.rdb.Tools().ListInvocationsByTurn(r.Context(), turnID)
+		if err != nil {
+			continue
+		}
+		for _, inv := range invs {
+			key := turnActorKey{turnID: inv.TurnID, actorID: inv.ActorID}
+			if compactedTurnActors[key] && !uncompactedTurnActors[key] {
+				continue
+			}
+			toolInvs = append(toolInvs, inv)
+		}
+	}
+	slices.SortFunc(toolInvs, func(left, right domain.ToolInvocation) int {
+		if c := cmp.Compare(left.CreatedAt, right.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(left.ID, right.ID)
+	})
+
+	resp := map[string]any{
+		"items":            msgs,
+		"tool_invocations": toolInvs,
+	}
 	if nextBeforeSeq != nil {
 		resp["next_before_seq"] = *nextBeforeSeq
 	}
@@ -523,11 +640,13 @@ func (a *App) loadRoomDetail(ctx context.Context, roomID string) (roomDetailResp
 
 	pendingApprovals := make([]domain.ToolInvocation, 0)
 	pendingQuestions := make([]domain.UserQuestion, 0)
+	activeToolInvocations := make([]domain.ToolInvocation, 0)
 	for _, t := range turns {
 		if t.Status != domain.TurnStatusAwaitingApproval && t.Status != domain.TurnStatusAwaitingUser && t.Status != domain.TurnStatusRunning {
 			continue
 		}
 		invs, _ := a.rdb.Tools().ListInvocationsByTurn(ctx, t.ID)
+		activeToolInvocations = append(activeToolInvocations, invs...)
 		for _, inv := range invs {
 			if inv.Status == domain.ToolStatusPendingApproval {
 				pendingApprovals = append(pendingApprovals, inv)
@@ -540,14 +659,21 @@ func (a *App) loadRoomDetail(ctx context.Context, roomID string) (roomDetailResp
 			}
 		}
 	}
+	slices.SortFunc(activeToolInvocations, func(left, right domain.ToolInvocation) int {
+		if c := cmp.Compare(left.CreatedAt, right.CreatedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(left.ID, right.ID)
+	})
 
 	return roomDetailResponse{
-		Room:             rm,
-		Members:          members,
-		Turns:            turns,
-		PendingApprovals: pendingApprovals,
-		PendingQuestions: pendingQuestions,
-		ActiveTurn:       a.engine.Hub().HasActiveTurn(roomID),
+		Room:                  rm,
+		Members:               members,
+		Turns:                 turns,
+		PendingApprovals:      pendingApprovals,
+		PendingQuestions:      pendingQuestions,
+		ActiveToolInvocations: activeToolInvocations,
+		ActiveTurn:            a.engine.Hub().HasActiveTurn(roomID),
 	}, nil
 }
 

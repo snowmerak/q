@@ -488,11 +488,12 @@ type messageResponse struct {
 }
 
 type responseBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text"`
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text"`
+	Thinking string          `json:"thinking"`
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Input    json.RawMessage `json:"input"`
 }
 
 type usageResponse struct {
@@ -508,6 +509,8 @@ func (m messageResponse) toChatResponse() (*llmprovider.ChatResponse, error) {
 		switch block.Type {
 		case "text":
 			message.Content += block.Text
+		case "thinking":
+			message.Reasoning += block.Thinking
 		case "tool_use":
 			arguments := string(block.Input)
 			if arguments == "" || arguments == "null" {

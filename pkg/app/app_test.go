@@ -776,3 +776,221 @@ func TestRoomWorkDirCreatePatchAndClear(t *testing.T) {
 		t.Fatalf("clear room work_dir = %d %+v", code, cleared)
 	}
 }
+
+func TestMessagesToolInvocationsAndCompactionFiltering(t *testing.T) {
+	workDir := t.TempDir()
+	if err := writeTestFile(filepath.Join(workDir, "note.txt"), []byte("secret note")); err != nil {
+		t.Fatal(err)
+	}
+
+	var streamRound atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"m1","context_length":16384}]}`)
+		case "/v1/chat/completions":
+			body, _ := io.ReadAll(r.Body)
+			var req struct {
+				Stream   bool `json:"stream"`
+				Messages []struct {
+					Role    string `json:"role"`
+					Content string `json:"content"`
+				} `json:"messages"`
+			}
+			_ = json.Unmarshal(body, &req)
+			if !req.Stream {
+				w.Header().Set("Content-Type", "application/json")
+				if len(req.Messages) > 0 && strings.Contains(req.Messages[0].Content, "running memory summary") {
+					_, _ = io.WriteString(w, `{"id":"sum1","object":"chat.completion","model":"m1","choices":[{"index":0,"message":{"role":"assistant","content":"Compacted earlier tool turn."},"finish_reason":"stop"}]}`)
+					return
+				}
+				_, _ = io.WriteString(w, `{"id":"r1","object":"chat.completion","model":"m1","choices":[{"index":0,"message":{"role":"assistant","content":"[]"},"finish_reason":"stop"}]}`)
+				return
+			}
+
+			w.Header().Set("Content-Type", "text/event-stream")
+			hasToolResult := false
+			for _, m := range req.Messages {
+				if m.Role == "tool" && strings.Contains(m.Content, "secret note") {
+					hasToolResult = true
+					break
+				}
+			}
+			switch {
+			case streamRound.Add(1) == 1:
+				_, _ = io.WriteString(w, `data: {"id":"c1","object":"chat.completion.chunk","model":"m1","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"first inspect note","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"note.txt\"}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")
+			case hasToolResult && !strings.Contains(string(body), "Compaction trigger"):
+				_, _ = io.WriteString(w, `data: {"id":"c2","object":"chat.completion.chunk","model":"m1","choices":[{"index":0,"delta":{"role":"assistant","content":"<think>verified note content</think>Read note: secret note."},"finish_reason":"stop"}]}`+"\n\n")
+			default:
+				_, _ = io.WriteString(w, `data: {"id":"c3","object":"chat.completion.chunk","model":"m1","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"turn 2 thought","content":"Compaction turn complete."},"finish_reason":"stop"}]}`+"\n\n")
+			}
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.LLM.Providers = []gateway.ProviderConfig{{
+		ID:      "mock",
+		Type:    "openai-compatible",
+		Enabled: true,
+		BaseURL: upstream.URL + "/v1",
+	}}
+	cfg.LLM.Roles.ChatModel = "mock/m1"
+	cfg.LLM.Roles.MemoryModel = "mock/m1"
+	if err := config.Save(filepath.Join(dataDir, config.FileName), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := t.Context()
+	a, err := app.Open(ctx, app.Options{DataDir: dataDir, ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close(context.Background()) }()
+
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+
+	doJSON := func(method, path string, payload any, out any) int {
+		var body io.Reader
+		if payload != nil {
+			b, _ := json.Marshal(payload)
+			body = bytes.NewReader(b)
+		}
+		req, _ := http.NewRequestWithContext(ctx, method, srv.URL+path, body)
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		if out != nil && len(raw) > 0 {
+			if err := json.Unmarshal(raw, out); err != nil {
+				t.Fatalf("decode %s: %v body=%s", path, err, string(raw))
+			}
+		}
+		return resp.StatusCode
+	}
+
+	var persona domain.Persona
+	if code := doJSON(http.MethodPost, "/api/v1/personas", map[string]any{"name": "Alex", "is_default": true}, &persona); code != http.StatusCreated {
+		t.Fatalf("create persona = %d", code)
+	}
+	var char domain.Character
+	if code := doJSON(http.MethodPost, "/api/v1/characters", map[string]any{
+		"name":        "Hana",
+		"model_prefs": map[string]any{"context_window_override": 400},
+	}, &char); code != http.StatusCreated {
+		t.Fatalf("create character = %d", code)
+	}
+	var roomDetail struct {
+		Room domain.Room `json:"room"`
+	}
+	if code := doJSON(http.MethodPost, "/api/v1/rooms", map[string]any{
+		"title":                  "Tool Room",
+		"mode":                   "direct",
+		"persona_id":             persona.ID,
+		"character_ids":          []string{char.ID},
+		"approval_mode_override": "bypass",
+		"work_dir":               workDir,
+	}, &roomDetail); code != http.StatusCreated {
+		t.Fatalf("create room = %d", code)
+	}
+
+	sseCtx, cancelSSE := context.WithCancel(ctx)
+	defer cancelSSE()
+	sseReq, _ := http.NewRequestWithContext(sseCtx, http.MethodGet, srv.URL+"/api/v1/rooms/"+roomDetail.Room.ID+"/stream", nil)
+	sseResp, err := http.DefaultClient.Do(sseReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sseResp.Body.Close()
+
+	eventsCh := make(chan string, 64)
+	go func() {
+		scanner := bufio.NewScanner(sseResp.Body)
+		for scanner.Scan() {
+			if line := scanner.Text(); strings.HasPrefix(line, "event: ") {
+				eventsCh <- strings.TrimPrefix(line, "event: ")
+			}
+		}
+	}()
+	waitTurnCompleted := func() {
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case ev := <-eventsCh:
+				if ev == "turn.completed" {
+					return
+				}
+			case <-deadline:
+				t.Fatal("timed out waiting for turn.completed")
+			}
+		}
+	}
+
+	// Turn 1: tool call + thinking before compaction
+	if code := doJSON(http.MethodPost, "/api/v1/rooms/"+roomDetail.Room.ID+"/turns", map[string]any{
+		"request_id": "t1",
+		"text":       "Read note.txt",
+	}, nil); code != http.StatusAccepted {
+		t.Fatalf("turn 1 = %d", code)
+	}
+	waitTurnCompleted()
+
+	var beforeCompact struct {
+		Items           []domain.Message        `json:"items"`
+		ToolInvocations []domain.ToolInvocation `json:"tool_invocations"`
+	}
+	if code := doJSON(http.MethodGet, "/api/v1/rooms/"+roomDetail.Room.ID+"/messages?limit=20", nil, &beforeCompact); code != http.StatusOK {
+		t.Fatalf("messages before compaction = %d", code)
+	}
+	if len(beforeCompact.Items) != 2 || len(beforeCompact.ToolInvocations) != 1 || beforeCompact.ToolInvocations[0].ToolName != "read_file" {
+		t.Fatalf("expected 2 messages and 1 read_file tool invocation before compaction, got items=%d invs=%+v", len(beforeCompact.Items), beforeCompact.ToolInvocations)
+	}
+	var meta1 map[string]any
+	if err := json.Unmarshal([]byte(beforeCompact.Items[1].MetadataJSON), &meta1); err != nil || meta1["thinking"] != "first inspect note\n\nverified note content" {
+		t.Fatalf("expected thinking before compaction, got %q (err=%v)", beforeCompact.Items[1].MetadataJSON, err)
+	}
+
+	// Turn 2: long prompt triggers compaction covering Turn 1 (seq 1..2).
+	if code := doJSON(http.MethodPost, "/api/v1/rooms/"+roomDetail.Room.ID+"/turns", map[string]any{
+		"request_id": "t2",
+		"text":       strings.Repeat("Compaction trigger text block ", 35),
+	}, nil); code != http.StatusAccepted {
+		t.Fatalf("turn 2 = %d", code)
+	}
+	waitTurnCompleted()
+
+	var afterCompact struct {
+		Items           []domain.Message        `json:"items"`
+		ToolInvocations []domain.ToolInvocation `json:"tool_invocations"`
+	}
+	if code := doJSON(http.MethodGet, "/api/v1/rooms/"+roomDetail.Room.ID+"/messages?limit=20", nil, &afterCompact); code != http.StatusOK {
+		t.Fatalf("messages after compaction = %d", code)
+	}
+	if len(afterCompact.ToolInvocations) != 0 {
+		t.Fatalf("expected compacted turn 1 tool invocations omitted, got %+v", afterCompact.ToolInvocations)
+	}
+	if len(afterCompact.Items) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(afterCompact.Items))
+	}
+	if afterCompact.Items[1].MetadataJSON != "" {
+		var stripped map[string]any
+		_ = json.Unmarshal([]byte(afterCompact.Items[1].MetadataJSON), &stripped)
+		if _, hasThinking := stripped["thinking"]; hasThinking {
+			t.Fatalf("expected thinking stripped from compacted message metadata, got %q", afterCompact.Items[1].MetadataJSON)
+		}
+	}
+	var meta2 map[string]any
+	if err := json.Unmarshal([]byte(afterCompact.Items[3].MetadataJSON), &meta2); err != nil || meta2["thinking"] != "turn 2 thought" {
+		t.Fatalf("expected uncompacted turn 2 thinking preserved, got %q", afterCompact.Items[3].MetadataJSON)
+	}
+}

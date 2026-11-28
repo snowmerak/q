@@ -295,7 +295,7 @@ export function ToolsAndMCPSection({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-3">
           <div className="space-y-1.5">
             <Label htmlFor="approval-mode">Tool Approval Mode</Label>
             <select
@@ -317,6 +317,18 @@ export function ToolsAndMCPSection({
               min={0}
               value={tools.command_timeout_ms ?? ""}
               onChange={(e) => updateTools({ command_timeout_ms: parseIntOpt(e.target.value) })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="tools-max-rounds">Max Tool Rounds</Label>
+            <Input
+              id="tools-max-rounds"
+              type="number"
+              min={1}
+              max={1000}
+              placeholder="120"
+              value={tools.max_tool_rounds ?? ""}
+              onChange={(e) => updateTools({ max_tool_rounds: parseIntOpt(e.target.value) })}
             />
           </div>
         </div>
