@@ -1,8 +1,8 @@
 # q v2
 
-> **상태:** `v2` 브랜치 초기 문서 선행 단계 (구현 전). 기존 v1 코드와 문서는 `main` 브랜치 및 `v0.5.0` 태그에 보존되어 있습니다.
+> **상태:** `v2` 브랜치 1차 제품 범위 확정 / 문서 선행 단계 (구현 전). 기존 v1 코드와 문서는 `main` 브랜치 및 `v0.5.0` 태그에 보존되어 있습니다.
 
-**q v2**는 기존의 코딩 에이전트 및 워크스페이스 제어면(v1)을 리셋하고, **캐릭터챗 감각의 자연스러운 대화 상호작용을 우선하면서 여러 작업을 수행할 수 있는 봇**으로 재설계하는 프로젝트입니다.
+**q v2**는 기존의 코딩 에이전트 및 워크스페이스 제어면(v1)을 리셋하고, **캐릭터챗 감각의 자연스러운 대화 상호작용을 우선하면서 여러 작업을 수행할 수 있는 봇**으로 재설계하는 프로젝트입니다. 기존 Evernight 및 Q v1 데이터는 이관하지 않고 **클린 스타트(신규 시작)**를 전제로 합니다.
 
 ## 핵심 방향
 
@@ -11,16 +11,15 @@
 - **상호작용 중심 (Evernight 선별 이식):**
   - 1:1 캐릭터 봇 대화와 다수 캐릭터가 참여하는 멀티캐릭터 룸(Room)을 모두 1차 범위로 지원하며, 산문(소설) 재집필 없이 **채팅 버블 중심의 직접 대화**로 진행합니다.
   - 캐릭터 성격·페르소나·장기기억·가치관·상태/관계 유지, `observedBy` 기반 인지 격리, 실시간 끼어들기/중단, **Decisions**(`github.com/snowmerak/decisions`) 기반 이산 판단, 체크포인트 복구 개념을 계승합니다.
-- **작업 수행, 브라우저 제어 & 승인 게이트:**
-  - 1차 작업 도구로 **기본 MCP 연동**과 **브라우저 제어**를 포함하며, 대용량 출력은 아티팩트(Loom 패턴)로 분리합니다.
-  - 브라우저 제어는 Q v1과 동일하게 설정(`browser_control`)에서 `cdp-q-driver` 또는 `ego-browser` 중 선호 드라이버와 인자를 선택합니다.
+- **작업 수행, 내장 도구 & 승인 게이트 (Q v1 · Decisions 결합):**
+  - 1차 내장 도구 범위: (1) 파일·디렉터리(`read_file`, `edit_file`, `write_file`, `list_directory`, `create_directory`, `move_path`, `copy_path`, `remove_path`), (2) 셸/커맨드(`run_command`, `cmd_status`, `wait`), (3) 아카이브·기억/지식 조회(`search_archive`, `get_archive_record`), (4) Loom 아티팩트(`loom_inspect`, `loom_read`, `loom_eval`), (5) Agent Skills(`search_skills`, `get_skill`), (6) 외부 MCP 연동 & `browser_control`(`cdp-q-driver` / `ego-browser`), (7) `ask_to_user` 및 서브에이전트/작업 위임(`task_start`, `task_complete`, `delegate_*` 등; IDE·LSP·Git worktree/PR·티켓 도구 제외).
   - 도구 실행 승인 게이트는 **`bypass`**(무조건 실행), **`auto-detection`**(Decisions 판정 후 필요한 경우만 승인 요청), **`request`**(전부 승인 요청) 3가지 모드를 제공합니다.
 - **조합 가능한 저장소 & 단일 데이터 디렉터리:**
   - RDB(`PostgreSQL` / `MySQL` / `SQLite`)와 검색 엔진(`OpenSearch` / `Bleve + HNSW`)을 환경에 맞게 자유롭게 조합해 구성합니다.
   - 로컬 설정·DB·인덱스·아티팩트는 단일 전역 데이터 디렉터리(예: `~/.q/` 또는 OS 앱 데이터 경로)에 저장하며, `--data-dir` 플래그로 위치를 오버라이드할 수 있습니다.
-- **클라이언트 & UI:** **React + TypeScript + shadcn/ui** 기반의 라이트/다크 모드 UI를 제공하며, `web/dist`는 Git에 포함하지 않고 빌드/릴리스 시 생성해 Go 바이너리에 임베드합니다. 데스크톱은 **Wails v3** 앱을 1차 대상으로 하고 모바일은 추후 대응을 검토합니다.
+- **클라이언트 & UI:** **React + TypeScript + shadcn/ui** 기반의 라이트/다크 모드 웹 UI와 **Wails v3** 데스크톱 앱에 집중합니다(모바일 지원 제외). `web/dist`는 Git에 포함하지 않고 빌드/릴리스 시 생성해 Go 바이너리에 임베드합니다.
 
 ## 문서
 
-- [제품 요구사항 정의서 (PRD)](./docs/prd.md) — 제품 목표, 1차 범위(In-Scope / Out-of-Scope), `REQ-*` 요구사항 및 수용 기준, 미결 질문
+- [제품 요구사항 정의서 (PRD)](./docs/prd.md) — 제품 목표, 확정 1차 범위(In-Scope / Out-of-Scope), `REQ-*` 요구사항 및 수용 기준
 - [프로젝트 청사진 (Blueprint)](./docs/blueprint.md) — 자산 재사용 맵, 공유 코어 및 단일 인스턴스 토폴로지, `pkg/` 공개 패키지 경계, 조합 가능한 저장소 구조, 실행 흐름, 확정 프로젝트 구성, 마일스톤 및 후속 ADR 목록
