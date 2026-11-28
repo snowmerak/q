@@ -26,3 +26,9 @@ web/playwright-report/
 desktop/build/bin/
 desktop/*.exe
 desktop/desktop
+
+# Codex worker handoff logs
+docs/handoff/.codex_last.log
+
+.vscode
+studio/frontend/node_modules
