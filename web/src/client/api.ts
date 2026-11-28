@@ -188,6 +188,7 @@ export class QClient {
     persona_id: string;
     character_ids: string[];
     approval_mode_override?: string;
+    max_turns_per_input?: number;
   }) {
     return this.request<RoomDetail>("/api/v1/rooms", {
       method: "POST",

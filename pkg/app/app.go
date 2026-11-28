@@ -27,9 +27,13 @@ import (
 	"github.com/snowmerak/q/v2/pkg/runtime"
 	"github.com/snowmerak/q/v2/pkg/storage"
 	"github.com/snowmerak/q/v2/pkg/storage/blob/localfs"
+	"github.com/snowmerak/q/v2/pkg/storage/blob/s3"
 	"github.com/snowmerak/q/v2/pkg/storage/outbox"
+	"github.com/snowmerak/q/v2/pkg/storage/rdb/mysql"
+	"github.com/snowmerak/q/v2/pkg/storage/rdb/postgres"
 	"github.com/snowmerak/q/v2/pkg/storage/rdb/sqlite"
 	"github.com/snowmerak/q/v2/pkg/storage/search/blevehnsw"
+	"github.com/snowmerak/q/v2/pkg/storage/search/opensearch"
 	"github.com/snowmerak/q/v2/pkg/task"
 )
 
@@ -188,8 +192,36 @@ func (a *App) openStorage(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("open sqlite rdb: %w", err)
 		}
 		a.rdb = rdb
+	case "postgres":
+		dsnEnv := strings.TrimSpace(cfg.Storage.RDB.DSNEnv)
+		dsn := ""
+		if dsnEnv != "" {
+			dsn = strings.TrimSpace(os.Getenv(dsnEnv))
+		}
+		if dsn == "" {
+			return fmt.Errorf("postgres rdb requires non-empty env var %q", dsnEnv)
+		}
+		rdb, err := postgres.Open(ctx, dsn)
+		if err != nil {
+			return fmt.Errorf("open postgres rdb: %w", err)
+		}
+		a.rdb = rdb
+	case "mysql":
+		dsnEnv := strings.TrimSpace(cfg.Storage.RDB.DSNEnv)
+		dsn := ""
+		if dsnEnv != "" {
+			dsn = strings.TrimSpace(os.Getenv(dsnEnv))
+		}
+		if dsn == "" {
+			return fmt.Errorf("mysql rdb requires non-empty env var %q", dsnEnv)
+		}
+		rdb, err := mysql.Open(ctx, dsn)
+		if err != nil {
+			return fmt.Errorf("open mysql rdb: %w", err)
+		}
+		a.rdb = rdb
 	default:
-		return fmt.Errorf("rdb driver %q is not yet implemented in this milestone", cfg.Storage.RDB.Driver)
+		return fmt.Errorf("unsupported rdb driver %q", cfg.Storage.RDB.Driver)
 	}
 
 	switch cfg.Storage.Search.Driver {
@@ -199,8 +231,29 @@ func (a *App) openStorage(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("open blevehnsw search: %w", err)
 		}
 		a.search = idx
+	case "opensearch":
+		osCfg := cfg.Storage.Search.OpenSearch
+		var password, bearer string
+		if env := strings.TrimSpace(osCfg.PasswordEnv); env != "" {
+			password = os.Getenv(env)
+		}
+		if env := strings.TrimSpace(osCfg.BearerTokenEnv); env != "" {
+			bearer = os.Getenv(env)
+		}
+		idx, err := opensearch.Open(ctx, opensearch.Config{
+			Endpoint:    osCfg.Endpoint,
+			IndexPrefix: osCfg.IndexPrefix,
+			Username:    osCfg.Username,
+			Password:    password,
+			BearerToken: bearer,
+			Timeout:     time.Duration(osCfg.TimeoutMS) * time.Millisecond,
+		})
+		if err != nil {
+			return fmt.Errorf("open opensearch search: %w", err)
+		}
+		a.search = idx
 	default:
-		return fmt.Errorf("search driver %q is not yet implemented in this milestone", cfg.Storage.Search.Driver)
+		return fmt.Errorf("unsupported search driver %q", cfg.Storage.Search.Driver)
 	}
 
 	switch cfg.Storage.Blob.Driver {
@@ -210,8 +263,29 @@ func (a *App) openStorage(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("open localfs blob: %w", err)
 		}
 		a.blob = bs
+	case "s3":
+		s3Cfg := cfg.Storage.Blob.S3
+		var accessKey, secretKey string
+		if env := strings.TrimSpace(s3Cfg.AccessKeyEnv); env != "" {
+			accessKey = os.Getenv(env)
+		}
+		if env := strings.TrimSpace(s3Cfg.SecretKeyEnv); env != "" {
+			secretKey = os.Getenv(env)
+		}
+		bs, err := s3.Open(ctx, s3.Config{
+			Endpoint:     s3Cfg.Endpoint,
+			Bucket:       s3Cfg.Bucket,
+			Region:       s3Cfg.Region,
+			AccessKey:    accessKey,
+			SecretKey:    secretKey,
+			UsePathStyle: strings.TrimSpace(s3Cfg.Endpoint) != "",
+		})
+		if err != nil {
+			return fmt.Errorf("open s3 blob: %w", err)
+		}
+		a.blob = bs
 	default:
-		return fmt.Errorf("blob driver %q is not yet implemented in this milestone", cfg.Storage.Blob.Driver)
+		return fmt.Errorf("unsupported blob driver %q", cfg.Storage.Blob.Driver)
 	}
 	return nil
 }

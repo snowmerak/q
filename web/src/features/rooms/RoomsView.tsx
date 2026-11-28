@@ -21,6 +21,7 @@ import type {
   Persona,
   RoomDetail,
   RoomMemoriesResponse,
+  RoomMode,
   RoomSummary,
   ToolInvocation,
   UserQuestion,
@@ -77,8 +78,12 @@ export function RoomsView({ client }: { client: QClient }) {
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
   const [newTitle, setNewTitle] = useState<string>("");
+  const [newMode, setNewMode] = useState<RoomMode>("direct");
   const [newPersonaId, setNewPersonaId] = useState<string>("");
   const [newCharacterId, setNewCharacterId] = useState<string>("");
+  const [newCharacterIds, setNewCharacterIds] = useState<string[]>([]);
+  const [newMaxTurns, setNewMaxTurns] = useState<number>(3);
+  const [inspectedMemberId, setInspectedMemberId] = useState<string>("");
 
   const timelineEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -132,6 +137,7 @@ export function RoomsView({ client }: { client: QClient }) {
     setStreaming(null);
     setActorPhase("");
     setToolInvocations([]);
+    setInspectedMemberId("");
     void loadRoomState(selectedRoomId);
   }, [selectedRoomId, loadRoomState]);
 
@@ -290,8 +296,11 @@ export function RoomsView({ client }: { client: QClient }) {
       setPersonas(pRes.items);
       setCharacters(cRes.items);
       const defPersona = pRes.items.find((p) => p.is_default) ?? pRes.items[0];
+      setNewMode("direct");
       setNewPersonaId(defPersona?.id ?? "");
       setNewCharacterId(cRes.items[0]?.id ?? "");
+      setNewCharacterIds(cRes.items.slice(0, 2).map((c) => c.id));
+      setNewMaxTurns(3);
       setNewTitle(cRes.items[0] ? `${cRes.items[0].name}` : "New Chat");
       setCreateOpen(true);
     } catch (err) {
@@ -299,17 +308,25 @@ export function RoomsView({ client }: { client: QClient }) {
     }
   };
 
+  const toggleGroupCharacter = (charId: string) => {
+    setNewCharacterIds((prev) =>
+      prev.includes(charId) ? prev.filter((id) => id !== charId) : [...prev, charId],
+    );
+  };
+
   const handleCreateRoom = async () => {
-    if (!newTitle.trim() || !newPersonaId || !newCharacterId) {
-      setErrorMsg("Room title, persona, and character are required.");
+    const selectedIds = newMode === "group" ? newCharacterIds : newCharacterId ? [newCharacterId] : [];
+    if (!newTitle.trim() || !newPersonaId || selectedIds.length === 0) {
+      setErrorMsg("Room title, persona, and at least one character are required.");
       return;
     }
     try {
       const created = await client.createRoom({
         title: newTitle.trim(),
-        mode: "direct",
+        mode: newMode,
         persona_id: newPersonaId,
-        character_ids: [newCharacterId],
+        character_ids: selectedIds,
+        max_turns_per_input: newMode === "group" ? Math.max(1, Math.min(20, newMaxTurns || 3)) : undefined,
       });
       setCreateOpen(false);
       await loadRooms();
@@ -435,7 +452,11 @@ export function RoomsView({ client }: { client: QClient }) {
     !activeTurn && latestTurn && (latestTurn.status === "failed" || latestTurn.status === "cancelled")
       ? latestTurn
       : null;
-  const primaryMember = detail?.members.find((m) => m.active) ?? detail?.members[0];
+  const activeMembers = detail?.members.filter((m) => m.active) ?? [];
+  const primaryMember =
+    detail?.members.find((m) => m.character_id === inspectedMemberId) ??
+    activeMembers[0] ??
+    detail?.members[0];
 
   return (
     <div className="flex h-full min-h-0 flex-1 overflow-hidden">
@@ -451,13 +472,19 @@ export function RoomsView({ client }: { client: QClient }) {
         <ScrollArea className="flex-1 p-2">
           {rooms.length === 0 ? (
             <div className="px-3 py-8 text-center text-xs text-muted-foreground">
-              No rooms yet. Create a character &amp; persona first, then start a 1:1 room.
+              No rooms yet. Create a character &amp; persona first, then start a room.
             </div>
           ) : (
             <div className="space-y-1">
               {rooms.map((item) => {
                 const selected = item.room.id === selectedRoomId;
-                const charName = item.members[0]?.character_snapshot.name ?? "No character";
+                const activeNames = item.members
+                  .filter((m) => m.active)
+                  .map((m) => m.character_snapshot.name);
+                const charName =
+                  activeNames.length > 0
+                    ? activeNames.join(", ")
+                    : (item.members[0]?.character_snapshot.name ?? "No character");
                 return (
                   <div
                     key={item.room.id}
@@ -504,15 +531,19 @@ export function RoomsView({ client }: { client: QClient }) {
               Characters converse through chat bubbles, invoke tools behind an approval gate,
               remember observed experiences, and evolve their affect and values across turns.
             </p>
-            <Button onClick={() => void openCreateDialog()}>Create 1:1 Room</Button>
+            <Button onClick={() => void openCreateDialog()}>Create Room</Button>
           </div>
         ) : (
           <>
             <header className="flex items-center justify-between border-b border-border px-5 py-3 bg-card/40">
               <div className="min-w-0">
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2.5 flex-wrap">
                   <h2 className="truncate text-base font-semibold">{detail.room.title}</h2>
-                  <Badge variant="secondary">{primaryMember?.character_snapshot.name ?? "—"}</Badge>
+                  <Badge variant="secondary">
+                    {activeMembers.length > 0
+                      ? activeMembers.map((m) => m.character_snapshot.name).join(", ")
+                      : (primaryMember?.character_snapshot.name ?? "—")}
+                  </Badge>
                   {(activeTurn || actorPhase) && (
                     <Badge variant="default" className="animate-pulse">
                       {actorPhase || "thinking"}
@@ -705,6 +736,29 @@ export function RoomsView({ client }: { client: QClient }) {
             <Brain className="h-4 w-4 text-primary" />
             <span className="text-sm font-semibold">Actor State &amp; Memory</span>
           </div>
+          {detail.members.length > 1 && (
+            <div className="flex flex-wrap gap-1 border-b border-border px-3 py-2 bg-muted/30">
+              {detail.members.map((m) => {
+                const selected = m.character_id === primaryMember.character_id;
+                return (
+                  <button
+                    key={m.character_id}
+                    type="button"
+                    onClick={() => setInspectedMemberId(m.character_id)}
+                    className={cn(
+                      "rounded-md px-2 py-1 text-xs font-medium transition-colors cursor-pointer",
+                      selected
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-muted-foreground hover:text-foreground border border-border",
+                    )}
+                  >
+                    {m.character_snapshot.name}
+                    {!m.active && " (off)"}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <ScrollArea className="flex-1 p-4">
             <div className="space-y-5 text-xs">
               <section className="space-y-2">
@@ -771,11 +825,23 @@ export function RoomsView({ client }: { client: QClient }) {
 
               <section className="space-y-2">
                 <div className="font-semibold">
-                  Memories ({memories?.memories.filter((m) => m.kind !== "value_history").length ?? 0})
+                  Memories (
+                  {
+                    (memories?.memories ?? []).filter(
+                      (m) =>
+                        m.kind !== "value_history" &&
+                        (detail.members.length <= 1 || m.owner_id === primaryMember.character_id),
+                    ).length
+                  }
+                  )
                 </div>
                 <div className="space-y-1.5">
                   {(memories?.memories ?? [])
-                    .filter((m) => m.kind !== "value_history")
+                    .filter(
+                      (m) =>
+                        m.kind !== "value_history" &&
+                        (detail.members.length <= 1 || m.owner_id === primaryMember.character_id),
+                    )
                     .map((m) => (
                       <div
                         key={m.id}
@@ -794,23 +860,44 @@ export function RoomsView({ client }: { client: QClient }) {
         </aside>
       )}
 
-      {/* New 1:1 Room Dialog */}
+      {/* New Direct or Group Room Dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create 1:1 Character Room</DialogTitle>
+            <DialogTitle>Create Character Room</DialogTitle>
             <DialogDescription>
-              Snapshots of the chosen persona and character will be bound to this room.
+              Bind a user persona and one or more characters for a 1:1 or group chat session.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Room Mode</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={newMode === "direct" ? "default" : "outline"}
+                  onClick={() => setNewMode("direct")}
+                >
+                  Direct (1:1)
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={newMode === "group" ? "default" : "outline"}
+                  onClick={() => setNewMode("group")}
+                >
+                  Group (Multi-Actor)
+                </Button>
+              </div>
+            </div>
             <div className="space-y-1.5">
               <Label htmlFor="room-title">Room Title</Label>
               <Input
                 id="room-title"
                 value={newTitle}
                 onChange={(e) => setNewTitle(e.target.value)}
-                placeholder="Late Night Cafe"
+                placeholder={newMode === "group" ? "Briefing Room" : "Late Night Cafe"}
               />
             </div>
             <div className="space-y-1.5">
@@ -828,27 +915,68 @@ export function RoomsView({ client }: { client: QClient }) {
                 ))}
               </select>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="room-character">Character</Label>
-              <select
-                id="room-character"
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={newCharacterId}
-                onChange={(e) => setNewCharacterId(e.target.value)}
-              >
-                {characters.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {newMode === "direct" ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="room-character">Character</Label>
+                <select
+                  id="room-character"
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={newCharacterId}
+                  onChange={(e) => setNewCharacterId(e.target.value)}
+                >
+                  {characters.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <Label>Characters ({newCharacterIds.length} selected)</Label>
+                  <div className="max-h-36 overflow-y-auto rounded-md border border-input bg-background p-2 space-y-1.5">
+                    {characters.map((c) => {
+                      const checked = newCharacterIds.includes(c.id);
+                      return (
+                        <label
+                          key={c.id}
+                          className="flex items-center gap-2 text-sm cursor-pointer select-none"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleGroupCharacter(c.id)}
+                          />
+                          <span>{c.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="room-max-turns">Max Character Turns per Input</Label>
+                  <Input
+                    id="room-max-turns"
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={newMaxTurns}
+                    onChange={(e) => setNewMaxTurns(Number(e.target.value) || 3)}
+                  />
+                </div>
+              </>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="outline" onClick={() => setCreateOpen(false)}>
                 Cancel
               </Button>
               <Button
-                disabled={!newTitle.trim() || !newPersonaId || !newCharacterId}
+                disabled={
+                  !newTitle.trim() ||
+                  !newPersonaId ||
+                  (newMode === "direct" ? !newCharacterId : newCharacterIds.length === 0)
+                }
                 onClick={() => void handleCreateRoom()}
               >
                 Create Room

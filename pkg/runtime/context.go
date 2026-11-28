@@ -212,6 +212,9 @@ func BuildActorPrompt(
 			role = llmprovider.RoleSystem
 		}
 		content := m.Content
+		if role == llmprovider.RoleUser && room.Mode == domain.RoomModeGroup && m.AuthorName != "" {
+			content = m.AuthorName + ": " + content
+		}
 		if m.LocationTag != "" && role == llmprovider.RoleUser {
 			content = "[" + m.LocationTag + "] " + content
 		}

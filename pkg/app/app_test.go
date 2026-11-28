@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -441,4 +442,142 @@ func TestEmbeddedSPAServingAndAPI404Isolation(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestExtendedStorageDriversWiring(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		indices = make(map[string]map[string]map[string]any)
+		aliases = make(map[string][]string)
+		objects = make(map[string][]byte)
+	)
+	osSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/_alias/"):
+			alias := strings.TrimPrefix(r.URL.Path, "/_alias/")
+			targets := aliases[alias]
+			if len(targets) == 0 {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			resp := map[string]any{}
+			for _, idx := range targets {
+				resp[idx] = map[string]any{"aliases": map[string]any{alias: map[string]any{}}}
+			}
+			_ = json.NewEncoder(w).Encode(resp)
+		case r.URL.Path == "/_aliases":
+			var req struct {
+				Actions []map[string]struct {
+					Index string `json:"index"`
+					Alias string `json:"alias"`
+				} `json:"actions"`
+			}
+			_ = json.Unmarshal(body, &req)
+			for _, act := range req.Actions {
+				if add, ok := act["add"]; ok {
+					aliases[add.Alias] = append(aliases[add.Alias], add.Index)
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"acknowledged": true})
+		case strings.HasSuffix(r.URL.Path, "/_count"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"count": 0})
+		case r.URL.Path == "/_bulk":
+			_ = json.NewEncoder(w).Encode(map[string]any{"errors": false})
+		case strings.HasSuffix(r.URL.Path, "/_search"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"hits": map[string]any{"hits": []any{}}})
+		case r.Method == http.MethodPut:
+			idxName := strings.TrimPrefix(r.URL.Path, "/")
+			if indices[idxName] == nil {
+				indices[idxName] = map[string]map[string]any{}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"acknowledged": true})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer osSrv.Close()
+
+	s3Srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := strings.TrimPrefix(r.URL.Path, "/")
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.Method {
+		case http.MethodPut:
+			data, _ := io.ReadAll(r.Body)
+			objects[key] = data
+			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			data, ok := objects[key]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write(data)
+		case http.MethodDelete:
+			delete(objects, key)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer s3Srv.Close()
+
+	t.Setenv("Q_TEST_S3_AK", "test-ak")
+	t.Setenv("Q_TEST_S3_SK", "test-sk")
+
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Storage.Search.Driver = "opensearch"
+	cfg.Storage.Search.OpenSearch.Endpoint = osSrv.URL
+	cfg.Storage.Search.OpenSearch.IndexPrefix = "q_app_test"
+	cfg.Storage.Blob.Driver = "s3"
+	cfg.Storage.Blob.S3.Endpoint = s3Srv.URL
+	cfg.Storage.Blob.S3.Bucket = "q-media"
+	cfg.Storage.Blob.S3.Region = "us-east-1"
+	cfg.Storage.Blob.S3.AccessKeyEnv = "Q_TEST_S3_AK"
+	cfg.Storage.Blob.S3.SecretKeyEnv = "Q_TEST_S3_SK"
+
+	rawCfg, _ := json.MarshalIndent(cfg, "", "  ")
+	if err := writeTestFile(filepath.Join(dataDir, "config.json"), rawCfg); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := t.Context()
+	a, err := app.Open(ctx, app.Options{DataDir: dataDir, ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("app.Open with opensearch+s3: %v", err)
+	}
+	defer func() { _ = a.Close(context.Background()) }()
+
+	h := a.Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("health = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Upload media through S3 blob driver.
+	var bodyBuf bytes.Buffer
+	mw := multipart.NewWriter(&bodyBuf)
+	fw, _ := mw.CreateFormFile("file", "note.txt")
+	_, _ = fw.Write([]byte("s3-media-payload"))
+	_ = mw.Close()
+	upReq := httptest.NewRequest(http.MethodPost, "/api/v1/media", &bodyBuf)
+	upReq.Header.Set("Content-Type", mw.FormDataContentType())
+	upRec := httptest.NewRecorder()
+	h.ServeHTTP(upRec, upReq)
+	if upRec.Code != http.StatusCreated {
+		t.Fatalf("media upload via s3 = %d body=%s", upRec.Code, upRec.Body.String())
+	}
+	if len(objects) == 0 {
+		t.Fatal("expected object uploaded to mock S3 server")
+	}
+}
+
+func writeTestFile(path string, data []byte) error {
+	return os.WriteFile(path, data, 0o600)
 }

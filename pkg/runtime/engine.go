@@ -66,10 +66,13 @@ type turnCheckpoint struct {
 	PendingToolCallID   string                 `json:"pending_tool_call_id,omitempty"`
 	RemainingCalls      []llmprovider.ToolCall `json:"remaining_calls,omitempty"`
 	ToolRounds          int                    `json:"tool_rounds,omitempty"`
+	GroupGauges         map[string]float64     `json:"group_gauges,omitempty"`
+	GroupWaited         []string               `json:"group_waited,omitempty"`
+	GroupSteps          int                    `json:"group_steps,omitempty"`
 }
 
-// Engine executes 1:1 character turns, broadcasts SSE events, and schedules
-// post-commit memory extraction and emotional state appraisal.
+// Engine executes direct and group character turns, broadcasts SSE events, and
+// schedules post-commit memory extraction and emotional state appraisal.
 type Engine struct {
 	rdb       storage.RDBStore
 	search    storage.SearchIndex
@@ -139,8 +142,8 @@ func (e *Engine) SubmitTurn(ctx context.Context, roomID string, req SubmitTurnRe
 		}
 		return SubmitTurnResult{}, err
 	}
-	if room.Mode != domain.RoomModeDirect {
-		return SubmitTurnResult{}, fmt.Errorf("%w: room mode %q is not yet supported in this milestone", ErrInvalidInput, room.Mode)
+	if room.Mode != domain.RoomModeDirect && room.Mode != domain.RoomModeGroup {
+		return SubmitTurnResult{}, fmt.Errorf("%w: unsupported room mode %q", ErrInvalidInput, room.Mode)
 	}
 	members, err := e.rdb.Rooms().ListMembers(ctx, roomID)
 	if err != nil {
@@ -237,9 +240,13 @@ func (e *Engine) SubmitTurn(ctx context.Context, roomID string, req SubmitTurnRe
 			return err
 		}
 		userMessageID = userMsg.ID
+		actorID := ""
+		if room.Mode == domain.RoomModeDirect {
+			actorID = activeMember.CharacterID
+		}
 		cpBytes, _ := json.Marshal(turnCheckpoint{
 			UserMessageID: userMessageID,
-			ActorID:       activeMember.CharacterID,
+			ActorID:       actorID,
 			Phase:         "submitted",
 		})
 		turn.CheckpointJSON = string(cpBytes)
@@ -356,11 +363,45 @@ func (e *Engine) Intercept(roomID, text string) bool {
 	return true
 }
 
+type actorStepOutcome int
+
+const (
+	actorStepCommitted actorStepOutcome = iota
+	actorStepPaused
+	actorStepStopped
+	actorStepCutIn
+	actorStepFailed
+)
+
+type actorStepResult struct {
+	outcome    actorStepOutcome
+	nextCtx    context.Context
+	replyText  string
+	message    domain.Message
+	observedBy []string
+	usage      *llmprovider.Usage
+	models     ResolvedModels
+}
+
+func latestUserMessageText(allMsgs []domain.Message) string {
+	for i := len(allMsgs) - 1; i >= 0; i-- {
+		if allMsgs[i].Role == domain.MessageRoleUser {
+			return allMsgs[i].Content
+		}
+	}
+	return ""
+}
+
 func (e *Engine) launchTurn(roomID string, turn domain.Turn, specCtx context.Context) {
 	e.bgWG.Add(1)
 	go func() {
 		defer e.bgWG.Done()
 		defer e.hub.FinishTurn(roomID, turn.ID)
+		room, err := e.rdb.Rooms().Get(context.Background(), roomID)
+		if err == nil && room.Mode == domain.RoomModeGroup {
+			e.executeGroupTurn(roomID, turn, specCtx)
+			return
+		}
 		e.executeDirectTurn(roomID, turn, specCtx)
 	}()
 }
@@ -397,49 +438,84 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			e.finishFailed(baseCtx, roomID, &turn, "invalid_input", "no active character in room", false)
 			return
 		}
-
-		snap := e.providers.Snapshot()
-		if snap.Gateway == nil {
-			e.finishFailed(baseCtx, roomID, &turn, "model_unavailable", "no LLM provider is enabled or initialized", false)
-			return
-		}
-		models := ResolveModels(baseCtx, snap.Config, room, member.CharacterSnapshot, snap.Gateway)
-		if models.ChatModel == "" {
-			e.finishFailed(baseCtx, roomID, &turn, "model_unavailable", "no chat model configured for character, room, or defaults", false)
-			return
-		}
-		modelMeta, err := snap.Gateway.Model(baseCtx, models.ChatModel)
-		if err != nil {
-			e.finishFailed(baseCtx, roomID, &turn, "model_unavailable", fmt.Sprintf("configured chat model %q is unavailable: %v", models.ChatModel, err), false)
-			return
-		}
-
 		allMsgs, err := e.rdb.Messages().List(baseCtx, roomID, 0, 500)
 		if err != nil {
 			e.finishFailed(baseCtx, roomID, &turn, "internal", err.Error(), true)
 			return
 		}
+		latestUserText := latestUserMessageText(allMsgs)
 
-		latestUserText := ""
-		for i := len(allMsgs) - 1; i >= 0; i-- {
-			if allMsgs[i].Role == domain.MessageRoleUser {
-				latestUserText = allMsgs[i].Content
-				break
-			}
+		res := e.executeActorStep(baseCtx, specCtx, roomID, &turn, &cp, room, members, member, latestUserText, true)
+		switch res.outcome {
+		case actorStepPaused, actorStepStopped, actorStepFailed:
+			return
+		case actorStepCutIn:
+			specCtx = res.nextCtx
+			cp = reloadCheckpoint(turn.CheckpointJSON)
+			continue
+		case actorStepCommitted:
+			confirmed := fmt.Sprintf("%s: %s\n%s: %s", room.PersonaSnapshot.Name, latestUserText, member.CharacterSnapshot.Name, res.replyText)
+			e.schedulePostCommit(room, *member, members, turn.ID, confirmed, res.observedBy, res.models)
+			return
 		}
+	}
+}
+
+func (e *Engine) executeActorStep(
+	baseCtx context.Context,
+	specCtx context.Context,
+	roomID string,
+	turn *domain.Turn,
+	cp *turnCheckpoint,
+	room domain.Room,
+	members []domain.RoomMember,
+	member *domain.RoomMember,
+	latestUserText string,
+	completeTurn bool,
+) actorStepResult {
+	for {
+		if e.hub.IsStopped(roomID, turn.ID) {
+			e.finishCancelled(baseCtx, roomID, turn)
+			return actorStepResult{outcome: actorStepStopped}
+		}
+
+		snap := e.providers.Snapshot()
+		if snap.Gateway == nil {
+			e.finishFailed(baseCtx, roomID, turn, "model_unavailable", "no LLM provider is enabled or initialized", false)
+			return actorStepResult{outcome: actorStepFailed}
+		}
+		models := ResolveModels(baseCtx, snap.Config, room, member.CharacterSnapshot, snap.Gateway)
+		if models.ChatModel == "" {
+			e.finishFailed(baseCtx, roomID, turn, "model_unavailable", "no chat model configured for character, room, or defaults", false)
+			return actorStepResult{outcome: actorStepFailed}
+		}
+		modelMeta, err := snap.Gateway.Model(baseCtx, models.ChatModel)
+		if err != nil {
+			e.finishFailed(baseCtx, roomID, turn, "model_unavailable", fmt.Sprintf("configured chat model %q is unavailable: %v", models.ChatModel, err), false)
+			return actorStepResult{outcome: actorStepFailed}
+		}
+
+		allMsgs, err := e.rdb.Messages().List(baseCtx, roomID, 0, 500)
+		if err != nil {
+			e.finishFailed(baseCtx, roomID, turn, "internal", err.Error(), true)
+			return actorStepResult{outcome: actorStepFailed}
+		}
+		latestUserText = latestUserMessageText(allMsgs)
 
 		toolReg, dataDir := e.currentTools()
 
 		// Step 0: Resume any pending approved/rejected/answered tool calls before starting a new LLM step.
 		if len(cp.RemainingCalls) > 0 && toolReg != nil {
-			outcome, nextCtx := e.processToolCalls(baseCtx, specCtx, roomID, &turn, &cp, room, members, *member, snap, models, latestUserText, toolReg, dataDir)
+			outcome, nextCtx := e.processToolCalls(baseCtx, specCtx, roomID, turn, cp, room, members, *member, snap, models, latestUserText, toolReg, dataDir)
 			switch outcome {
-			case toolLoopPaused, toolLoopStopped, toolLoopFailed:
-				return
+			case toolLoopPaused:
+				return actorStepResult{outcome: actorStepPaused}
+			case toolLoopStopped:
+				return actorStepResult{outcome: actorStepStopped}
+			case toolLoopFailed:
+				return actorStepResult{outcome: actorStepFailed}
 			case toolLoopCutIn:
-				specCtx = nextCtx
-				cp = turnCheckpoint{}
-				continue
+				return actorStepResult{outcome: actorStepCutIn, nextCtx: nextCtx}
 			}
 		}
 
@@ -477,12 +553,10 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 				NowMS:              domain.NowMS(),
 			})
 
-			if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
-				return
+			if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, turn, room, members); interrupted == interceptStop {
+				return actorStepResult{outcome: actorStepStopped}
 			} else if interrupted == interceptCutIn {
-				specCtx = nextCtx
-				cp = turnCheckpoint{}
-				continue
+				return actorStepResult{outcome: actorStepCutIn, nextCtx: nextCtx}
 			}
 
 			// Step 2: 85% budget compaction if needed
@@ -490,12 +564,10 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			if compErr == nil && compacted {
 				*member = updatedMember
 			}
-			if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
-				return
+			if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, turn, room, members); interrupted == interceptStop {
+				return actorStepResult{outcome: actorStepStopped}
 			} else if interrupted == interceptCutIn {
-				specCtx = nextCtx
-				cp = turnCheckpoint{}
-				continue
+				return actorStepResult{outcome: actorStepCutIn, nextCtx: nextCtx}
 			}
 		}
 
@@ -506,8 +578,8 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			if errors.Is(err, memory.ErrValuesTooLarge) {
 				code = "values_too_large"
 			}
-			e.finishFailed(baseCtx, roomID, &turn, code, err.Error(), false)
-			return
+			e.finishFailed(baseCtx, roomID, turn, code, err.Error(), false)
+			return actorStepResult{outcome: actorStepFailed}
 		}
 		reqMessages := make([]llmprovider.Message, 0, len(prompt.Messages)+len(cp.ToolHistory))
 		reqMessages = append(reqMessages, prompt.Messages...)
@@ -534,15 +606,13 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			ReasoningEffort: models.ReasoningEffort,
 		})
 		if err != nil {
-			if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
-				return
+			if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, turn, room, members); interrupted == interceptStop {
+				return actorStepResult{outcome: actorStepStopped}
 			} else if interrupted == interceptCutIn {
-				specCtx = nextCtx
-				cp = turnCheckpoint{}
-				continue
+				return actorStepResult{outcome: actorStepCutIn, nextCtx: nextCtx}
 			}
-			e.finishFailed(baseCtx, roomID, &turn, "provider_error", err.Error(), true)
-			return
+			e.finishFailed(baseCtx, roomID, turn, "provider_error", err.Error(), true)
+			return actorStepResult{outcome: actorStepFailed}
 		}
 
 		messageID := domain.NewID()
@@ -596,23 +666,21 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 		_ = stream.Close()
 
 		// Check intercept first before treating context cancellation as provider error.
-		if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
-			return
+		if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, turn, room, members); interrupted == interceptStop {
+			return actorStepResult{outcome: actorStepStopped}
 		} else if interrupted == interceptCutIn {
-			specCtx = nextCtx
-			cp = turnCheckpoint{}
-			continue
+			return actorStepResult{outcome: actorStepCutIn, nextCtx: nextCtx}
 		}
 		if streamErr != nil {
-			e.finishFailed(baseCtx, roomID, &turn, "provider_error", streamErr.Error(), true)
-			return
+			e.finishFailed(baseCtx, roomID, turn, "provider_error", streamErr.Error(), true)
+			return actorStepResult{outcome: actorStepFailed}
 		}
 
 		toolCalls := finalizeToolCalls(toolCallAcc)
 		if len(toolCalls) > 0 && toolReg != nil {
 			if cp.ToolRounds >= maxToolRounds {
-				e.finishFailed(baseCtx, roomID, &turn, "provider_error", "exceeded max tool rounds", false)
-				return
+				e.finishFailed(baseCtx, roomID, turn, "provider_error", "exceeded max tool rounds", false)
+				return actorStepResult{outcome: actorStepFailed}
 			}
 			cp.ToolHistory = append(cp.ToolHistory, llmprovider.Message{
 				Role:      llmprovider.RoleAssistant,
@@ -624,16 +692,18 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 			cp.Phase = "tool_loop"
 			cpBytes, _ := json.Marshal(cp)
 			turn.CheckpointJSON = string(cpBytes)
-			_ = e.rdb.Turns().Update(baseCtx, turn)
+			_ = e.rdb.Turns().Update(baseCtx, *turn)
 
-			outcome, nextCtx := e.processToolCalls(baseCtx, specCtx, roomID, &turn, &cp, room, members, *member, snap, models, latestUserText, toolReg, dataDir)
+			outcome, nextCtx := e.processToolCalls(baseCtx, specCtx, roomID, turn, cp, room, members, *member, snap, models, latestUserText, toolReg, dataDir)
 			switch outcome {
-			case toolLoopPaused, toolLoopStopped, toolLoopFailed:
-				return
+			case toolLoopPaused:
+				return actorStepResult{outcome: actorStepPaused}
+			case toolLoopStopped:
+				return actorStepResult{outcome: actorStepStopped}
+			case toolLoopFailed:
+				return actorStepResult{outcome: actorStepFailed}
 			case toolLoopCutIn:
-				specCtx = nextCtx
-				cp = turnCheckpoint{}
-				continue
+				return actorStepResult{outcome: actorStepCutIn, nextCtx: nextCtx}
 			default:
 				continue
 			}
@@ -641,11 +711,11 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 
 		replyText := strings.TrimSpace(buf.String())
 		if replyText == "" {
-			e.finishFailed(baseCtx, roomID, &turn, "provider_error", "model returned an empty response", true)
-			return
+			e.finishFailed(baseCtx, roomID, turn, "provider_error", "model returned an empty response", true)
+			return actorStepResult{outcome: actorStepFailed}
 		}
 
-		// Step 5: Atomic RDB commit of bubble + outbox + turn completion.
+		// Step 5: Atomic RDB commit of bubble + outbox (+ turn completion when completeTurn).
 		observedBy := make([]string, 0, len(members)+1)
 		if room.PersonaID != "" {
 			observedBy = append(observedBy, room.PersonaID)
@@ -671,34 +741,43 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 				return err
 			}
 			committedMsg = msg
-			turn.Status = domain.TurnStatusCompleted
-			turn.CompletedAt = &nowMS
-			turn.ErrorCode = ""
-			turn.ErrorMessage = ""
-			return tx.Turns().Update(baseCtx, turn)
+			if completeTurn {
+				turn.Status = domain.TurnStatusCompleted
+				turn.CompletedAt = &nowMS
+				turn.ErrorCode = ""
+				turn.ErrorMessage = ""
+				return tx.Turns().Update(baseCtx, *turn)
+			}
+			return nil
 		})
 		if err != nil {
-			e.finishFailed(baseCtx, roomID, &turn, "internal", err.Error(), true)
-			return
+			e.finishFailed(baseCtx, roomID, turn, "internal", err.Error(), true)
+			return actorStepResult{outcome: actorStepFailed}
 		}
 
 		e.events.Publish(roomID, "bubble.completed", map[string]any{
 			"turn_id": turn.ID,
 			"message": committedMsg,
 		})
-		donePayload := map[string]any{
-			"turn_id": turn.ID,
-			"status":  string(domain.TurnStatusCompleted),
+		if completeTurn {
+			donePayload := map[string]any{
+				"turn_id": turn.ID,
+				"status":  string(domain.TurnStatusCompleted),
+			}
+			if lastUsage != nil {
+				donePayload["usage"] = lastUsage
+			}
+			e.events.Publish(roomID, "turn.completed", donePayload)
 		}
-		if lastUsage != nil {
-			donePayload["usage"] = lastUsage
-		}
-		e.events.Publish(roomID, "turn.completed", donePayload)
 
-		// Step 6: Post-commit async memory extraction & state appraisal (never delays response).
-		confirmed := fmt.Sprintf("%s: %s\n%s: %s", room.PersonaSnapshot.Name, latestUserText, member.CharacterSnapshot.Name, replyText)
-		e.schedulePostCommit(room, *member, turn.ID, confirmed, observedBy, models)
-		return
+		return actorStepResult{
+			outcome:    actorStepCommitted,
+			replyText:  replyText,
+			message:    committedMsg,
+			observedBy: observedBy,
+			usage:      lastUsage,
+			models:     models,
+		}
 	}
 }
 
@@ -823,6 +902,7 @@ func (e *Engine) commitMessageWithMetaTx(
 func (e *Engine) schedulePostCommit(
 	room domain.Room,
 	member domain.RoomMember,
+	members []domain.RoomMember,
 	turnID, confirmedText string,
 	observedBy []string,
 	models ResolvedModels,
@@ -856,9 +936,14 @@ func (e *Engine) schedulePostCommit(
 		}
 
 		if snap.Decisions != nil && models.DecisionModel != "" {
-			var targetIDs []string
+			targetIDs := make([]string, 0, len(members)+1)
 			if room.PersonaID != "" {
 				targetIDs = append(targetIDs, room.PersonaID)
+			}
+			for _, m := range members {
+				if m.Active && m.CharacterID != member.CharacterID {
+					targetIDs = append(targetIDs, m.CharacterID)
+				}
 			}
 			nextState, changed, err := memory.AppraiseState(ctx, snap.Decisions, memory.AppraiseStateParams{
 				ActorName:     member.CharacterSnapshot.Name,
