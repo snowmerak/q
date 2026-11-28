@@ -38,10 +38,12 @@ type ResolvedModels struct {
 // when an explicit model is unconfigured.
 func ResolveModels(ctx context.Context, cfg config.Config, room domain.Room, char domain.Character, lookup memory.ModelLookup) ResolvedModels {
 	res := ResolvedModels{
-		ChatModel:          strings.TrimSpace(cfg.LLM.Roles.ChatModel),
-		MemoryModel:        strings.TrimSpace(cfg.LLM.Roles.MemoryModel),
-		RecallPlannerModel: strings.TrimSpace(cfg.LLM.Roles.RecallPlannerModel),
-		DecisionModel:      strings.TrimSpace(cfg.Decisions.DefaultModelID),
+		ChatModel:             strings.TrimSpace(cfg.LLM.Roles.ChatModel),
+		MemoryModel:           strings.TrimSpace(cfg.LLM.Roles.MemoryModel),
+		RecallPlannerModel:    strings.TrimSpace(cfg.LLM.Roles.RecallPlannerModel),
+		DecisionModel:         strings.TrimSpace(cfg.Decisions.DefaultModelID),
+		ReasoningEffort:       strings.TrimSpace(cfg.LLM.Roles.ChatReasoningEffort),
+		MemoryReasoningEffort: strings.TrimSpace(cfg.LLM.Roles.MemoryReasoningEffort),
 	}
 
 	applyPrefs := func(p *domain.ModelPrefs) {

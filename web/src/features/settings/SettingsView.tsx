@@ -14,8 +14,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ModelSelect } from "@/components/ui/model-select";
+import { ReasoningSelect, reconcileReasoningEffort } from "@/components/ui/reasoning-select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { ModelBehaviorSection } from "@/features/settings/ModelBehaviorSection";
 import { ProvidersSection } from "@/features/settings/ProvidersSection";
 import {
   EmbeddingsSection,
@@ -193,6 +195,7 @@ export function SettingsView({ client }: { client: QClient }) {
           <Tabs defaultValue="roles">
             <TabsList className="flex flex-wrap h-auto">
               <TabsTrigger value="roles">Models &amp; Roles ({models.length})</TabsTrigger>
+              <TabsTrigger value="behavior">Model Behavior</TabsTrigger>
               <TabsTrigger value="providers">
                 Providers ({cfg.llm.providers.length})
               </TabsTrigger>
@@ -221,12 +224,43 @@ export function SettingsView({ client }: { client: QClient }) {
                         value={cfg.llm.roles.chat_model ?? ""}
                         options={llmModelOptions}
                         emptyLabel="— Select chat model —"
-                        onChange={(v) =>
+                        onChange={(v) => {
+                          const nextChat = v || undefined;
+                          const nextEffort = reconcileReasoningEffort(
+                            v,
+                            cfg.llm.roles.chat_reasoning_effort ?? "",
+                            models,
+                          );
                           updateCfg({
                             ...cfg,
                             llm: {
                               ...cfg.llm,
-                              roles: { ...cfg.llm.roles, chat_model: v || undefined },
+                              roles: {
+                                ...cfg.llm.roles,
+                                chat_model: nextChat,
+                                chat_reasoning_effort: nextEffort || undefined,
+                              },
+                            },
+                          });
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="role-chat-effort">Chat Reasoning Effort</Label>
+                      <ReasoningSelect
+                        id="role-chat-effort"
+                        modelId={cfg.llm.roles.chat_model ?? ""}
+                        models={models}
+                        value={cfg.llm.roles.chat_reasoning_effort ?? ""}
+                        onChange={(effort) =>
+                          updateCfg({
+                            ...cfg,
+                            llm: {
+                              ...cfg.llm,
+                              roles: {
+                                ...cfg.llm.roles,
+                                chat_reasoning_effort: effort || undefined,
+                              },
                             },
                           })
                         }
@@ -239,12 +273,96 @@ export function SettingsView({ client }: { client: QClient }) {
                         value={cfg.llm.roles.memory_model ?? ""}
                         options={llmModelOptions}
                         emptyLabel="— Same as Chat Model —"
-                        onChange={(v) =>
+                        onChange={(v) => {
+                          const nextMem = v || undefined;
+                          const effectiveMem = v || cfg.llm.roles.chat_model || "";
+                          const nextEffort = reconcileReasoningEffort(
+                            effectiveMem,
+                            cfg.llm.roles.memory_reasoning_effort ?? "",
+                            models,
+                          );
                           updateCfg({
                             ...cfg,
                             llm: {
                               ...cfg.llm,
-                              roles: { ...cfg.llm.roles, memory_model: v || undefined },
+                              roles: {
+                                ...cfg.llm.roles,
+                                memory_model: nextMem,
+                                memory_reasoning_effort: nextEffort || undefined,
+                              },
+                            },
+                          });
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="role-mem-effort">Memory Reasoning Effort</Label>
+                      <ReasoningSelect
+                        id="role-mem-effort"
+                        modelId={cfg.llm.roles.memory_model || cfg.llm.roles.chat_model || ""}
+                        models={models}
+                        value={cfg.llm.roles.memory_reasoning_effort ?? ""}
+                        emptyLabel="Same as Chat / Provider default"
+                        onChange={(effort) =>
+                          updateCfg({
+                            ...cfg,
+                            llm: {
+                              ...cfg.llm,
+                              roles: {
+                                ...cfg.llm.roles,
+                                memory_reasoning_effort: effort || undefined,
+                              },
+                            },
+                          })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="role-sub">Subagent Model</Label>
+                      <ModelSelect
+                        id="role-sub"
+                        value={cfg.llm.roles.subagent_model ?? ""}
+                        options={llmModelOptions}
+                        emptyLabel="— Same as Chat Model —"
+                        onChange={(v) => {
+                          const nextSub = v || undefined;
+                          const effectiveSub = v || cfg.llm.roles.chat_model || "";
+                          const nextEffort = reconcileReasoningEffort(
+                            effectiveSub,
+                            cfg.llm.roles.subagent_reasoning_effort ?? "",
+                            models,
+                          );
+                          updateCfg({
+                            ...cfg,
+                            llm: {
+                              ...cfg.llm,
+                              roles: {
+                                ...cfg.llm.roles,
+                                subagent_model: nextSub,
+                                subagent_reasoning_effort: nextEffort || undefined,
+                              },
+                            },
+                          });
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="role-sub-effort">Subagent Reasoning Effort</Label>
+                      <ReasoningSelect
+                        id="role-sub-effort"
+                        modelId={cfg.llm.roles.subagent_model || cfg.llm.roles.chat_model || ""}
+                        models={models}
+                        value={cfg.llm.roles.subagent_reasoning_effort ?? ""}
+                        emptyLabel="Same as Chat / Provider default"
+                        onChange={(effort) =>
+                          updateCfg({
+                            ...cfg,
+                            llm: {
+                              ...cfg.llm,
+                              roles: {
+                                ...cfg.llm.roles,
+                                subagent_reasoning_effort: effort || undefined,
+                              },
                             },
                           })
                         }
@@ -267,24 +385,9 @@ export function SettingsView({ client }: { client: QClient }) {
                           })
                         }
                       />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="role-sub">Subagent Model</Label>
-                      <ModelSelect
-                        id="role-sub"
-                        value={cfg.llm.roles.subagent_model ?? ""}
-                        options={llmModelOptions}
-                        emptyLabel="— Same as Chat Model —"
-                        onChange={(v) =>
-                          updateCfg({
-                            ...cfg,
-                            llm: {
-                              ...cfg.llm,
-                              roles: { ...cfg.llm.roles, subagent_model: v || undefined },
-                            },
-                          })
-                        }
-                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        Auto-pinned to minimal → low reasoning effort.
+                      </p>
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="decisions-default-model">Decisions Default Model</Label>
@@ -376,7 +479,11 @@ export function SettingsView({ client }: { client: QClient }) {
                               <Badge variant="outline">tools</Badge>
                             )}
                             {m.capabilities?.reasoning?.supported && (
-                              <Badge variant="outline">reasoning</Badge>
+                              <Badge variant="outline">
+                                {m.capabilities.reasoning.supported_efforts?.length
+                                  ? `reasoning: ${m.capabilities.reasoning.supported_efforts.join("/")}`
+                                  : `reasoning: ${m.capabilities.reasoning.control || "supported"}`}
+                              </Badge>
                             )}
                           </div>
                         </div>
@@ -413,6 +520,10 @@ export function SettingsView({ client }: { client: QClient }) {
                   </div>
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="behavior">
+              <ModelBehaviorSection cfg={cfg} models={models} onChange={updateCfg} />
             </TabsContent>
 
             <TabsContent value="providers">

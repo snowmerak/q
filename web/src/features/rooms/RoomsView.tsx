@@ -19,7 +19,10 @@ import { subscribeRoomStream } from "@/client/sse";
 import type {
   ApprovalMode,
   Character,
+  DecisionModelInfo,
+  LLMRolesConfig,
   MessageBubble,
+  ModelInfo,
   Persona,
   RoomDetail,
   RoomMemoriesResponse,
@@ -40,6 +43,8 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ModelSelect } from "@/components/ui/model-select";
+import { ReasoningSelect, reconcileReasoningEffort } from "@/components/ui/reasoning-select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
@@ -92,6 +97,14 @@ export function RoomsView({ client }: { client: QClient }) {
   const [editApprovalOverride, setEditApprovalOverride] = useState<"" | ApprovalMode>("");
   const [editCharacterIds, setEditCharacterIds] = useState<string[]>([]);
   const [editMaxTurns, setEditMaxTurns] = useState<number>(3);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [defaultRoles, setDefaultRoles] = useState<LLMRolesConfig>({});
+  const [decisionModels, setDecisionModels] = useState<DecisionModelInfo[]>([]);
+  const [editChatModel, setEditChatModel] = useState<string>("");
+  const [editChatReasoning, setEditChatReasoning] = useState<string>("");
+  const [editMemoryModel, setEditMemoryModel] = useState<string>("");
+  const [editMemoryReasoning, setEditMemoryReasoning] = useState<string>("");
+  const [editDecisionModel, setEditDecisionModel] = useState<string>("");
 
   const timelineEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -348,15 +361,27 @@ export function RoomsView({ client }: { client: QClient }) {
     if (!detail) return;
     setErrorMsg("");
     try {
-      const cRes = await client.listCharacters();
+      const [cRes, mRes, dRes] = await Promise.all([
+        client.listCharacters(),
+        client.listModels(),
+        client.listDecisionModels(),
+      ]);
       setCharacters(cRes.items);
+      setModels(mRes.models);
+      setDefaultRoles(mRes.default_roles ?? {});
+      setDecisionModels(dRes.models);
       setEditTitle(detail.room.title);
       setEditApprovalOverride(detail.room.approval_mode_override ?? "");
       setEditCharacterIds(detail.members.filter((m) => m.active).map((m) => m.character_id));
       setEditMaxTurns(detail.room.max_turns_per_input || 3);
+      setEditChatModel(detail.room.model_overrides?.chat_model ?? "");
+      setEditChatReasoning(detail.room.model_overrides?.reasoning_effort ?? "");
+      setEditMemoryModel(detail.room.model_overrides?.memory_model ?? "");
+      setEditMemoryReasoning(detail.room.model_overrides?.memory_reasoning_effort ?? "");
+      setEditDecisionModel(detail.room.model_overrides?.decision_model ?? "");
       setEditOpen(true);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Failed to load characters");
+      setErrorMsg(err instanceof Error ? err.message : "Failed to load room settings");
     }
   };
 
@@ -372,11 +397,27 @@ export function RoomsView({ client }: { client: QClient }) {
       setErrorMsg("Group rooms require at least one active character.");
       return;
     }
+    const hasModelOverrides =
+      editChatModel ||
+      editChatReasoning ||
+      editMemoryModel ||
+      editMemoryReasoning ||
+      editDecisionModel;
+    const modelOverrides = hasModelOverrides
+      ? {
+          ...(editChatModel ? { chat_model: editChatModel } : {}),
+          ...(editChatReasoning ? { reasoning_effort: editChatReasoning } : {}),
+          ...(editMemoryModel ? { memory_model: editMemoryModel } : {}),
+          ...(editMemoryReasoning ? { memory_reasoning_effort: editMemoryReasoning } : {}),
+          ...(editDecisionModel ? { decision_model: editDecisionModel } : {}),
+        }
+      : {};
     try {
       await client.patchRoom(detail.room.id, {
         expected_version: detail.room.version,
         title: editTitle.trim(),
         ...(editApprovalOverride ? { approval_mode_override: editApprovalOverride } : {}),
+        model_overrides: modelOverrides,
         ...(detail.room.mode === "group"
           ? {
               character_ids: editCharacterIds,
@@ -1055,87 +1096,183 @@ export function RoomsView({ client }: { client: QClient }) {
 
       {/* Room Settings Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Room Settings</DialogTitle>
             <DialogDescription>
-              Update title, approval policy override{detail?.room.mode === "group" ? ", and active group participants" : ""}.
+              Update title, approval policy, model &amp; reasoning effort overrides{detail?.room.mode === "group" ? ", and active group participants" : ""}.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-room-title">Room Title</Label>
-              <Input
-                id="edit-room-title"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-room-approval">Approval Mode Override</Label>
-              <select
-                id="edit-room-approval"
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={editApprovalOverride}
-                onChange={(e) => setEditApprovalOverride(e.target.value as "" | ApprovalMode)}
-              >
-                <option value="">Inherit Global / Character Policy</option>
-                <option value="bypass">bypass</option>
-                <option value="auto-detection">auto-detection</option>
-                <option value="request">request</option>
-              </select>
-            </div>
-            {detail?.room.mode === "group" && (
-              <>
+          {(() => {
+            const directCharPrefs =
+              detail?.room.mode === "direct"
+                ? detail.members.find((m) => m.active)?.character_snapshot.model_prefs
+                : undefined;
+            const effectiveRoomChatModel =
+              editChatModel || directCharPrefs?.chat_model || defaultRoles.chat_model || "";
+            const effectiveRoomMemoryModel =
+              editMemoryModel ||
+              directCharPrefs?.memory_model ||
+              defaultRoles.memory_model ||
+              effectiveRoomChatModel;
+            const llmOptions = models.map((m) => ({
+              id: m.id,
+              label: m.owned_by ? `${m.id} (${m.owned_by})` : m.id,
+            }));
+            return (
+              <div className="space-y-3">
                 <div className="space-y-1.5">
-                  <Label>Active Characters ({editCharacterIds.length} selected)</Label>
-                  <div className="max-h-36 overflow-y-auto rounded-md border border-input bg-background p-2 space-y-1.5">
-                    {characters.map((c) => {
-                      const checked = editCharacterIds.includes(c.id);
-                      return (
-                        <label
-                          key={c.id}
-                          className="flex items-center gap-2 text-sm cursor-pointer select-none"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleEditCharacter(c.id)}
-                          />
-                          <span>{c.name}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="edit-room-max-turns">Max Character Turns per Input</Label>
+                  <Label htmlFor="edit-room-title">Room Title</Label>
                   <Input
-                    id="edit-room-max-turns"
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={editMaxTurns}
-                    onChange={(e) => setEditMaxTurns(Number(e.target.value) || 3)}
+                    id="edit-room-title"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
                   />
                 </div>
-              </>
-            )}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setEditOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                disabled={
-                  !editTitle.trim() ||
-                  (detail?.room.mode === "group" && editCharacterIds.length === 0)
-                }
-                onClick={() => void handleSaveRoomSettings()}
-              >
-                Save Changes
-              </Button>
-            </div>
-          </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-room-approval">Approval Mode Override</Label>
+                  <select
+                    id="edit-room-approval"
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    value={editApprovalOverride}
+                    onChange={(e) => setEditApprovalOverride(e.target.value as "" | ApprovalMode)}
+                  >
+                    <option value="">Inherit Global / Character Policy</option>
+                    <option value="bypass">bypass</option>
+                    <option value="auto-detection">auto-detection</option>
+                    <option value="request">request</option>
+                  </select>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2 pt-1">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit-room-chat-model">Chat Model Override</Label>
+                    <ModelSelect
+                      id="edit-room-chat-model"
+                      value={editChatModel}
+                      options={llmOptions}
+                      emptyLabel="Inherit Character / Global"
+                      customPlaceholder="provider/chat-model"
+                      onChange={(v) => {
+                        setEditChatModel(v);
+                        const nextEffChat =
+                          v || directCharPrefs?.chat_model || defaultRoles.chat_model || "";
+                        setEditChatReasoning((cur) =>
+                          reconcileReasoningEffort(nextEffChat, cur, models),
+                        );
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit-room-chat-effort">Chat Reasoning Effort</Label>
+                    <ReasoningSelect
+                      id="edit-room-chat-effort"
+                      modelId={effectiveRoomChatModel}
+                      models={models}
+                      value={editChatReasoning}
+                      emptyLabel="Inherit Character / Global"
+                      onChange={setEditChatReasoning}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit-room-mem-model">Memory Model Override</Label>
+                    <ModelSelect
+                      id="edit-room-mem-model"
+                      value={editMemoryModel}
+                      options={llmOptions}
+                      emptyLabel="Inherit Character / Global"
+                      customPlaceholder="provider/memory-model"
+                      onChange={(v) => {
+                        setEditMemoryModel(v);
+                        const nextEffMem =
+                          v ||
+                          directCharPrefs?.memory_model ||
+                          defaultRoles.memory_model ||
+                          effectiveRoomChatModel;
+                        setEditMemoryReasoning((cur) =>
+                          reconcileReasoningEffort(nextEffMem, cur, models),
+                        );
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit-room-mem-effort">Memory Reasoning Effort</Label>
+                    <ReasoningSelect
+                      id="edit-room-mem-effort"
+                      modelId={effectiveRoomMemoryModel}
+                      models={models}
+                      value={editMemoryReasoning}
+                      emptyLabel="Inherit Character / Global"
+                      onChange={setEditMemoryReasoning}
+                    />
+                  </div>
+                  <div className="space-y-1.5 md:col-span-2">
+                    <Label htmlFor="edit-room-dec-model">Decision Model Override</Label>
+                    <ModelSelect
+                      id="edit-room-dec-model"
+                      value={editDecisionModel}
+                      options={decisionModels.map((m) => ({
+                        id: m.id,
+                        label: m.label ? `${m.label} (${m.id})` : m.id,
+                      }))}
+                      emptyLabel="Inherit Character / Global"
+                      customPlaceholder="provider/decision-model"
+                      onChange={setEditDecisionModel}
+                    />
+                  </div>
+                </div>
+                {detail?.room.mode === "group" && (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label>Active Characters ({editCharacterIds.length} selected)</Label>
+                      <div className="max-h-36 overflow-y-auto rounded-md border border-input bg-background p-2 space-y-1.5">
+                        {characters.map((c) => {
+                          const checked = editCharacterIds.includes(c.id);
+                          return (
+                            <label
+                              key={c.id}
+                              className="flex items-center gap-2 text-sm cursor-pointer select-none"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => toggleEditCharacter(c.id)}
+                              />
+                              <span>{c.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="edit-room-max-turns">Max Character Turns per Input</Label>
+                      <Input
+                        id="edit-room-max-turns"
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={editMaxTurns}
+                        onChange={(e) => setEditMaxTurns(Number(e.target.value) || 3)}
+                      />
+                    </div>
+                  </>
+                )}
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button variant="outline" onClick={() => setEditOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    disabled={
+                      !editTitle.trim() ||
+                      (detail?.room.mode === "group" && editCharacterIds.length === 0)
+                    }
+                    onClick={() => void handleSaveRoomSettings()}
+                  >
+                    Save Changes
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 

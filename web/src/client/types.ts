@@ -61,9 +61,12 @@ export interface DecisionModelInfo {
 
 export interface LLMRolesConfig {
   chat_model?: string;
+  chat_reasoning_effort?: string;
   memory_model?: string;
+  memory_reasoning_effort?: string;
   recall_planner_model?: string;
   subagent_model?: string;
+  subagent_reasoning_effort?: string;
 }
 
 export interface CodexProviderConfig {
@@ -83,6 +86,29 @@ export interface ChatGPTProviderConfig {
   directory?: string;
 }
 
+export interface ModelMetadataConfig {
+  context_length?: number;
+  max_output_tokens?: number;
+  capabilities?: ModelCapabilities;
+}
+
+export interface ModelSamplingConfig {
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  min_p?: number;
+  repetition_penalty?: number;
+  presence_penalty?: number;
+  frequency_penalty?: number;
+}
+
+export interface ModelBehaviorConfig {
+  output_limit?: number;
+  output_token_field?: "" | "max_tokens";
+  allow_missing_finish_reason?: boolean;
+  sampling?: ModelSamplingConfig;
+}
+
 export interface ProviderConfig {
   id: string;
   type: string;
@@ -98,7 +124,7 @@ export interface ProviderConfig {
   forward_response_headers?: string[];
   models?: string[];
   model_filter_regex?: string;
-  model_metadata?: Record<string, unknown>;
+  model_metadata?: Record<string, ModelMetadataConfig>;
   codex?: CodexProviderConfig;
   chatgpt?: ChatGPTProviderConfig;
 }
@@ -171,6 +197,7 @@ export interface ConfigView {
     model_cache_refresh_timeout?: string;
     providers: ProviderConfig[];
     roles: LLMRolesConfig;
+    model_behaviors?: Record<string, ModelBehaviorConfig>;
   };
   decisions: {
     providers: DecisionProviderConfig[];

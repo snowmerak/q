@@ -481,8 +481,12 @@ func (e *Engine) runSubagentLoop(
 		return "", errors.New("gateway unavailable")
 	}
 	subModel := strings.TrimSpace(snap.Config.LLM.Roles.SubagentModel)
+	subEffort := strings.TrimSpace(snap.Config.LLM.Roles.SubagentReasoningEffort)
 	if subModel == "" {
 		subModel = models.ChatModel
+		if subEffort == "" {
+			subEffort = models.ReasoningEffort
+		}
 	}
 	msgs := []llmprovider.Message{
 		{
@@ -505,9 +509,10 @@ func (e *Engine) runSubagentLoop(
 	for round := 0; round < maxSubagentRounds; round++ {
 		subCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		resp, err := snap.Gateway.Chat(subCtx, llmprovider.ChatRequest{
-			Model:    subModel,
-			Messages: msgs,
-			Tools:    toolReg.ToolDefinitions(allowNested),
+			Model:           subModel,
+			Messages:        msgs,
+			Tools:           toolReg.ToolDefinitions(allowNested),
+			ReasoningEffort: subEffort,
 		})
 		cancel()
 		if err != nil {

@@ -27,6 +27,7 @@ type processTransport struct {
 
 func startProcessTransport(cfg config) (transport, error) {
 	cmd := exec.Command(cfg.command, cfg.args...)
+	configureCommand(cmd)
 	cmd.Env = cfg.environment
 	cmd.Stderr = cfg.stderr
 	stdin, err := cmd.StdinPipe()

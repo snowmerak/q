@@ -67,6 +67,7 @@ type route struct {
 type Gateway struct {
 	routes               map[string]*route
 	order                []*route
+	modelBehaviors       map[string]ModelBehavior
 	modelRefreshInterval time.Duration
 	modelRefreshTimeout  time.Duration
 	cacheCancel          context.CancelFunc
@@ -84,12 +85,16 @@ func NewContext(ctx context.Context, config Config) (*Gateway, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ValidateModelBehaviors(config.ModelBehaviors); err != nil {
+		return nil, fmt.Errorf("gateway: %w", err)
+	}
 	refreshInterval, refreshTimeout, err := modelCacheSettings(config)
 	if err != nil {
 		return nil, err
 	}
 	gateway := &Gateway{
 		routes:               make(map[string]*route),
+		modelBehaviors:       cloneModelBehaviors(config.ModelBehaviors),
 		modelRefreshInterval: refreshInterval,
 		modelRefreshTimeout:  refreshTimeout,
 	}
@@ -219,7 +224,11 @@ func buildProvider(config ProviderConfig) (llmprovider.Provider, error) {
 			if command == "" {
 				command = "codex"
 			}
-			options = append(options, codex.WithCommand(command, codexConfig.Args...))
+			args := codexConfig.Args
+			if len(args) == 0 {
+				args = []string{"app-server", "--listen", "stdio://"}
+			}
+			options = append(options, codex.WithCommand(command, args...))
 		}
 		if len(codexConfig.Environment) > 0 {
 			environment := make([]string, 0, len(codexConfig.Environment))

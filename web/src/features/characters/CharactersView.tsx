@@ -2,13 +2,21 @@ import { useCallback, useEffect, useState } from "react";
 import { Plus, Save, Trash2 } from "lucide-react";
 import type { QClient } from "@/client/api";
 import { QAPIError } from "@/client/api";
-import type { ApprovalMode, Character, DecisionModelInfo, ModelInfo, Persona } from "@/client/types";
+import type {
+  ApprovalMode,
+  Character,
+  DecisionModelInfo,
+  LLMRolesConfig,
+  ModelInfo,
+  Persona,
+} from "@/client/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ModelSelect } from "@/components/ui/model-select";
+import { ReasoningSelect, reconcileReasoningEffort } from "@/components/ui/reasoning-select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -19,6 +27,7 @@ export function CharactersView({ client }: { client: QClient }) {
   const [characters, setCharacters] = useState<Character[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [defaultRoles, setDefaultRoles] = useState<LLMRolesConfig>({});
   const [decisionModels, setDecisionModels] = useState<DecisionModelInfo[]>([]);
   const [selectedCharId, setSelectedCharId] = useState<string>("__new__");
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>("__new__");
@@ -31,7 +40,9 @@ export function CharactersView({ client }: { client: QClient }) {
   const [appearance, setAppearance] = useState("");
   const [initialValuesText, setInitialValuesText] = useState("");
   const [chatModel, setChatModel] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("");
   const [memoryModel, setMemoryModel] = useState("");
+  const [memoryReasoningEffort, setMemoryReasoningEffort] = useState("");
   const [recallPlannerModel, setRecallPlannerModel] = useState("");
   const [decisionModel, setDecisionModel] = useState("");
   const [approvalOverride, setApprovalOverride] = useState<"" | ApprovalMode>("");
@@ -54,6 +65,7 @@ export function CharactersView({ client }: { client: QClient }) {
       setCharacters(cRes.items);
       setPersonas(pRes.items);
       setModels(mRes.models);
+      setDefaultRoles(mRes.default_roles ?? {});
       setDecisionModels(dRes.models);
     } catch (err) {
       setBanner(err instanceof Error ? err.message : "Failed to load catalog");
@@ -74,7 +86,9 @@ export function CharactersView({ client }: { client: QClient }) {
       setAppearance("");
       setInitialValuesText("");
       setChatModel("");
+      setReasoningEffort("");
       setMemoryModel("");
+      setMemoryReasoningEffort("");
       setRecallPlannerModel("");
       setDecisionModel("");
       setApprovalOverride("");
@@ -88,7 +102,9 @@ export function CharactersView({ client }: { client: QClient }) {
     setAppearance(c.appearance ?? "");
     setInitialValuesText((c.initial_values ?? []).join("\n"));
     setChatModel(c.model_prefs?.chat_model ?? "");
+    setReasoningEffort(c.model_prefs?.reasoning_effort ?? "");
     setMemoryModel(c.model_prefs?.memory_model ?? "");
+    setMemoryReasoningEffort(c.model_prefs?.memory_reasoning_effort ?? "");
     setRecallPlannerModel(c.model_prefs?.recall_planner_model ?? "");
     setDecisionModel(c.model_prefs?.decision_model ?? "");
     setApprovalOverride(c.approval_policy_override ?? "");
@@ -122,7 +138,21 @@ export function CharactersView({ client }: { client: QClient }) {
       .split("\n")
       .map((s) => s.trim())
       .filter(Boolean);
-    const hasPrefs = chatModel || memoryModel || recallPlannerModel || decisionModel;
+    const hasPrefs =
+      chatModel ||
+      reasoningEffort ||
+      memoryModel ||
+      memoryReasoningEffort ||
+      recallPlannerModel ||
+      decisionModel;
+    const builtPrefs = {
+      ...(chatModel ? { chat_model: chatModel } : {}),
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+      ...(memoryModel ? { memory_model: memoryModel } : {}),
+      ...(memoryReasoningEffort ? { memory_reasoning_effort: memoryReasoningEffort } : {}),
+      ...(recallPlannerModel ? { recall_planner_model: recallPlannerModel } : {}),
+      ...(decisionModel ? { decision_model: decisionModel } : {}),
+    };
     const payload = {
       name: charName.trim(),
       personality,
@@ -130,13 +160,10 @@ export function CharactersView({ client }: { client: QClient }) {
       appearance,
       initial_values: values,
       model_prefs: hasPrefs
-        ? {
-            ...(chatModel ? { chat_model: chatModel } : {}),
-            ...(memoryModel ? { memory_model: memoryModel } : {}),
-            ...(recallPlannerModel ? { recall_planner_model: recallPlannerModel } : {}),
-            ...(decisionModel ? { decision_model: decisionModel } : {}),
-          }
-        : undefined,
+        ? builtPrefs
+        : selectedCharId === "__new__"
+          ? undefined
+          : {},
       ...(approvalOverride ? { approval_policy_override: approvalOverride } : {}),
     };
     try {
@@ -332,7 +359,18 @@ export function CharactersView({ client }: { client: QClient }) {
                       <ModelSelect
                         id="char-chat-model"
                         value={chatModel}
-                        onChange={setChatModel}
+                        onChange={(v) => {
+                          setChatModel(v);
+                          const effChat = v || defaultRoles.chat_model || "";
+                          setReasoningEffort((cur) => reconcileReasoningEffort(effChat, cur, models));
+                          if (!memoryModel) {
+                            const effMem =
+                              defaultRoles.memory_model || v || defaultRoles.chat_model || "";
+                            setMemoryReasoningEffort((cur) =>
+                              reconcileReasoningEffort(effMem, cur, models),
+                            );
+                          }
+                        }}
                         options={models.map((m) => ({
                           id: m.id,
                           label: m.owned_by ? `${m.id} (${m.owned_by})` : m.id,
@@ -342,17 +380,52 @@ export function CharactersView({ client }: { client: QClient }) {
                       />
                     </div>
                     <div className="space-y-1.5">
+                      <Label htmlFor="char-chat-effort">Chat Reasoning Effort</Label>
+                      <ReasoningSelect
+                        id="char-chat-effort"
+                        modelId={chatModel || defaultRoles.chat_model || ""}
+                        models={models}
+                        value={reasoningEffort}
+                        emptyLabel="Inherit global role default"
+                        onChange={setReasoningEffort}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
                       <Label htmlFor="char-mem-model">Memory Model Override</Label>
                       <ModelSelect
                         id="char-mem-model"
                         value={memoryModel}
-                        onChange={setMemoryModel}
+                        onChange={(v) => {
+                          setMemoryModel(v);
+                          const effMem =
+                            v || defaultRoles.memory_model || chatModel || defaultRoles.chat_model || "";
+                          setMemoryReasoningEffort((cur) =>
+                            reconcileReasoningEffort(effMem, cur, models),
+                          );
+                        }}
                         options={models.map((m) => ({
                           id: m.id,
                           label: m.owned_by ? `${m.id} (${m.owned_by})` : m.id,
                         }))}
                         emptyLabel="Default global role"
                         customPlaceholder="provider/memory-model"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="char-mem-effort">Memory Reasoning Effort</Label>
+                      <ReasoningSelect
+                        id="char-mem-effort"
+                        modelId={
+                          memoryModel ||
+                          defaultRoles.memory_model ||
+                          chatModel ||
+                          defaultRoles.chat_model ||
+                          ""
+                        }
+                        models={models}
+                        value={memoryReasoningEffort}
+                        emptyLabel="Inherit global role default"
+                        onChange={setMemoryReasoningEffort}
                       />
                     </div>
                     <div className="space-y-1.5">

@@ -150,3 +150,62 @@ func TestValidateEmbeddingsProviderID(t *testing.T) {
 		t.Fatal("expected error when neither embeddings.provider_id nor base_url is configured")
 	}
 }
+
+func TestValidateRoleReasoningEfforts(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.Roles = LLMRolesConfig{
+		ChatModel:               "openai/gpt-5",
+		ChatReasoningEffort:     "medium",
+		MemoryModel:             "openai/gpt-5-mini",
+		MemoryReasoningEffort:   "low",
+		SubagentModel:           "openai/gpt-5",
+		SubagentReasoningEffort: "high",
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid role reasoning efforts, got %v", err)
+	}
+
+	for name, mutate := range map[string]func(*LLMRolesConfig){
+		"chat":     func(r *LLMRolesConfig) { r.ChatReasoningEffort = " high" },
+		"memory":   func(r *LLMRolesConfig) { r.MemoryReasoningEffort = "low " },
+		"subagent": func(r *LLMRolesConfig) { r.SubagentReasoningEffort = "\tmedium" },
+	} {
+		bad := cfg
+		mutate(&bad.LLM.Roles)
+		if err := bad.Validate(); err == nil {
+			t.Fatalf("expected surrounding whitespace validation error for %s reasoning_effort", name)
+		}
+	}
+}
+
+func TestValidateModelBehaviors(t *testing.T) {
+	temp := 0.0
+	topP := 0.95
+	cfg := Default()
+	cfg.LLM.ModelBehaviors = map[string]gateway.ModelBehavior{
+		"deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017": {
+			OutputLimit:              4096,
+			OutputTokenField:         "max_tokens",
+			AllowMissingFinishReason: true,
+			Sampling: &gateway.ModelSampling{
+				Temperature: &temp,
+				TopP:        &topP,
+			},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected valid model_behaviors config, got %v", err)
+	}
+	if got := cfg.GatewayConfig().ModelBehaviors["deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"].OutputLimit; got != 4096 {
+		t.Fatalf("GatewayConfig did not forward ModelBehaviors, got %d", got)
+	}
+
+	badTopP := 1.5
+	bad := Default()
+	bad.LLM.ModelBehaviors = map[string]gateway.ModelBehavior{
+		"local/m": {Sampling: &gateway.ModelSampling{TopP: &badTopP}},
+	}
+	if err := bad.Validate(); err == nil {
+		t.Fatal("expected out-of-range top_p validation error")
+	}
+}

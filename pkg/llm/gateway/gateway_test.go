@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -1132,5 +1135,157 @@ func TestModelFilterRegex(t *testing.T) {
 	}}})
 	if err == nil {
 		t.Fatal("expected invalid model_filter_regex error")
+	}
+}
+
+func TestCodexCommandPreservesDefaultArgs(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "main.go")
+	bin := filepath.Join(dir, "fake-codex")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	code := `package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"slices"
+)
+
+func main() {
+	if !slices.Equal(os.Args[1:], []string{"app-server", "--listen", "stdio://"}) {
+		os.Exit(2)
+	}
+	sc := bufio.NewScanner(os.Stdin)
+	for sc.Scan() {
+		var msg struct {
+			ID     json.RawMessage ` + "`json:\"id\"`" + `
+			Method string          ` + "`json:\"method\"`" + `
+		}
+		if err := json.Unmarshal(sc.Bytes(), &msg); err != nil || msg.Method == "" {
+			continue
+		}
+		switch msg.Method {
+		case "initialize":
+			fmt.Printf("{\"id\":%s,\"result\":{}}\n", string(msg.ID))
+		case "model/list":
+			fmt.Printf("{\"id\":%s,\"result\":{\"data\":[{\"id\":\"gpt-5.4\",\"model\":\"gpt-5.4\"}]}}\n", string(msg.ID))
+		}
+	}
+}
+`
+	if err := os.WriteFile(src, []byte(code), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("go", "build", "-o", bin, src).CombinedOutput(); err != nil {
+		t.Fatalf("build fake codex: %v\n%s", err, out)
+	}
+
+	gw, err := New(Config{Providers: []ProviderConfig{{
+		ID:      "codex",
+		Type:    "codex",
+		Prefix:  "codex",
+		Enabled: true,
+		Codex:   CodexConfig{Command: bin},
+	}}})
+	if err != nil {
+		t.Fatalf("gateway.New: %v", err)
+	}
+	defer gw.Close()
+
+	models, err := gw.Models(context.Background())
+	if err != nil {
+		t.Fatalf("gw.Models: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "codex/gpt-5.4" {
+		t.Fatalf("expected [codex/gpt-5.4], got %#v", models)
+	}
+}
+
+func TestModelBehaviorSamplingAndOutputTokenField(t *testing.T) {
+	var captured map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/v1/models":
+			_, _ = io.WriteString(writer, `{"object":"list","data":[{"id":"legacy-model"}]}`)
+		case "/v1/chat/completions":
+			if err := json.NewDecoder(request.Body).Decode(&captured); err != nil {
+				t.Fatalf("decode chat request: %v", err)
+			}
+			_, _ = io.WriteString(writer, `{"id":"c1","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer upstream.Close()
+
+	temp := 0.25
+	topP := 0.9
+	topK := 40
+	minP := 0.05
+	rep := 1.1
+	pres := 0.5
+	freq := -0.5
+
+	gw, err := New(Config{
+		Providers: []ProviderConfig{{
+			ID:      "local",
+			Type:    "openai-compatible",
+			Prefix:  "local",
+			Enabled: true,
+			BaseURL: upstream.URL + "/v1",
+		}},
+		ModelBehaviors: map[string]ModelBehavior{
+			"local/legacy-model": {
+				OutputLimit:              2048,
+				OutputTokenField:         "max_tokens",
+				AllowMissingFinishReason: true,
+				Sampling: &ModelSampling{
+					Temperature:       &temp,
+					TopP:              &topP,
+					TopK:              &topK,
+					MinP:              &minP,
+					RepetitionPenalty: &rep,
+					PresencePenalty:   &pres,
+					FrequencyPenalty:  &freq,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("gateway.New: %v", err)
+	}
+	defer gw.Close()
+
+	resp, err := gw.Chat(context.Background(), llmprovider.ChatRequest{
+		Model:    "local/legacy-model",
+		Messages: []llmprovider.Message{{Role: llmprovider.RoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("gw.Chat: %v", err)
+	}
+	if resp.Choices[0].FinishReason != "stop" {
+		t.Fatalf("expected missing finish_reason synthesized as stop, got %q", resp.Choices[0].FinishReason)
+	}
+	if _, hasCompletion := captured["max_completion_tokens"]; hasCompletion {
+		t.Fatalf("did not expect max_completion_tokens when output_token_field=max_tokens: %#v", captured)
+	}
+	if captured["max_tokens"] != float64(2048) || captured["temperature"] != 0.25 || captured["top_p"] != 0.9 ||
+		captured["top_k"] != float64(40) || captured["min_p"] != 0.05 || captured["repetition_penalty"] != 1.1 ||
+		captured["presence_penalty"] != 0.5 || captured["frequency_penalty"] != -0.5 {
+		t.Fatalf("unexpected captured payload: %#v", captured)
+	}
+
+	_, err = New(Config{
+		Providers: []ProviderConfig{{ID: "local", Type: "openai-compatible", Enabled: true, BaseURL: upstream.URL + "/v1", Models: []string{"m"}}},
+		ModelBehaviors: map[string]ModelBehavior{
+			"local/m": {OutputTokenField: "bad_field"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected invalid output_token_field validation error")
 	}
 }

@@ -5,6 +5,8 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"math"
 	"os"
 	"regexp"
 	"strings"
@@ -16,11 +18,32 @@ import (
 const defaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
 const defaultXAIBaseURL = "https://api.x.ai/v1"
 
+// ModelSampling defines optional per-model sampling overrides applied at the Gateway boundary.
+type ModelSampling struct {
+	Temperature       *float64 `json:"temperature,omitempty"`
+	TopP              *float64 `json:"top_p,omitempty"`
+	TopK              *int     `json:"top_k,omitempty"`
+	MinP              *float64 `json:"min_p,omitempty"`
+	RepetitionPenalty *float64 `json:"repetition_penalty,omitempty"`
+	PresencePenalty   *float64 `json:"presence_penalty,omitempty"`
+	FrequencyPenalty  *float64 `json:"frequency_penalty,omitempty"`
+}
+
+// ModelBehavior overrides runtime request limits, token parameter names, finish-reason strictness,
+// and sampling defaults for a prefixed Gateway model ID (e.g. "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017").
+type ModelBehavior struct {
+	OutputLimit              int            `json:"output_limit,omitempty"`
+	OutputTokenField         string         `json:"output_token_field,omitempty"` // "" | "max_tokens"
+	AllowMissingFinishReason bool           `json:"allow_missing_finish_reason,omitempty"`
+	Sampling                 *ModelSampling `json:"sampling,omitempty"`
+}
+
 type Config struct {
-	Listen                    string           `json:"listen"`
-	ModelCacheRefreshInterval string           `json:"model_cache_refresh_interval,omitempty"`
-	ModelCacheRefreshTimeout  string           `json:"model_cache_refresh_timeout,omitempty"`
-	Providers                 []ProviderConfig `json:"providers"`
+	Listen                    string                   `json:"listen"`
+	ModelCacheRefreshInterval string                   `json:"model_cache_refresh_interval,omitempty"`
+	ModelCacheRefreshTimeout  string                   `json:"model_cache_refresh_timeout,omitempty"`
+	Providers                 []ProviderConfig         `json:"providers"`
+	ModelBehaviors            map[string]ModelBehavior `json:"model_behaviors,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -299,4 +322,93 @@ func providerTypeAllowsKind(providerType, providerKind string) bool {
 	}
 	typeKind, supported := canonicalProviderKind(providerType)
 	return supported && providerKind == typeKind
+}
+
+func validFloat(v *float64) bool {
+	return v == nil || (!math.IsNaN(*v) && !math.IsInf(*v, 0))
+}
+
+// Validate checks range invariants for per-model sampling overrides.
+func (s ModelSampling) Validate() error {
+	for name, val := range map[string]*float64{
+		"temperature":        s.Temperature,
+		"top_p":              s.TopP,
+		"min_p":              s.MinP,
+		"repetition_penalty": s.RepetitionPenalty,
+		"presence_penalty":   s.PresencePenalty,
+		"frequency_penalty":  s.FrequencyPenalty,
+	} {
+		if !validFloat(val) {
+			return fmt.Errorf("%s must be finite", name)
+		}
+	}
+	if s.Temperature != nil && *s.Temperature < 0 {
+		return fmt.Errorf("temperature must be >= 0")
+	}
+	if s.TopP != nil && (*s.TopP < 0 || *s.TopP > 1) {
+		return fmt.Errorf("top_p must be between 0 and 1")
+	}
+	if s.TopK != nil && *s.TopK < 0 {
+		return fmt.Errorf("top_k must be >= 0")
+	}
+	if s.MinP != nil && (*s.MinP < 0 || *s.MinP > 1) {
+		return fmt.Errorf("min_p must be between 0 and 1")
+	}
+	if s.RepetitionPenalty != nil && *s.RepetitionPenalty <= 0 {
+		return fmt.Errorf("repetition_penalty must be > 0")
+	}
+	if s.PresencePenalty != nil && (*s.PresencePenalty < -2 || *s.PresencePenalty > 2) {
+		return fmt.Errorf("presence_penalty must be between -2 and 2")
+	}
+	if s.FrequencyPenalty != nil && (*s.FrequencyPenalty < -2 || *s.FrequencyPenalty > 2) {
+		return fmt.Errorf("frequency_penalty must be between -2 and 2")
+	}
+	return nil
+}
+
+// Validate checks limits, token parameter selector, and sampling bounds.
+func (b ModelBehavior) Validate() error {
+	if b.OutputLimit < 0 {
+		return fmt.Errorf("output_limit must be >= 0")
+	}
+	switch b.OutputTokenField {
+	case "", "max_tokens":
+	default:
+		return fmt.Errorf("output_token_field %q must be empty or \"max_tokens\"", b.OutputTokenField)
+	}
+	if b.Sampling != nil {
+		if err := b.Sampling.Validate(); err != nil {
+			return fmt.Errorf("sampling: %w", err)
+		}
+	}
+	return nil
+}
+
+// ValidateModelBehaviors validates all configured per-model behavior entries.
+func ValidateModelBehaviors(behaviors map[string]ModelBehavior) error {
+	for model, behavior := range behaviors {
+		if model == "" || model != strings.TrimSpace(model) {
+			return fmt.Errorf("model_behaviors key %q must be non-empty without surrounding whitespace", model)
+		}
+		if err := behavior.Validate(); err != nil {
+			return fmt.Errorf("model_behaviors[%q]: %w", model, err)
+		}
+	}
+	return nil
+}
+
+func cloneModelBehaviors(src map[string]ModelBehavior) map[string]ModelBehavior {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]ModelBehavior, len(src))
+	maps.Copy(dst, src)
+	for k, v := range dst {
+		if v.Sampling != nil {
+			copied := *v.Sampling
+			v.Sampling = &copied
+			dst[k] = v
+		}
+	}
+	return dst
 }

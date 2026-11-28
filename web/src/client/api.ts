@@ -13,6 +13,7 @@ import type {
   LLMRolesConfig,
   MessageBubble,
   ModelInfo,
+  ModelPrefs,
   Persona,
   PersonaInput,
   PersonaPatch,
@@ -206,6 +207,7 @@ export class QClient {
       title?: string;
       character_ids?: string[];
       approval_mode_override?: ApprovalMode;
+      model_overrides?: ModelPrefs;
       max_turns_per_input?: number;
     },
   ) {

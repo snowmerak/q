@@ -91,7 +91,7 @@ const LLM_PRESETS: Array<{ label: string; build: (n: number) => ProviderConfig }
       type: "codex",
       prefix: "codex",
       enabled: true,
-      codex: { command: "codex" },
+      codex: {},
     }),
   },
   {
@@ -359,16 +359,33 @@ export function ProvidersSection({
                 </div>
 
                 {p.type === "codex" ? (
-                  <div className="grid gap-3 md:grid-cols-3">
+                  <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-1">
                       <Label className="text-xs">Codex Command</Label>
                       <Input
-                        value={p.codex?.command ?? "codex"}
+                        value={p.codex?.command ?? ""}
+                        placeholder="codex (default)"
                         onChange={(e) =>
                           updateProvider(idx, {
                             codex: { ...p.codex, command: e.target.value || undefined },
                           })
                         }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Codex Args (comma-separated)</Label>
+                      <Input
+                        value={(p.codex?.args ?? []).join(", ")}
+                        placeholder="app-server, --listen, stdio:// (default)"
+                        onChange={(e) => {
+                          const args = e.target.value
+                            .split(",")
+                            .map((s) => s.trim())
+                            .filter(Boolean);
+                          updateProvider(idx, {
+                            codex: { ...p.codex, args: args.length > 0 ? args : undefined },
+                          });
+                        }}
                       />
                     </div>
                     <div className="space-y-1">

@@ -82,17 +82,21 @@ type S3Config struct {
 }
 
 type LLMConfig struct {
-	ModelCacheRefreshInterval string                   `json:"model_cache_refresh_interval,omitempty"`
-	ModelCacheRefreshTimeout  string                   `json:"model_cache_refresh_timeout,omitempty"`
-	Providers                 []gateway.ProviderConfig `json:"providers"`
-	Roles                     LLMRolesConfig           `json:"roles"`
+	ModelCacheRefreshInterval string                           `json:"model_cache_refresh_interval,omitempty"`
+	ModelCacheRefreshTimeout  string                           `json:"model_cache_refresh_timeout,omitempty"`
+	Providers                 []gateway.ProviderConfig         `json:"providers"`
+	Roles                     LLMRolesConfig                   `json:"roles"`
+	ModelBehaviors            map[string]gateway.ModelBehavior `json:"model_behaviors,omitempty"`
 }
 
 type LLMRolesConfig struct {
-	ChatModel          string `json:"chat_model,omitempty"`
-	MemoryModel        string `json:"memory_model,omitempty"`
-	RecallPlannerModel string `json:"recall_planner_model,omitempty"`
-	SubagentModel      string `json:"subagent_model,omitempty"`
+	ChatModel             string `json:"chat_model,omitempty"`
+	ChatReasoningEffort   string `json:"chat_reasoning_effort,omitempty"`
+	MemoryModel           string `json:"memory_model,omitempty"`
+	MemoryReasoningEffort string `json:"memory_reasoning_effort,omitempty"`
+	RecallPlannerModel    string `json:"recall_planner_model,omitempty"`
+	SubagentModel         string `json:"subagent_model,omitempty"`
+	SubagentReasoningEffort string `json:"subagent_reasoning_effort,omitempty"`
 }
 
 type EmbeddingsConfig struct {
@@ -437,15 +441,39 @@ func (c Config) Validate() error {
 			return fmt.Errorf("config: mcp_servers %q unsupported transport %q", id, srv.Transport)
 		}
 	}
+	for role, effort := range map[string]string{
+		"chat_reasoning_effort":     c.LLM.Roles.ChatReasoningEffort,
+		"memory_reasoning_effort":   c.LLM.Roles.MemoryReasoningEffort,
+		"subagent_reasoning_effort": c.LLM.Roles.SubagentReasoningEffort,
+	} {
+		if effort != strings.TrimSpace(effort) {
+			return fmt.Errorf("config: llm.roles.%s must not have surrounding whitespace", role)
+		}
+	}
+	if err := gateway.ValidateModelBehaviors(c.LLM.ModelBehaviors); err != nil {
+		return fmt.Errorf("config: llm: %w", err)
+	}
 	return nil
 }
 
 // GatewayConfig converts LLMConfig into pkg/llm/gateway.Config.
 func (c Config) GatewayConfig() gateway.Config {
+	var behaviors map[string]gateway.ModelBehavior
+	if len(c.LLM.ModelBehaviors) > 0 {
+		behaviors = make(map[string]gateway.ModelBehavior, len(c.LLM.ModelBehaviors))
+		for k, v := range c.LLM.ModelBehaviors {
+			if v.Sampling != nil {
+				s := *v.Sampling
+				v.Sampling = &s
+			}
+			behaviors[k] = v
+		}
+	}
 	return gateway.Config{
 		ModelCacheRefreshInterval: c.LLM.ModelCacheRefreshInterval,
 		ModelCacheRefreshTimeout:  c.LLM.ModelCacheRefreshTimeout,
 		Providers:                 append([]gateway.ProviderConfig(nil), c.LLM.Providers...),
+		ModelBehaviors:            behaviors,
 	}
 }
 

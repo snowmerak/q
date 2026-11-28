@@ -4,13 +4,75 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 
 	llmprovider "github.com/snowmerak/q/v2/pkg/llm"
 )
 
+func applyModelBehavior(behaviors map[string]ModelBehavior, externalModel string, req llmprovider.ChatRequest) (llmprovider.ChatRequest, ModelBehavior) {
+	b, ok := behaviors[externalModel]
+	if !ok {
+		return req, ModelBehavior{}
+	}
+	if b.OutputTokenField == "max_tokens" {
+		if req.MaxTokens == nil && req.MaxCompletionTokens != nil {
+			v := *req.MaxCompletionTokens
+			req.MaxTokens = &v
+			req.MaxCompletionTokens = nil
+		} else if req.MaxTokens == nil && b.OutputLimit > 0 {
+			limit := b.OutputLimit
+			req.MaxTokens = &limit
+		}
+	} else if req.MaxTokens == nil && req.MaxCompletionTokens == nil && b.OutputLimit > 0 {
+		limit := b.OutputLimit
+		req.MaxCompletionTokens = &limit
+	}
+
+	if b.Sampling != nil {
+		s := b.Sampling
+		if req.Temperature == nil && s.Temperature != nil {
+			v := *s.Temperature
+			req.Temperature = &v
+		}
+		if req.TopP == nil && s.TopP != nil {
+			v := *s.TopP
+			req.TopP = &v
+		}
+		setExtra := func(key string, val any) {
+			if req.Extra == nil {
+				req.Extra = map[string]any{}
+			} else if _, exists := req.Extra[key]; exists {
+				return
+			}
+			req.Extra[key] = val
+		}
+		if s.TopK != nil || s.MinP != nil || s.RepetitionPenalty != nil || s.PresencePenalty != nil || s.FrequencyPenalty != nil {
+			if req.Extra != nil {
+				req.Extra = maps.Clone(req.Extra)
+			}
+			if s.TopK != nil {
+				setExtra("top_k", *s.TopK)
+			}
+			if s.MinP != nil {
+				setExtra("min_p", *s.MinP)
+			}
+			if s.RepetitionPenalty != nil {
+				setExtra("repetition_penalty", *s.RepetitionPenalty)
+			}
+			if s.PresencePenalty != nil {
+				setExtra("presence_penalty", *s.PresencePenalty)
+			}
+			if s.FrequencyPenalty != nil {
+				setExtra("frequency_penalty", *s.FrequencyPenalty)
+			}
+		}
+	}
+	return req, b
+}
+
 // Chat executes a synchronous chat completion against the resolved provider route,
-// applying Gateway prompt-cache preparation and restoring the prefixed model ID.
+// applying Gateway model behaviors, prompt-cache preparation, and restoring the prefixed model ID.
 func (g *Gateway) Chat(ctx context.Context, request llmprovider.ChatRequest) (*llmprovider.ChatResponse, error) {
 	if g == nil {
 		return nil, errors.New("gateway: gateway is nil")
@@ -23,6 +85,7 @@ func (g *Gateway) Chat(ctx context.Context, request llmprovider.ChatRequest) (*l
 		return nil, err
 	}
 	externalModel := request.Model
+	request, behavior := applyModelBehavior(g.modelBehaviors, externalModel, request)
 	request.Model = backendModel
 	request, cacheConversationID, err := preparePromptCache(route, request)
 	if err != nil {
@@ -33,6 +96,9 @@ func (g *Gateway) Chat(ctx context.Context, request llmprovider.ChatRequest) (*l
 		return nil, err
 	}
 	response.Model = externalModel
+	if behavior.AllowMissingFinishReason && len(response.Choices) > 0 && response.Choices[0].FinishReason == "" {
+		response.Choices[0].FinishReason = "stop"
+	}
 	if response.ConversationID == "" {
 		response.ConversationID = cacheConversationID
 	}
@@ -40,7 +106,7 @@ func (g *Gateway) Chat(ctx context.Context, request llmprovider.ChatRequest) (*l
 }
 
 // ChatStream starts a streaming chat completion against the resolved provider route,
-// applying Gateway prompt-cache preparation and rewriting streamed model/conversation metadata.
+// applying Gateway model behaviors, prompt-cache preparation, and rewriting streamed model/conversation metadata.
 func (g *Gateway) ChatStream(ctx context.Context, request llmprovider.ChatRequest) (llmprovider.Stream, error) {
 	if g == nil {
 		return nil, errors.New("gateway: gateway is nil")
@@ -53,6 +119,7 @@ func (g *Gateway) ChatStream(ctx context.Context, request llmprovider.ChatReques
 		return nil, err
 	}
 	externalModel := request.Model
+	request, _ = applyModelBehavior(g.modelBehaviors, externalModel, request)
 	request.Model = backendModel
 	request, cacheConversationID, err := preparePromptCache(route, request)
 	if err != nil {
