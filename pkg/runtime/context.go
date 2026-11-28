@@ -217,19 +217,11 @@ func PrepareAppendOnlyContext(
 	dirty := false
 	pc := member.ActorState.PromptCache
 	if pc == nil || pc.Baseline == nil || pc.EpochSeq != member.ActorState.CompactedThroughSeq {
-		var kept []domain.PromptInjection
-		if pc != nil {
-			for _, inj := range pc.Injections {
-				if inj.AfterSeq > member.ActorState.CompactedThroughSeq {
-					kept = append(kept, inj)
-				}
-			}
-		}
 		pc = &domain.PromptCacheState{
 			EpochSeq:    member.ActorState.CompactedThroughSeq,
 			Baseline:    clonePromptSnapshot(&curSnap),
 			LastEmitted: clonePromptSnapshot(&curSnap),
-			Injections:  kept,
+			Injections:  nil,
 		}
 		member.ActorState.PromptCache = pc
 		dirty = true
@@ -586,20 +578,12 @@ func CompactIfNeeded(
 		}
 		cur.ActorState.CompressedMemo = newMemo
 		cur.ActorState.CompactedThroughSeq = newCompactedSeq
-		var kept []domain.PromptInjection
-		if cur.ActorState.PromptCache != nil {
-			for _, inj := range cur.ActorState.PromptCache.Injections {
-				if inj.AfterSeq > newCompactedSeq {
-					kept = append(kept, inj)
-				}
-			}
-		}
 		newSnap := snapshotPromptState(room, cur.ActorState)
 		cur.ActorState.PromptCache = &domain.PromptCacheState{
 			EpochSeq:    newCompactedSeq,
 			Baseline:    &newSnap,
 			LastEmitted: clonePromptSnapshot(&newSnap),
-			Injections:  kept,
+			Injections:  nil,
 		}
 		if err := tx.Rooms().UpsertMember(ctx, cur); err != nil {
 			return err

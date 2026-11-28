@@ -495,13 +495,14 @@ const (
 )
 
 type actorStepResult struct {
-	outcome    actorStepOutcome
-	nextCtx    context.Context
-	replyText  string
-	message    domain.Message
-	observedBy []string
-	usage      *llmprovider.Usage
-	models     ResolvedModels
+	outcome       actorStepOutcome
+	nextCtx       context.Context
+	replyText     string
+	message       domain.Message
+	observedBy    []string
+	usage         *llmprovider.Usage
+	models        ResolvedModels
+	turnCompleted bool
 }
 
 func latestUserMessageText(allMsgs []domain.Message) string {
@@ -566,7 +567,7 @@ func (e *Engine) executeDirectTurn(roomID string, turn domain.Turn, specCtx cont
 		}
 		latestUserText := latestUserMessageText(allMsgs)
 
-		res := e.executeActorStep(baseCtx, specCtx, roomID, &turn, &cp, room, members, member, latestUserText, true)
+		res := e.executeActorStep(baseCtx, specCtx, roomID, &turn, &cp, room, members, member, latestUserText, 0)
 		switch res.outcome {
 		case actorStepPaused, actorStepStopped, actorStepFailed:
 			return
@@ -592,7 +593,7 @@ func (e *Engine) executeActorStep(
 	members []domain.RoomMember,
 	member *domain.RoomMember,
 	latestUserText string,
-	completeTurn bool,
+	groupMaxTurns int,
 ) actorStepResult {
 	for {
 		res, keepGoing := func() (actorStepResult, bool) {
@@ -927,18 +928,39 @@ func (e *Engine) executeActorStep(
 
 			var committedMsg domain.Message
 			nowMS := domain.NowMS()
+			nextTurn := *turn
+			nextCP := *cp
+			shouldComplete := groupMaxTurns <= 0
 			err = e.rdb.Tx(baseCtx, func(tx storage.RDBTx) error {
 				msg, err := e.commitMessageWithMetaTx(baseCtx, tx, messageID, roomID, turn.ID, domain.MessageRoleCharacter, member.CharacterID, member.CharacterSnapshot.Name, replyText, "", metaJSON, observedBy)
 				if err != nil {
 					return err
 				}
 				committedMsg = msg
-				if completeTurn {
-					turn.Status = domain.TurnStatusCompleted
-					turn.CompletedAt = &nowMS
-					turn.ErrorCode = ""
-					turn.ErrorMessage = ""
-					return tx.Turns().Update(baseCtx, *turn)
+				if groupMaxTurns > 0 {
+					nextCP.ToolHistory = nil
+					nextCP.RemainingCalls = nil
+					nextCP.PendingInvocationID = ""
+					nextCP.PendingQuestionID = ""
+					nextCP.PendingToolCallID = ""
+					nextCP.ToolRounds = 0
+					nextCP.Thinking = ""
+					nextCP.GroupWaited = nil
+					nextCP.ActorID = ""
+					nextCP.GroupSteps++
+					nextCP.Phase = "group_step_committed"
+					cpBytes, _ := json.Marshal(nextCP)
+					nextTurn.CheckpointJSON = string(cpBytes)
+					shouldComplete = nextCP.GroupSteps >= groupMaxTurns
+				}
+				if shouldComplete {
+					nextTurn.Status = domain.TurnStatusCompleted
+					nextTurn.CompletedAt = &nowMS
+					nextTurn.ErrorCode = ""
+					nextTurn.ErrorMessage = ""
+				}
+				if groupMaxTurns > 0 || shouldComplete {
+					return tx.Turns().Update(baseCtx, nextTurn)
 				}
 				return nil
 			})
@@ -946,12 +968,14 @@ func (e *Engine) executeActorStep(
 				e.finishFailed(baseCtx, roomID, turn, "internal", err.Error(), true)
 				return actorStepResult{outcome: actorStepFailed}, false
 			}
+			*cp = nextCP
+			*turn = nextTurn
 
 			e.events.Publish(roomID, "bubble.completed", map[string]any{
 				"turn_id": turn.ID,
 				"message": committedMsg,
 			})
-			if completeTurn {
+			if shouldComplete {
 				donePayload := map[string]any{
 					"turn_id": turn.ID,
 					"status":  string(domain.TurnStatusCompleted),
@@ -964,12 +988,13 @@ func (e *Engine) executeActorStep(
 			}
 
 			return actorStepResult{
-				outcome:    actorStepCommitted,
-				replyText:  replyText,
-				message:    committedMsg,
-				observedBy: observedBy,
-				usage:      lastUsage,
-				models:     models,
+				outcome:       actorStepCommitted,
+				replyText:     replyText,
+				message:       committedMsg,
+				observedBy:    observedBy,
+				usage:         lastUsage,
+				models:        models,
+				turnCompleted: shouldComplete,
 			}, false
 		}()
 		if !keepGoing {

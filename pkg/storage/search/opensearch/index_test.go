@@ -32,35 +32,47 @@ type mockDoc struct {
 	Vector     []float32 `json:"vector,omitempty"`
 }
 
+type mockOpenSearchServer struct {
+	srv      *httptest.Server
+	mu       sync.Mutex
+	indices  map[string]map[string]mockDoc
+	aliases  map[string][]string
+	deleted  []string
+	swapMode string // "", "commit_then_drop", "fail_500"
+}
+
 func newMockOpenSearchServer() *httptest.Server {
-	var (
-		mu      sync.Mutex
-		indices = make(map[string]map[string]mockDoc)
-		aliases = make(map[string][]string)
-	)
+	return newControllableMockOpenSearchServer().srv
+}
+
+func newControllableMockOpenSearchServer() *mockOpenSearchServer {
+	m := &mockOpenSearchServer{
+		indices: make(map[string]map[string]mockDoc),
+		aliases: make(map[string][]string),
+	}
 
 	resolveTarget := func(name string) (string, bool) {
-		if _, ok := indices[name]; ok {
+		if _, ok := m.indices[name]; ok {
 			return name, true
 		}
-		if list := aliases[name]; len(list) > 0 {
+		if list := m.aliases[name]; len(list) > 0 {
 			return list[len(list)-1], true
 		}
 		return "", false
 	}
 
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		bodyBytes, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		defer mu.Unlock()
+		m.mu.Lock()
 
 		path := r.URL.Path
 		switch {
 		case strings.HasPrefix(path, "/_alias/"):
 			aliasName, _ := url.PathUnescape(strings.TrimPrefix(path, "/_alias/"))
-			targets := aliases[aliasName]
+			targets := m.aliases[aliasName]
 			if len(targets) == 0 {
+				m.mu.Unlock()
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
@@ -68,9 +80,18 @@ func newMockOpenSearchServer() *httptest.Server {
 			for _, idx := range targets {
 				resp[idx] = map[string]any{"aliases": map[string]any{aliasName: map[string]any{}}}
 			}
+			m.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(resp)
 
 		case path == "/_aliases" && r.Method == http.MethodPost:
+			mode := m.swapMode
+			if mode == "fail_500" {
+				m.swapMode = ""
+				m.mu.Unlock()
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = io.WriteString(w, `{"error":"injected alias swap failure"}`)
+				return
+			}
 			var req struct {
 				Actions []map[string]struct {
 					Index string `json:"index"`
@@ -80,19 +101,32 @@ func newMockOpenSearchServer() *httptest.Server {
 			_ = json.Unmarshal(bodyBytes, &req)
 			for _, act := range req.Actions {
 				if rem, ok := act["remove"]; ok {
-					cur := aliases[rem.Alias]
+					cur := m.aliases[rem.Alias]
 					next := cur[:0]
 					for _, x := range cur {
 						if x != rem.Index {
 							next = append(next, x)
 						}
 					}
-					aliases[rem.Alias] = next
+					m.aliases[rem.Alias] = next
 				}
 				if add, ok := act["add"]; ok {
-					aliases[add.Alias] = append(aliases[add.Alias], add.Index)
+					m.aliases[add.Alias] = append(m.aliases[add.Alias], add.Index)
 				}
 			}
+			if mode == "commit_then_drop" {
+				m.swapMode = ""
+				m.mu.Unlock()
+				if hj, ok := w.(http.Hijacker); ok {
+					if conn, _, err := hj.Hijack(); err == nil {
+						_ = conn.Close()
+						return
+					}
+				}
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			m.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"acknowledged": true})
 
 		case path == "/_bulk" && r.Method == http.MethodPost:
@@ -116,11 +150,13 @@ func newMockOpenSearchServer() *httptest.Server {
 				_ = json.Unmarshal(sc.Bytes(), &doc)
 				target, ok := resolveTarget(meta.Index.Index)
 				if !ok {
+					m.mu.Unlock()
 					w.WriteHeader(http.StatusNotFound)
 					return
 				}
-				indices[target][meta.Index.ID] = doc
+				m.indices[target][meta.Index.ID] = doc
 			}
+			m.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"errors": false})
 
 		case strings.HasSuffix(path, "/_count"):
@@ -128,10 +164,11 @@ func newMockOpenSearchServer() *httptest.Server {
 			name, _ = url.PathUnescape(name)
 			target, ok := resolveTarget(name)
 			if !ok {
+				m.mu.Unlock()
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			docs := indices[target]
+			docs := m.indices[target]
 			if strings.Contains(string(bodyBytes), `"vector"`) {
 				vc := 0
 				for _, d := range docs {
@@ -139,22 +176,27 @@ func newMockOpenSearchServer() *httptest.Server {
 						vc++
 					}
 				}
+				m.mu.Unlock()
 				_ = json.NewEncoder(w).Encode(map[string]any{"count": vc})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"count": len(docs)})
+			count := len(docs)
+			m.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"count": count})
 
 		case strings.HasSuffix(path, "/_search"):
 			name := strings.TrimSuffix(strings.TrimPrefix(path, "/"), "/_search")
 			name, _ = url.PathUnescape(name)
 			target, ok := resolveTarget(name)
 			if !ok {
+				m.mu.Unlock()
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
 			var q map[string]any
 			_ = json.Unmarshal(bodyBytes, &q)
-			hits := evalMockSearch(indices[target], q)
+			hits := evalMockSearch(m.indices[target], q)
+			m.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"hits": map[string]any{"hits": hits},
 			})
@@ -165,35 +207,44 @@ func newMockOpenSearchServer() *httptest.Server {
 			docID, _ := url.PathUnescape(parts[1])
 			target, ok := resolveTarget(name)
 			if !ok {
+				m.mu.Unlock()
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			if _, exists := indices[target][docID]; !exists {
+			if _, exists := m.indices[target][docID]; !exists {
+				m.mu.Unlock()
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			delete(indices[target], docID)
+			delete(m.indices[target], docID)
+			m.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"result": "deleted"})
 
 		case strings.HasSuffix(path, "/_refresh"):
+			m.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"_shards": map[string]any{"failed": 0}})
 
 		case r.Method == http.MethodPut:
 			name, _ := url.PathUnescape(strings.TrimPrefix(path, "/"))
-			if _, exists := indices[name]; !exists {
-				indices[name] = make(map[string]mockDoc)
+			if _, exists := m.indices[name]; !exists {
+				m.indices[name] = make(map[string]mockDoc)
 			}
+			m.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"acknowledged": true})
 
 		case r.Method == http.MethodDelete:
 			name, _ := url.PathUnescape(strings.TrimPrefix(path, "/"))
-			delete(indices, name)
+			delete(m.indices, name)
+			m.deleted = append(m.deleted, name)
+			m.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"acknowledged": true})
 
 		default:
+			m.mu.Unlock()
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
+	return m
 }
 
 func evalMockSearch(docs map[string]mockDoc, body map[string]any) []map[string]any {
@@ -291,6 +342,116 @@ func TestOpenSearchContractOfflineMock(t *testing.T) {
 			t.Fatalf("opensearch.Open: %v", err)
 		}
 		return idx
+	})
+}
+
+func TestResetAndRebuildSwapErrorHandling(t *testing.T) {
+	t.Run("lost_response_after_commit", func(t *testing.T) {
+		mock := newControllableMockOpenSearchServer()
+		t.Cleanup(mock.srv.Close)
+
+		idx, err := opensearch.Open(t.Context(), opensearch.Config{
+			Endpoint:    mock.srv.URL,
+			IndexPrefix: "q_swap_drop",
+		})
+		if err != nil {
+			t.Fatalf("opensearch.Open: %v", err)
+		}
+		if err := idx.Upsert(t.Context(), storage.SearchDocument{
+			ID: "old-1", EntityType: "memory", Scope: "room:r1", Text: "legacy lantern", ObservedBy: []string{"alice"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		mock.mu.Lock()
+		mock.swapMode = "commit_then_drop"
+		mock.mu.Unlock()
+
+		docsCh := make(chan storage.SearchDocument, 1)
+		docsCh <- storage.SearchDocument{
+			ID: "new-1", EntityType: "memory", Scope: "room:r1", Text: "rebuilt lighthouse", ObservedBy: []string{"alice"},
+		}
+		close(docsCh)
+
+		if err := idx.ResetAndRebuild(t.Context(), docsCh); err != nil {
+			t.Fatalf("expected ResetAndRebuild to succeed when alias swap committed before connection drop, got: %v", err)
+		}
+
+		mock.mu.Lock()
+		activeTargets := slices.Clone(mock.aliases["q_swap_drop_records"])
+		deleted := slices.Clone(mock.deleted)
+		_, hasGen2 := mock.indices["q_swap_drop_records_2"]
+		_, hasGen1 := mock.indices["q_swap_drop_records_1"]
+		mock.mu.Unlock()
+
+		if !slices.Equal(activeTargets, []string{"q_swap_drop_records_2"}) {
+			t.Fatalf("expected alias pointing to gen 2, got %v", activeTargets)
+		}
+		if !hasGen2 {
+			t.Fatal("expected new backing index q_swap_drop_records_2 to remain intact")
+		}
+		if hasGen1 || !slices.Contains(deleted, "q_swap_drop_records_1") {
+			t.Fatalf("expected old backing index q_swap_drop_records_1 deleted (deleted=%v)", deleted)
+		}
+
+		hits, err := idx.Search(t.Context(), storage.SearchQuery{Mode: "lexical", Text: "rebuilt lighthouse"})
+		if err != nil || len(hits) != 1 || hits[0].ID != "new-1" {
+			t.Fatalf("expected rebuilt document searchable after recovered swap, hits=%+v err=%v", hits, err)
+		}
+	})
+
+	t.Run("failed_swap_cleans_up_staged_index", func(t *testing.T) {
+		mock := newControllableMockOpenSearchServer()
+		t.Cleanup(mock.srv.Close)
+
+		idx, err := opensearch.Open(t.Context(), opensearch.Config{
+			Endpoint:    mock.srv.URL,
+			IndexPrefix: "q_swap_fail",
+		})
+		if err != nil {
+			t.Fatalf("opensearch.Open: %v", err)
+		}
+		if err := idx.Upsert(t.Context(), storage.SearchDocument{
+			ID: "orig-1", EntityType: "memory", Scope: "room:r1", Text: "steady anchor", ObservedBy: []string{"alice"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		mock.mu.Lock()
+		mock.swapMode = "fail_500"
+		mock.mu.Unlock()
+
+		docsCh := make(chan storage.SearchDocument, 1)
+		docsCh <- storage.SearchDocument{
+			ID: "bad-2", EntityType: "memory", Scope: "room:r1", Text: "unreachable draft", ObservedBy: []string{"alice"},
+		}
+		close(docsCh)
+
+		if err := idx.ResetAndRebuild(t.Context(), docsCh); err == nil {
+			t.Fatal("expected ResetAndRebuild to return error on HTTP 500 swap failure")
+		}
+
+		mock.mu.Lock()
+		activeTargets := slices.Clone(mock.aliases["q_swap_fail_records"])
+		deleted := slices.Clone(mock.deleted)
+		_, hasGen2 := mock.indices["q_swap_fail_records_2"]
+		_, hasGen1 := mock.indices["q_swap_fail_records_1"]
+		mock.mu.Unlock()
+
+		if !slices.Equal(activeTargets, []string{"q_swap_fail_records_1"}) {
+			t.Fatalf("expected original alias target gen 1 preserved, got %v", activeTargets)
+		}
+		if !hasGen1 {
+			t.Fatal("expected original backing index q_swap_fail_records_1 preserved")
+		}
+		if hasGen2 || !slices.Contains(deleted, "q_swap_fail_records_2") {
+			t.Fatalf("expected failed staged index q_swap_fail_records_2 cleaned up (deleted=%v)", deleted)
+		}
+
+		hits, err := idx.Search(t.Context(), storage.SearchQuery{Mode: "lexical", Text: "steady anchor"})
+		if err != nil || len(hits) != 1 || hits[0].ID != "orig-1" {
+			t.Fatalf("expected original document still searchable, hits=%+v err=%v", hits, err)
+		}
 	})
 }
 

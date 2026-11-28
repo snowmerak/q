@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -581,8 +582,24 @@ drained:
 	}
 
 	if err := i.swapAlias(ctx, oldTargets, nextIdx); err != nil {
-		cleanupNext()
-		return err
+		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		targets, targetErr := i.currentAliasTargets(checkCtx)
+		if targetErr != nil {
+			return err
+		}
+		if !slices.Contains(targets, nextIdx) {
+			cleanupNext()
+			return err
+		}
+		// Swap actually succeeded on OpenSearch despite the lost/errored HTTP response.
+		for _, old := range oldTargets {
+			if old != nextIdx && !slices.Contains(targets, old) {
+				_, _, _ = i.doJSON(checkCtx, http.MethodDelete, "/"+url.PathEscape(old), nil)
+			}
+		}
+		_, _, _ = i.doJSON(checkCtx, http.MethodPost, "/"+url.PathEscape(nextIdx)+"/_refresh", nil)
+		return nil
 	}
 	for _, old := range oldTargets {
 		if old != nextIdx {

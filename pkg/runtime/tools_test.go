@@ -540,3 +540,141 @@ func TestAppendOnlyPromptPrefixAndCompactionEpoch(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactIfNeededDropsStaleTailStateDeltas(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"chat-1"}]}`)
+		case "/v1/chat/completions":
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), "running memory summary") {
+				_, _ = io.WriteString(w, `{"id":"sum1","object":"chat.completion","model":"chat-1","choices":[{"index":0,"message":{"role":"assistant","content":"Merged summary after seq 2."},"finish_reason":"stop"}]}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"id":"val1","object":"chat.completion","model":"chat-1","choices":[{"index":0,"message":{"role":"assistant","content":"[]"},"finish_reason":"stop"}]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	rdb, err := sqlite.Open(t.Context(), filepath.Join(dir, "q.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdb.Close()
+
+	cfg := config.Default()
+	cfg.LLM.Providers = []gateway.ProviderConfig{{
+		ID: "mock", Type: "openai-compatible", Enabled: true, BaseURL: srv.URL + "/v1",
+	}}
+	cfg.LLM.Roles.ChatModel = "mock/chat-1"
+	cfg.LLM.Roles.MemoryModel = "mock/chat-1"
+	gw, err := gateway.NewContext(t.Context(), cfg.GatewayConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
+
+	persona, _ := rdb.Personas().Create(t.Context(), domain.Persona{Name: "Alex"})
+	char, _ := rdb.Characters().Create(t.Context(), domain.Character{Name: "Noa"})
+	room, err := rdb.Rooms().Create(t.Context(), domain.Room{
+		Title:           "Atelier",
+		Mode:            domain.RoomModeDirect,
+		PersonaID:       persona.ID,
+		PersonaSnapshot: persona,
+		WorkDir:         "/dir-c",
+	}, []domain.RoomMember{{
+		CharacterID:       char.ID,
+		CharacterSnapshot: char,
+		Active:            true,
+		ActorState: domain.ActorState{
+			Self: domain.ActorAffect{Valence: -10},
+			PromptCache: &domain.PromptCacheState{
+				EpochSeq: 0,
+				Baseline: &domain.PromptSnapshotState{
+					WorkDir: "/dir-a",
+				},
+				LastEmitted: &domain.PromptSnapshotState{
+					Self:    domain.ActorAffect{Valence: 50},
+					WorkDir: "/dir-b",
+				},
+				Injections: []domain.PromptInjection{{
+					AfterSeq: 3,
+					Content:  "Updated Internal Affect State: valence=50, activation=0, stressed=false\nUpdated Room Working Directory: /dir-b",
+				}},
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turn, _, err := rdb.Turns().CreateOrGetIdempotent(t.Context(), domain.Turn{
+		RoomID: room.ID, RequestID: "req-compact-stale", InputHash: "h1", Status: domain.TurnStatusCompleted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	longOld := strings.Repeat("archived conversation line ", 35)
+	contents := []string{longOld, longOld, "kept turn 3", "latest turn 4"}
+	var msgs []domain.Message
+	for _, c := range contents {
+		m, err := rdb.Messages().Append(t.Context(), domain.Message{
+			RoomID:     room.ID,
+			TurnID:     turn.ID,
+			Role:       domain.MessageRoleUser,
+			AuthorID:   persona.ID,
+			AuthorName: "Alex",
+			Content:    c,
+			ObservedBy: []string{persona.ID, char.ID},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgs = append(msgs, m)
+	}
+
+	mems, _ := rdb.Rooms().ListMembers(t.Context(), room.ID)
+	models := runtime.ResolvedModels{
+		ChatModel:     "mock/chat-1",
+		MemoryModel:   "mock/chat-1",
+		ContextWindow: 350,
+	}
+	updated, compacted, err := runtime.CompactIfNeeded(t.Context(), rdb, gw, room, mems[0], nil, msgs, models, turn.ID)
+	if err != nil {
+		t.Fatalf("CompactIfNeeded: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected compaction to trigger")
+	}
+	if updated.ActorState.CompactedThroughSeq <= 0 || updated.ActorState.CompactedThroughSeq >= 3 {
+		t.Fatalf("expected seq 3 to stay in kept tail with CompactedThroughSeq in [1,2], got %d", updated.ActorState.CompactedThroughSeq)
+	}
+
+	prepped, err := runtime.PrepareAppendOnlyContext(t.Context(), rdb, room, updated, nil, msgs)
+	if err != nil {
+		t.Fatalf("PrepareAppendOnlyContext: %v", err)
+	}
+	if prepped.ActorState.PromptCache == nil || len(prepped.ActorState.PromptCache.Injections) != 0 {
+		t.Fatalf("expected stale tail injections cleared on compaction epoch, got %+v", prepped.ActorState.PromptCache)
+	}
+
+	assembled, err := runtime.BuildActorPrompt(room, prepped, nil, msgs, models.ContextWindow)
+	if err != nil {
+		t.Fatalf("BuildActorPrompt: %v", err)
+	}
+	if len(assembled.Messages) == 0 || !strings.Contains(assembled.Messages[0].Content, "/dir-c") || !strings.Contains(assembled.Messages[0].Content, "valence=-10") {
+		t.Fatalf("expected baseline system prompt to contain latest state (/dir-c, valence=-10), got %+v", assembled.Messages)
+	}
+	for _, msg := range assembled.Messages[1:] {
+		for _, stale := range []string{"/dir-b", "Updated Room Working Directory", "valence=50"} {
+			if strings.Contains(msg.Content, stale) {
+				t.Fatalf("stale pre-compaction state %q re-appeared in tail message: %q", stale, msg.Content)
+			}
+		}
+	}
+}

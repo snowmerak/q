@@ -323,8 +323,8 @@ func (e *Engine) executeGroupTurn(roomID string, turn domain.Turn, specCtx conte
 			defer snap.Close()
 
 			var member *domain.RoomMember
-			resumingTools := len(cp.RemainingCalls) > 0 && cp.ActorID != ""
-			if resumingTools {
+			resumingActor := cp.ActorID != "" && (len(cp.RemainingCalls) > 0 || len(cp.ToolHistory) > 0)
+			if resumingActor {
 				for i := range activeMembers {
 					if activeMembers[i].CharacterID == cp.ActorID {
 						m := activeMembers[i]
@@ -384,7 +384,7 @@ func (e *Engine) executeGroupTurn(roomID string, turn domain.Turn, specCtx conte
 				}
 			}
 
-			res := e.executeActorStep(baseCtx, specCtx, roomID, &turn, &cp, room, members, member, latestUserText, false)
+			res := e.executeActorStep(baseCtx, specCtx, roomID, &turn, &cp, room, members, member, latestUserText, maxTurns)
 			switch res.outcome {
 			case actorStepPaused, actorStepStopped, actorStepFailed:
 				return false
@@ -398,20 +398,9 @@ func (e *Engine) executeGroupTurn(roomID string, turn domain.Turn, specCtx conte
 				}
 				confirmed := fmtGroupConfirmed(room, member.CharacterSnapshot.Name, latestUserText, res.replyText, allMsgs)
 				e.schedulePostCommit(room, *member, members, turn.ID, confirmed, res.observedBy, res.models)
-
-				// Reset per-actor tool state after bubble commits; reset waited list since conversation advanced.
-				cp.ToolHistory = nil
-				cp.RemainingCalls = nil
-				cp.PendingInvocationID = ""
-				cp.PendingQuestionID = ""
-				cp.PendingToolCallID = ""
-				cp.ToolRounds = 0
-				cp.Thinking = ""
-				cp.GroupWaited = nil
-				cp.ActorID = ""
-				cp.GroupSteps++
-				cp.Phase = "group_step_committed"
-				e.saveCheckpoint(baseCtx, &turn, cp)
+				if res.turnCompleted {
+					return false
+				}
 
 				if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
 					return false
@@ -419,13 +408,6 @@ func (e *Engine) executeGroupTurn(roomID string, turn domain.Turn, specCtx conte
 					specCtx = nextCtx
 					cp = reloadCheckpoint(turn.CheckpointJSON)
 					return true
-				}
-
-				if cp.GroupSteps >= maxTurns {
-					if err := e.finishCompleted(baseCtx, roomID, &turn, lastUsage); err != nil {
-						e.finishFailed(baseCtx, roomID, &turn, "internal", err.Error(), true)
-					}
-					return false
 				}
 
 				updatedMsgs, _ := e.rdb.Messages().List(baseCtx, roomID, 0, 500)
