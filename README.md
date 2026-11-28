@@ -6,19 +6,21 @@
 
 ## 핵심 방향
 
-- **모듈 & 실행 전제:** `github.com/snowmerak/q/v2` (Go 모듈 v2). 코어 엔진은 **단일 인스턴스(Single-instance)** 프로세스 실행을 전제로 합니다.
+- **모듈 & 코어 공유:** `github.com/snowmerak/q/v2` (Go 모듈 v2). 코어 엔진은 **단일 인스턴스(Single-instance)** 프로세스 실행을 전제로 하며, `cmd/q`(Server/CLI)와 `desktop/`(Wails v3)이 동일한 공개 코어 패키지(`pkg/app`)를 인프로세스로 공유합니다(`desktop/`은 `desktop/go.mod`로 GUI 네이티브 의존성만 분리).
+- **공개 패키지 + 통합 자산:** 외부 Go 프로젝트에서도 import할 수 있도록 `pkg/` 아래 계층화된 공개 패키지를 제공합니다. `llm-provider`와 `cdp-q-driver` 코드를 저장소 내(`pkg/llm`, `pkg/cdp`)로 통합해 Q 코어가 직접 임베드하는 동시에, 독립 배포 가능한 별도 CLI(`cmd/llm-provider`, `cmd/cdp-q-driver`)도 함께 제공합니다.
 - **상호작용 중심 (Evernight 선별 이식):**
   - 1:1 캐릭터 봇 대화와 다수 캐릭터가 참여하는 멀티캐릭터 룸(Room)을 모두 1차 범위로 지원하며, 산문(소설) 재집필 없이 **채팅 버블 중심의 직접 대화**로 진행합니다.
   - 캐릭터 성격·페르소나·장기기억·가치관·상태/관계 유지, `observedBy` 기반 인지 격리, 실시간 끼어들기/중단, **Decisions**(`github.com/snowmerak/decisions`) 기반 이산 판단, 체크포인트 복구 개념을 계승합니다.
-- **작업 수행 & 승인 게이트 (Q v1 · Decisions 결합):**
-  - 1차 작업 도구로 **기본 MCP 연동**과 **브라우저 제어(`cdp-q-driver` 또는 `ego lite`)**를 포함하며, 대용량 출력은 아티팩트(Loom 패턴)로 분리합니다.
+- **작업 수행, 브라우저 제어 & 승인 게이트:**
+  - 1차 작업 도구로 **기본 MCP 연동**과 **브라우저 제어**를 포함하며, 대용량 출력은 아티팩트(Loom 패턴)로 분리합니다.
+  - 브라우저 제어는 Q v1과 동일하게 설정(`browser_control`)에서 `cdp-q-driver` 또는 `ego-browser` 중 선호 드라이버와 인자를 선택합니다.
   - 도구 실행 승인 게이트는 **`bypass`**(무조건 실행), **`auto-detection`**(Decisions 판정 후 필요한 경우만 승인 요청), **`request`**(전부 승인 요청) 3가지 모드를 제공합니다.
-- **지식 저장소 & LLM 기반 (Q v1 · `llm-provider` 선별 이식):**
-  - `github.com/snowmerak/llm-provider`를 통해 멀티 LLM 프로바이더, 모델 메타데이터/능력(`capabilities`, 추론 강도, 도구 호출, 임베딩) 라우팅을 연동합니다.
-  - 조합 가능한 저장소: RDB(`PostgreSQL` / `MySQL` / `SQLite`)와 검색 엔진(`OpenSearch` / `Bleve + HNSW`)을 환경에 맞게 자유롭게 조합해 구성합니다.
-- **클라이언트 & UI:** **React + TypeScript + shadcn/ui** 기반의 라이트/다크 모드 UI를 제공하며, 데스크톱은 **Wails v3** 앱을 1차 대상으로 하고 모바일은 추후 대응을 검토합니다.
+- **조합 가능한 저장소 & 단일 데이터 디렉터리:**
+  - RDB(`PostgreSQL` / `MySQL` / `SQLite`)와 검색 엔진(`OpenSearch` / `Bleve + HNSW`)을 환경에 맞게 자유롭게 조합해 구성합니다.
+  - 로컬 설정·DB·인덱스·아티팩트는 단일 전역 데이터 디렉터리(예: `~/.q/` 또는 OS 앱 데이터 경로)에 저장하며, `--data-dir` 플래그로 위치를 오버라이드할 수 있습니다.
+- **클라이언트 & UI:** **React + TypeScript + shadcn/ui** 기반의 라이트/다크 모드 UI를 제공하며, `web/dist`는 Git에 포함하지 않고 빌드/릴리스 시 생성해 Go 바이너리에 임베드합니다. 데스크톱은 **Wails v3** 앱을 1차 대상으로 하고 모바일은 추후 대응을 검토합니다.
 
 ## 문서
 
 - [제품 요구사항 정의서 (PRD)](./docs/prd.md) — 제품 목표, 1차 범위(In-Scope / Out-of-Scope), `REQ-*` 요구사항 및 수용 기준, 미결 질문
-- [프로젝트 청사진 (Blueprint)](./docs/blueprint.md) — 자산 재사용 맵, 단일 인스턴스 시스템 컨텍스트, 도메인 경계, 조합 가능한 저장소 구조(`RDB × OpenSearch/Bleve+HNSW`), 실행 흐름, 임시 디렉터리 구성안, 마일스톤 및 후속 ADR 목록
+- [프로젝트 청사진 (Blueprint)](./docs/blueprint.md) — 자산 재사용 맵, 공유 코어 및 단일 인스턴스 토폴로지, `pkg/` 공개 패키지 경계, 조합 가능한 저장소 구조, 실행 흐름, 확정 프로젝트 구성, 마일스톤 및 후속 ADR 목록
