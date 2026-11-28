@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -101,6 +103,206 @@ type AssembledPrompt struct {
 	EstimatedInputTokens int
 }
 
+func snapshotPromptState(room domain.Room, state domain.ActorState) domain.PromptSnapshotState {
+	var rels map[string]domain.Relationship
+	if len(state.Relationships) > 0 {
+		rels = maps.Clone(state.Relationships)
+	}
+	var vals []domain.CharacterValue
+	if len(state.Values) > 0 {
+		vals = slices.Clone(state.Values)
+	}
+	return domain.PromptSnapshotState{
+		Self:          state.Self,
+		Relationships: rels,
+		Values:        vals,
+		WorkDir:       strings.TrimSpace(room.WorkDir),
+	}
+}
+
+func clonePromptSnapshot(src *domain.PromptSnapshotState) *domain.PromptSnapshotState {
+	if src == nil {
+		return nil
+	}
+	out := *src
+	if len(src.Relationships) > 0 {
+		out.Relationships = maps.Clone(src.Relationships)
+	}
+	if len(src.Values) > 0 {
+		out.Values = slices.Clone(src.Values)
+	}
+	return &out
+}
+
+func formatRecalledSection(recalled []memory.RecalledItem) string {
+	if len(recalled) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Recalled Memories, Earlier Dialogue & Reference Knowledge:\n")
+	for _, item := range recalled {
+		if item.Kind == "knowledge" {
+			if item.AuthorName != "" {
+				b.WriteString(fmt.Sprintf("- [Knowledge: %s] %s\n", item.AuthorName, item.Text))
+			} else {
+				b.WriteString(fmt.Sprintf("- [Knowledge] %s\n", item.Text))
+			}
+			continue
+		}
+		ts := time.UnixMilli(item.OccurredAt).UTC().Format("2006-01-02 15:04")
+		switch {
+		case item.RoomTitle != "" && item.Kind == "speech" && item.AuthorName != "":
+			b.WriteString(fmt.Sprintf("- [%s | Room: %s | %s] %s\n", ts, item.RoomTitle, item.AuthorName, item.Text))
+		case item.RoomTitle != "":
+			b.WriteString(fmt.Sprintf("- [%s | Room: %s] %s\n", ts, item.RoomTitle, item.Text))
+		case item.Kind == "speech" && item.AuthorName != "":
+			b.WriteString(fmt.Sprintf("- [%s | %s] %s\n", ts, item.AuthorName, item.Text))
+		default:
+			b.WriteString(fmt.Sprintf("- [%s] %s\n", ts, item.Text))
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func formatAffectLine(prefix string, a domain.ActorAffect) string {
+	return fmt.Sprintf("%s: valence=%d, activation=%d, stressed=%t", prefix, a.Valence, a.Activation, a.Stressed)
+}
+
+func formatStateDelta(room domain.Room, prev, cur domain.PromptSnapshotState) string {
+	var parts []string
+	if prev.Self != cur.Self {
+		parts = append(parts, formatAffectLine("Updated Internal Affect State", cur.Self))
+	}
+	if room.PersonaID != "" {
+		prevRel, hadPrev := prev.Relationships[room.PersonaID]
+		curRel, hasCur := cur.Relationships[room.PersonaID]
+		if hasCur && (!hadPrev || prevRel != curRel) {
+			name := room.PersonaSnapshot.Name
+			if name == "" {
+				name = "User"
+			}
+			parts = append(parts, fmt.Sprintf("Updated Relationship with %s: valence=%d, activation=%d, trust=%d, stressed=%t",
+				name, curRel.Valence, curRel.Activation, curRel.Trust, curRel.Stressed))
+		}
+	}
+	if !slices.Equal(prev.Values, cur.Values) {
+		if vals := memory.RenderValues(cur.Values); vals != "" {
+			parts = append(parts, "Updated Values:\n"+strings.TrimSpace(vals))
+		} else {
+			parts = append(parts, "Updated Values: (cleared)")
+		}
+	}
+	if prev.WorkDir != cur.WorkDir {
+		wd := cur.WorkDir
+		if wd == "" {
+			wd = "(none)"
+		}
+		parts = append(parts, "Updated Room Working Directory: "+wd)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// PrepareAppendOnlyContext initializes or appends incremental turn-scoped context
+// (state deltas + recalled memories) anchored to the latest visible message seq so
+// earlier messages stay byte-for-byte immutable between compactions.
+func PrepareAppendOnlyContext(
+	ctx context.Context,
+	rdb storage.RDBStore,
+	room domain.Room,
+	member domain.RoomMember,
+	recalled []memory.RecalledItem,
+	allMessages []domain.Message,
+) (domain.RoomMember, error) {
+	curSnap := snapshotPromptState(room, member.ActorState)
+	dirty := false
+	pc := member.ActorState.PromptCache
+	if pc == nil || pc.Baseline == nil || pc.EpochSeq != member.ActorState.CompactedThroughSeq {
+		var kept []domain.PromptInjection
+		if pc != nil {
+			for _, inj := range pc.Injections {
+				if inj.AfterSeq > member.ActorState.CompactedThroughSeq {
+					kept = append(kept, inj)
+				}
+			}
+		}
+		pc = &domain.PromptCacheState{
+			EpochSeq:    member.ActorState.CompactedThroughSeq,
+			Baseline:    clonePromptSnapshot(&curSnap),
+			LastEmitted: clonePromptSnapshot(&curSnap),
+			Injections:  kept,
+		}
+		member.ActorState.PromptCache = pc
+		dirty = true
+	}
+
+	var anchorSeq int64
+	for _, m := range allMessages {
+		if m.Seq <= member.ActorState.CompactedThroughSeq {
+			continue
+		}
+		if !m.ObservedByActor(member.CharacterID) {
+			continue
+		}
+		if m.Seq > anchorSeq {
+			anchorSeq = m.Seq
+		}
+	}
+
+	alreadyAnchored := false
+	for _, inj := range pc.Injections {
+		if inj.AfterSeq == anchorSeq {
+			alreadyAnchored = true
+			break
+		}
+	}
+	if !alreadyAnchored {
+		lastEmitted := pc.LastEmitted
+		if lastEmitted == nil {
+			lastEmitted = pc.Baseline
+		}
+		var sections []string
+		if delta := formatStateDelta(room, *lastEmitted, curSnap); delta != "" {
+			sections = append(sections, delta)
+		}
+		if recText := formatRecalledSection(recalled); recText != "" {
+			sections = append(sections, recText)
+		}
+		if len(sections) > 0 {
+			pc.Injections = append(pc.Injections, domain.PromptInjection{
+				AfterSeq: anchorSeq,
+				Content:  strings.Join(sections, "\n\n"),
+			})
+			pc.LastEmitted = clonePromptSnapshot(&curSnap)
+			dirty = true
+		}
+	}
+
+	if !dirty || rdb == nil {
+		return member, nil
+	}
+
+	if err := rdb.Tx(ctx, func(tx storage.RDBTx) error {
+		members, err := tx.Rooms().ListMembers(ctx, room.ID)
+		if err != nil {
+			return err
+		}
+		for _, cur := range members {
+			if cur.CharacterID == member.CharacterID {
+				cur.ActorState.PromptCache = member.ActorState.PromptCache
+				if err := tx.Rooms().UpsertMember(ctx, cur); err != nil {
+					return err
+				}
+				member = cur
+				return nil
+			}
+		}
+		return tx.Rooms().UpsertMember(ctx, member)
+	}); err != nil {
+		return member, err
+	}
+	return member, nil
+}
+
 // BuildActorPrompt assembles an append-only prefix prompt obeying observedBy
 // isolation and chat-bubble presentation (no 3rd-person prose rewriting).
 func BuildActorPrompt(
@@ -112,6 +314,19 @@ func BuildActorPrompt(
 ) (AssembledPrompt, error) {
 	if err := memory.AssertValuesBudget(member.ActorState.Values, contextWindow, 0.20); err != nil {
 		return AssembledPrompt{}, err
+	}
+
+	var baseline domain.PromptSnapshotState
+	var injections []domain.PromptInjection
+	usedPromptCache := false
+	if member.ActorState.PromptCache != nil &&
+		member.ActorState.PromptCache.Baseline != nil &&
+		member.ActorState.PromptCache.EpochSeq == member.ActorState.CompactedThroughSeq {
+		baseline = *member.ActorState.PromptCache.Baseline
+		injections = member.ActorState.PromptCache.Injections
+		usedPromptCache = true
+	} else {
+		baseline = snapshotPromptState(room, member.ActorState)
 	}
 
 	char := member.CharacterSnapshot
@@ -144,13 +359,34 @@ func BuildActorPrompt(
 		}
 		stablePrefix.WriteByte('\n')
 	}
-	if vals := memory.RenderValues(member.ActorState.Values); vals != "" {
+	if vals := memory.RenderValues(baseline.Values); vals != "" {
 		stablePrefix.WriteByte('\n')
 		stablePrefix.WriteString(vals)
 	}
 	if memo := strings.TrimSpace(member.ActorState.CompressedMemo); memo != "" {
 		stablePrefix.WriteString("\nEarlier Conversation Summary:\n")
 		stablePrefix.WriteString(memo)
+		stablePrefix.WriteByte('\n')
+	}
+	stablePrefix.WriteByte('\n')
+	stablePrefix.WriteString(formatAffectLine("Internal Affect State", baseline.Self))
+	stablePrefix.WriteByte('\n')
+	if rel, ok := baseline.Relationships[room.PersonaID]; ok {
+		stablePrefix.WriteString("Relationship with ")
+		stablePrefix.WriteString(room.PersonaSnapshot.Name)
+		stablePrefix.WriteString(": valence=")
+		stablePrefix.WriteString(strconv.Itoa(rel.Valence))
+		stablePrefix.WriteString(", activation=")
+		stablePrefix.WriteString(strconv.Itoa(rel.Activation))
+		stablePrefix.WriteString(", trust=")
+		stablePrefix.WriteString(strconv.Itoa(rel.Trust))
+		stablePrefix.WriteString(", stressed=")
+		stablePrefix.WriteString(strconv.FormatBool(rel.Stressed))
+		stablePrefix.WriteByte('\n')
+	}
+	if baseline.WorkDir != "" {
+		stablePrefix.WriteString("Room Working Directory: ")
+		stablePrefix.WriteString(baseline.WorkDir)
 		stablePrefix.WriteByte('\n')
 	}
 
@@ -160,61 +396,18 @@ func BuildActorPrompt(
 		Content: strings.TrimSpace(stablePrefix.String()),
 	})
 
-	// Dynamic state + recalled memories follow the cacheable stable prefix.
-	var dynamicCtx strings.Builder
-	dynamicCtx.WriteString("Internal Affect State: valence=")
-	dynamicCtx.WriteString(strconv.Itoa(member.ActorState.Self.Valence))
-	dynamicCtx.WriteString(", activation=")
-	dynamicCtx.WriteString(strconv.Itoa(member.ActorState.Self.Activation))
-	dynamicCtx.WriteString(", stressed=")
-	dynamicCtx.WriteString(strconv.FormatBool(member.ActorState.Self.Stressed))
-	dynamicCtx.WriteByte('\n')
-	if rel, ok := member.ActorState.Relationships[room.PersonaID]; ok {
-		dynamicCtx.WriteString("Relationship with ")
-		dynamicCtx.WriteString(room.PersonaSnapshot.Name)
-		dynamicCtx.WriteString(": valence=")
-		dynamicCtx.WriteString(strconv.Itoa(rel.Valence))
-		dynamicCtx.WriteString(", activation=")
-		dynamicCtx.WriteString(strconv.Itoa(rel.Activation))
-		dynamicCtx.WriteString(", trust=")
-		dynamicCtx.WriteString(strconv.Itoa(rel.Trust))
-		dynamicCtx.WriteString(", stressed=")
-		dynamicCtx.WriteString(strconv.FormatBool(rel.Stressed))
-		dynamicCtx.WriteByte('\n')
-	}
-	if wd := strings.TrimSpace(room.WorkDir); wd != "" {
-		dynamicCtx.WriteString("Room Working Directory: ")
-		dynamicCtx.WriteString(wd)
-		dynamicCtx.WriteByte('\n')
-	}
-	if len(recalled) > 0 {
-		dynamicCtx.WriteString("\nRecalled Memories, Earlier Dialogue & Reference Knowledge:\n")
-		for _, item := range recalled {
-			if item.Kind == "knowledge" {
-				if item.AuthorName != "" {
-					dynamicCtx.WriteString(fmt.Sprintf("- [Knowledge: %s] %s\n", item.AuthorName, item.Text))
-				} else {
-					dynamicCtx.WriteString(fmt.Sprintf("- [Knowledge] %s\n", item.Text))
-				}
-				continue
-			}
-			ts := time.UnixMilli(item.OccurredAt).UTC().Format("2006-01-02 15:04")
-			switch {
-			case item.RoomTitle != "" && item.Kind == "speech" && item.AuthorName != "":
-				dynamicCtx.WriteString(fmt.Sprintf("- [%s | Room: %s | %s] %s\n", ts, item.RoomTitle, item.AuthorName, item.Text))
-			case item.RoomTitle != "":
-				dynamicCtx.WriteString(fmt.Sprintf("- [%s | Room: %s] %s\n", ts, item.RoomTitle, item.Text))
-			case item.Kind == "speech" && item.AuthorName != "":
-				dynamicCtx.WriteString(fmt.Sprintf("- [%s | %s] %s\n", ts, item.AuthorName, item.Text))
-			default:
-				dynamicCtx.WriteString(fmt.Sprintf("- [%s] %s\n", ts, item.Text))
-			}
+	injBySeq := make(map[int64]string, len(injections))
+	for _, inj := range injections {
+		if strings.TrimSpace(inj.Content) != "" {
+			injBySeq[inj.AfterSeq] = inj.Content
 		}
 	}
-	msgs = append(msgs, llmprovider.Message{
-		Role:    llmprovider.RoleSystem,
-		Content: strings.TrimSpace(dynamicCtx.String()),
-	})
+	if inj0, ok := injBySeq[0]; ok {
+		msgs = append(msgs, llmprovider.Message{
+			Role:    llmprovider.RoleUser,
+			Content: "<turn_context>\n" + inj0 + "\n</turn_context>",
+		})
+	}
 
 	visible := make([]domain.Message, 0, len(allMessages))
 	for _, m := range allMessages {
@@ -238,10 +431,39 @@ func BuildActorPrompt(
 		if m.LocationTag != "" && role == llmprovider.RoleUser {
 			content = "[" + m.LocationTag + "] " + content
 		}
+		inj, hasInj := injBySeq[m.Seq]
+		if hasInj && role == llmprovider.RoleUser {
+			content += "\n\n<turn_context>\n" + inj + "\n</turn_context>"
+			msgs = append(msgs, llmprovider.Message{
+				Role:    role,
+				Content: content,
+			})
+			continue
+		}
 		msgs = append(msgs, llmprovider.Message{
 			Role:    role,
 			Content: content,
 		})
+		if hasInj {
+			msgs = append(msgs, llmprovider.Message{
+				Role:    llmprovider.RoleUser,
+				Content: "<turn_context>\n" + inj + "\n</turn_context>",
+			})
+		}
+	}
+
+	if !usedPromptCache && len(recalled) > 0 {
+		if recallText := formatRecalledSection(recalled); recallText != "" {
+			wrapped := "<turn_context>\n" + recallText + "\n</turn_context>"
+			if n := len(msgs); n > 0 && msgs[n-1].Role == llmprovider.RoleUser {
+				msgs[n-1].Content += "\n\n" + wrapped
+			} else {
+				msgs = append(msgs, llmprovider.Message{
+					Role:    llmprovider.RoleUser,
+					Content: wrapped,
+				})
+			}
+		}
 	}
 
 	est := 0
@@ -353,9 +575,33 @@ func CompactIfNeeded(
 
 	newCompactedSeq := older[len(older)-1].Seq
 	err = rdb.Tx(ctx, func(tx storage.RDBTx) error {
-		member.ActorState.CompressedMemo = newMemo
-		member.ActorState.CompactedThroughSeq = newCompactedSeq
-		if err := tx.Rooms().UpsertMember(ctx, member); err != nil {
+		cur := member
+		if freshMembers, listErr := tx.Rooms().ListMembers(ctx, room.ID); listErr == nil {
+			for _, m := range freshMembers {
+				if m.CharacterID == member.CharacterID {
+					cur = m
+					break
+				}
+			}
+		}
+		cur.ActorState.CompressedMemo = newMemo
+		cur.ActorState.CompactedThroughSeq = newCompactedSeq
+		var kept []domain.PromptInjection
+		if cur.ActorState.PromptCache != nil {
+			for _, inj := range cur.ActorState.PromptCache.Injections {
+				if inj.AfterSeq > newCompactedSeq {
+					kept = append(kept, inj)
+				}
+			}
+		}
+		newSnap := snapshotPromptState(room, cur.ActorState)
+		cur.ActorState.PromptCache = &domain.PromptCacheState{
+			EpochSeq:    newCompactedSeq,
+			Baseline:    &newSnap,
+			LastEmitted: clonePromptSnapshot(&newSnap),
+			Injections:  kept,
+		}
+		if err := tx.Rooms().UpsertMember(ctx, cur); err != nil {
 			return err
 		}
 		if len(candidates) > 0 {
@@ -363,9 +609,9 @@ func CompactIfNeeded(
 			if err := tx.Memories().CreateValueJob(ctx, domain.ValueJob{
 				ID:                 domain.NewID(),
 				RoomID:             room.ID,
-				CharacterID:        member.CharacterID,
+				CharacterID:        cur.CharacterID,
 				SourceTurnID:       turnID,
-				BaseValuesRevision: member.ActorState.ValuesRevision,
+				BaseValuesRevision: cur.ActorState.ValuesRevision,
 				CandidatesJSON:     string(candJSON),
 				Status:             domain.ValueJobQueued,
 				NextRunAt:          domain.NowMS(),
@@ -373,6 +619,7 @@ func CompactIfNeeded(
 				return err
 			}
 		}
+		member = cur
 		return nil
 	})
 	if err != nil {

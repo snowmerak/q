@@ -128,6 +128,7 @@ func (a *App) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 	}
 
 	snap := a.Snapshot()
+	defer snap.Close()
 	nowMS := domain.NowMS()
 	members := make([]domain.RoomMember, 0, len(in.CharacterIDs))
 	seenChars := make(map[string]struct{}, len(in.CharacterIDs))
@@ -215,88 +216,148 @@ func (a *App) handlePatchRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	cur, err := a.rdb.Rooms().Get(ctx, id)
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-	if cur.Version != *patch.ExpectedVersion {
-		writeError(w, http.StatusConflict, "version_conflict", "room version mismatch", false, nil)
-		return
-	}
-	if patch.Title != nil {
-		title := strings.TrimSpace(*patch.Title)
-		if title == "" {
-			writeError(w, http.StatusBadRequest, "invalid_input", "room title cannot be empty", false, nil)
-			return
-		}
-		cur.Title = title
-	}
-	if patch.ApprovalModeOverride != nil {
-		cur.ApprovalModeOverride = patch.ApprovalModeOverride
-	}
-	if patch.ModelOverrides != nil {
-		cur.ModelOverrides = patch.ModelOverrides
-	}
-	if patch.MaxTurnsPerInput != nil && *patch.MaxTurnsPerInput > 0 {
-		cur.MaxTurnsPerInput = *patch.MaxTurnsPerInput
-	}
-	if patch.WorkDir != nil {
-		cur.WorkDir = strings.TrimSpace(*patch.WorkDir)
-	}
-
-	updated, err := a.rdb.Rooms().Update(ctx, cur)
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-
+	var cleanCharIDs []string
 	if patch.CharacterIDs != nil {
-		if updated.Mode == domain.RoomModeDirect && len(patch.CharacterIDs) != 1 {
-			writeError(w, http.StatusBadRequest, "invalid_input", "direct room requires exactly 1 character_id", false, nil)
-			return
-		}
-		existing, err := a.rdb.Rooms().ListMembers(ctx, id)
-		if err != nil {
-			writeDomainError(w, err)
-			return
-		}
-		existingByID := make(map[string]domain.RoomMember, len(existing))
-		for _, m := range existing {
-			existingByID[m.CharacterID] = m
-		}
-		wanted := make(map[string]struct{}, len(patch.CharacterIDs))
-		nowMS := domain.NowMS()
-		for _, cid := range patch.CharacterIDs {
-			cid = strings.TrimSpace(cid)
-			wanted[cid] = struct{}{}
-			if m, ok := existingByID[cid]; ok {
-				m.Active = true
-				_ = a.rdb.Rooms().UpsertMember(ctx, m)
-				continue
-			}
-			ch, err := a.rdb.Characters().Get(ctx, cid)
-			if err != nil {
-				writeDomainError(w, err)
+		cleanCharIDs = make([]string, 0, len(patch.CharacterIDs))
+		seen := make(map[string]struct{}, len(patch.CharacterIDs))
+		for _, rawID := range patch.CharacterIDs {
+			cid := strings.TrimSpace(rawID)
+			if cid == "" {
+				writeError(w, http.StatusBadRequest, "invalid_input", "character_ids cannot contain empty strings", false, nil)
 				return
 			}
-			_ = a.rdb.Rooms().UpsertMember(ctx, domain.RoomMember{
-				RoomID:            id,
-				CharacterID:       ch.ID,
-				CharacterSnapshot: ch,
-				BaseSpeed:         10,
-				ActorState:        seedActorState(ch, nowMS),
-				Active:            true,
-				JoinedAt:          nowMS,
-			})
+			if _, dup := seen[cid]; dup {
+				continue
+			}
+			seen[cid] = struct{}{}
+			cleanCharIDs = append(cleanCharIDs, cid)
 		}
-		for _, m := range existing {
-			if _, keep := wanted[m.CharacterID]; !keep && m.Active {
-				m.Active = false
-				_ = a.rdb.Rooms().UpsertMember(ctx, m)
+	}
+
+	type apiErr struct {
+		status int
+		code   string
+		msg    string
+	}
+	var validationErr *apiErr
+
+	ctx := r.Context()
+	txErr := a.rdb.Tx(ctx, func(tx storage.RDBTx) error {
+		cur, err := tx.Rooms().Get(ctx, id)
+		if err != nil {
+			return err
+		}
+		if cur.Version != *patch.ExpectedVersion {
+			validationErr = &apiErr{status: http.StatusConflict, code: "version_conflict", msg: "room version mismatch"}
+			return errors.New("version_conflict")
+		}
+		if patch.Title != nil {
+			title := strings.TrimSpace(*patch.Title)
+			if title == "" {
+				validationErr = &apiErr{status: http.StatusBadRequest, code: "invalid_input", msg: "room title cannot be empty"}
+				return errors.New("invalid_input")
+			}
+			cur.Title = title
+		}
+		if patch.ApprovalModeOverride != nil {
+			cur.ApprovalModeOverride = patch.ApprovalModeOverride
+		}
+		if patch.ModelOverrides != nil {
+			cur.ModelOverrides = patch.ModelOverrides
+		}
+		if patch.MaxTurnsPerInput != nil && *patch.MaxTurnsPerInput > 0 {
+			cur.MaxTurnsPerInput = *patch.MaxTurnsPerInput
+		}
+		if patch.WorkDir != nil {
+			cur.WorkDir = strings.TrimSpace(*patch.WorkDir)
+		}
+
+		var existing []domain.RoomMember
+		fetchedChars := make(map[string]domain.Character)
+		if patch.CharacterIDs != nil {
+			if cur.Mode == domain.RoomModeDirect && len(cleanCharIDs) != 1 {
+				validationErr = &apiErr{status: http.StatusBadRequest, code: "invalid_input", msg: "direct room requires exactly 1 character_id"}
+				return errors.New("invalid_input")
+			}
+			if cur.Mode == domain.RoomModeGroup && len(cleanCharIDs) == 0 {
+				validationErr = &apiErr{status: http.StatusBadRequest, code: "invalid_input", msg: "group room requires at least 1 character_id"}
+				return errors.New("invalid_input")
+			}
+			existing, err = tx.Rooms().ListMembers(ctx, id)
+			if err != nil {
+				return err
+			}
+			existingSet := make(map[string]struct{}, len(existing))
+			for _, m := range existing {
+				existingSet[m.CharacterID] = struct{}{}
+			}
+			for _, cid := range cleanCharIDs {
+				if _, ok := existingSet[cid]; ok {
+					continue
+				}
+				ch, err := tx.Characters().Get(ctx, cid)
+				if err != nil {
+					if errors.Is(err, storage.ErrNotFound) {
+						validationErr = &apiErr{status: http.StatusNotFound, code: "not_found", msg: "character " + cid + " not found"}
+					}
+					return err
+				}
+				fetchedChars[cid] = ch
 			}
 		}
+
+		updated, err := tx.Rooms().Update(ctx, cur)
+		if err != nil {
+			return err
+		}
+
+		if patch.CharacterIDs != nil {
+			existingByID := make(map[string]domain.RoomMember, len(existing))
+			for _, m := range existing {
+				existingByID[m.CharacterID] = m
+			}
+			wanted := make(map[string]struct{}, len(cleanCharIDs))
+			nowMS := domain.NowMS()
+			for _, cid := range cleanCharIDs {
+				wanted[cid] = struct{}{}
+				if m, ok := existingByID[cid]; ok {
+					m.Active = true
+					if err := tx.Rooms().UpsertMember(ctx, m); err != nil {
+						return err
+					}
+					continue
+				}
+				ch := fetchedChars[cid]
+				if err := tx.Rooms().UpsertMember(ctx, domain.RoomMember{
+					RoomID:            updated.ID,
+					CharacterID:       ch.ID,
+					CharacterSnapshot: ch,
+					BaseSpeed:         10,
+					ActorState:        seedActorState(ch, nowMS),
+					Active:            true,
+					JoinedAt:          nowMS,
+				}); err != nil {
+					return err
+				}
+			}
+			for _, m := range existing {
+				if _, keep := wanted[m.CharacterID]; !keep && m.Active {
+					m.Active = false
+					if err := tx.Rooms().UpsertMember(ctx, m); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
+	})
+	if validationErr != nil {
+		writeError(w, validationErr.status, validationErr.code, validationErr.msg, false, nil)
+		return
+	}
+	if txErr != nil {
+		writeDomainError(w, txErr)
+		return
 	}
 
 	detail, err := a.loadRoomDetail(ctx, id)

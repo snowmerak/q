@@ -532,6 +532,12 @@ func (i *Index) ResetAndRebuild(ctx context.Context, docs <-chan storage.SearchD
 		return err
 	}
 
+	cleanupNext := func() {
+		cleanCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _, _ = i.doJSON(cleanCtx, http.MethodDelete, "/"+url.PathEscape(nextIdx), nil)
+	}
+
 	batch := make([]storage.SearchDocument, 0, 200)
 	flush := func() error {
 		if len(batch) == 0 {
@@ -548,6 +554,7 @@ func (i *Index) ResetAndRebuild(ctx context.Context, docs <-chan storage.SearchD
 		for {
 			select {
 			case <-ctx.Done():
+				cleanupNext()
 				return ctx.Err()
 			case d, ok := <-docs:
 				if !ok {
@@ -556,6 +563,7 @@ func (i *Index) ResetAndRebuild(ctx context.Context, docs <-chan storage.SearchD
 				batch = append(batch, d)
 				if len(batch) >= 200 {
 					if err := flush(); err != nil {
+						cleanupNext()
 						return err
 					}
 				}
@@ -563,11 +571,17 @@ func (i *Index) ResetAndRebuild(ctx context.Context, docs <-chan storage.SearchD
 		}
 	}
 drained:
+	if err := ctx.Err(); err != nil {
+		cleanupNext()
+		return err
+	}
 	if err := flush(); err != nil {
+		cleanupNext()
 		return err
 	}
 
 	if err := i.swapAlias(ctx, oldTargets, nextIdx); err != nil {
+		cleanupNext()
 		return err
 	}
 	for _, old := range oldTargets {

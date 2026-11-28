@@ -179,6 +179,9 @@ export function RoomsView({ client }: { client: QClient }) {
     void loadRoomState(selectedRoomId);
   }, [selectedRoomId, loadRoomState]);
 
+  const membersRef = useRef(detail?.members ?? []);
+  membersRef.current = detail?.members ?? [];
+
   useEffect(() => {
     if (!selectedRoomId) return;
     const unsubscribe = subscribeRoomStream(selectedRoomId, {
@@ -213,7 +216,7 @@ export function RoomsView({ client }: { client: QClient }) {
             const actorName =
               typeof payload.actor_name === "string" && payload.actor_name
                 ? payload.actor_name
-                : (detail?.members.find((m) => m.character_id === actorId)?.character_snapshot
+                : (membersRef.current.find((m) => m.character_id === actorId)?.character_snapshot
                     .name ?? "Character");
             const delta = String(payload.delta ?? "");
             const promotedFrom =
@@ -249,8 +252,8 @@ export function RoomsView({ client }: { client: QClient }) {
                 messageId,
                 actorId,
                 actorName:
-                  detail?.members.find((m) => m.character_id === actorId)?.character_snapshot.name ??
-                  "Character",
+                  membersRef.current.find((m) => m.character_id === actorId)?.character_snapshot
+                    .name ?? "Character",
                 content: delta,
               };
             });
@@ -383,7 +386,7 @@ export function RoomsView({ client }: { client: QClient }) {
       },
     });
     return unsubscribe;
-  }, [selectedRoomId, client, loadRoomState, detail?.members]);
+  }, [selectedRoomId, client, loadRoomState]);
 
   useEffect(() => {
     timelineEndRef.current?.scrollIntoView({ behavior: "smooth" });

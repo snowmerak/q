@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -187,7 +188,10 @@ func (a *App) handleReindex(w http.ResponseWriter, _ *http.Request) {
 		defer a.reindexWG.Done()
 		defer a.reindexRunning.Store(false)
 
-		ctx := context.Background()
+		ctx := a.reindexCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		if err := a.runReindex(ctx); err != nil {
 			a.logger.Warn("storage reindex failed", "job_id", jobID, "error", err)
 		}
@@ -198,24 +202,39 @@ func (a *App) handleReindex(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *App) runReindex(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	jobCtx, cancelJob := context.WithCancel(ctx)
+	defer cancelJob()
+
 	docsCh := make(chan storage.SearchDocument, 64)
 	errCh := make(chan error, 1)
 
 	go func() {
-		errCh <- a.search.ResetAndRebuild(ctx, docsCh)
+		err := a.search.ResetAndRebuild(jobCtx, docsCh)
+		if err != nil {
+			cancelJob()
+		}
+		errCh <- err
 	}()
 
-	emitErr := func() error {
-		defer close(docsCh)
+	emitErr := func() (retErr error) {
+		defer func() {
+			if retErr != nil {
+				cancelJob()
+			}
+			close(docsCh)
+		}()
 
-		rooms, err := a.rdb.Rooms().List(ctx)
+		rooms, err := a.rdb.Rooms().List(jobCtx)
 		if err != nil {
 			return err
 		}
 		for _, rm := range rooms {
 			var beforeSeq int64
 			for {
-				msgs, err := a.rdb.Messages().List(ctx, rm.ID, beforeSeq, 200)
+				msgs, err := a.rdb.Messages().List(jobCtx, rm.ID, beforeSeq, 200)
 				if err != nil {
 					return err
 				}
@@ -227,8 +246,8 @@ func (a *App) runReindex(ctx context.Context) error {
 						continue
 					}
 					select {
-					case <-ctx.Done():
-						return ctx.Err()
+					case <-jobCtx.Done():
+						return jobCtx.Err()
 					case docsCh <- storage.SearchDocument{
 						ID:         m.ID,
 						EntityType: "message",
@@ -247,14 +266,14 @@ func (a *App) runReindex(ctx context.Context) error {
 				beforeSeq = msgs[0].Seq
 			}
 
-			mems, err := a.rdb.Memories().ListMemories(ctx, rm.ID, "", "", 10000)
+			mems, err := a.rdb.Memories().ListMemories(jobCtx, rm.ID, "", "", 10000)
 			if err != nil {
 				return err
 			}
 			for _, mem := range mems {
 				select {
-				case <-ctx.Done():
-					return ctx.Err()
+				case <-jobCtx.Done():
+					return jobCtx.Err()
 				case docsCh <- storage.SearchDocument{
 					ID:         mem.ID,
 					EntityType: "memory",
@@ -270,19 +289,19 @@ func (a *App) runReindex(ctx context.Context) error {
 			}
 		}
 
-		docs, err := a.rdb.Knowledge().ListDocs(ctx, "")
+		docs, err := a.rdb.Knowledge().ListDocs(jobCtx, "")
 		if err != nil {
 			return err
 		}
 		for _, kd := range docs {
-			chunks, err := a.rdb.Knowledge().ListChunksByDoc(ctx, kd.ID)
+			chunks, err := a.rdb.Knowledge().ListChunksByDoc(jobCtx, kd.ID)
 			if err != nil {
 				return err
 			}
 			for _, ch := range chunks {
 				select {
-				case <-ctx.Done():
-					return ctx.Err()
+				case <-jobCtx.Done():
+					return jobCtx.Err()
 				case docsCh <- storage.SearchDocument{
 					ID:         ch.ID,
 					EntityType: "knowledge_chunk",
@@ -299,6 +318,9 @@ func (a *App) runReindex(ctx context.Context) error {
 	}()
 
 	rebuildErr := <-errCh
+	if rebuildErr != nil && (emitErr == nil || errors.Is(emitErr, context.Canceled)) {
+		return rebuildErr
+	}
 	if emitErr != nil {
 		return emitErr
 	}

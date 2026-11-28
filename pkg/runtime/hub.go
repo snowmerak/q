@@ -37,6 +37,18 @@ func (h *InterceptHub) HasActiveTurn(roomID string) bool {
 	return ok
 }
 
+// IsTurnActive reports whether turnID is currently registered as active for roomID.
+func (h *InterceptHub) IsTurnActive(roomID, turnID string) bool {
+	if h == nil || turnID == "" {
+		return false
+	}
+	h.mu.Lock()
+	cur, ok := h.active[roomID]
+	active := ok && cur.turnID == turnID
+	h.mu.Unlock()
+	return active
+}
+
 // StartTurn reserves roomID for turnID and returns its cancellable speculative context.
 func (h *InterceptHub) StartTurn(roomID, turnID string) (context.Context, bool) {
 	if h == nil {

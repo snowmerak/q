@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -43,6 +44,58 @@ type Options struct {
 	Logger         *slog.Logger
 }
 
+type managedGateway struct {
+	gw        *gateway.Gateway
+	refs      atomic.Int64
+	closeOnce sync.Once
+}
+
+func newManagedGateway(gw *gateway.Gateway) *managedGateway {
+	mg := &managedGateway{gw: gw}
+	mg.refs.Store(1)
+	return mg
+}
+
+func (m *managedGateway) Acquire() bool {
+	if m == nil || m.gw == nil {
+		return false
+	}
+	for {
+		cur := m.refs.Load()
+		if cur <= 0 {
+			return false
+		}
+		if m.refs.CompareAndSwap(cur, cur+1) {
+			return true
+		}
+	}
+}
+
+func (m *managedGateway) Release() {
+	if m == nil {
+		return
+	}
+	if m.refs.Add(-1) == 0 {
+		m.closeOnce.Do(func() {
+			if m.gw != nil {
+				_ = m.gw.Close()
+			}
+		})
+	}
+}
+
+type managedChatCompleter struct {
+	mg *managedGateway
+}
+
+func (c managedChatCompleter) Chat(ctx context.Context, req llmprovider.ChatRequest) (*llmprovider.ChatResponse, error) {
+	if !c.mg.Acquire() {
+		return nil, errors.New("app: gateway closed")
+	}
+	defer c.mg.Release()
+	return c.mg.gw.Chat(ctx, req)
+}
+
 type App struct {
 	dataDir    string
 	configPath string
@@ -65,12 +118,22 @@ type App struct {
 	tools       *task.Registry
 	engine      *runtime.Engine
 
+	reloadMu             sync.Mutex
+	providersInitialized bool
+	lastCfg              config.Config
+	llmDegraded          string
+	decDegraded          string
+	embDegraded          string
+	mcpDegraded          string
+
 	providerMu     sync.RWMutex
-	gateway        *gateway.Gateway
+	gateway        *managedGateway
 	decisionsReg   *decisions.Registry
 	embedder       appEmbedder
 	degradedReason string
 
+	reindexCtx     context.Context
+	reindexCancel  context.CancelFunc
 	reindexRunning atomic.Bool
 	reindexWG      sync.WaitGroup
 
@@ -104,11 +167,14 @@ func Open(ctx context.Context, opts Options) (*App, error) {
 		return nil, err
 	}
 
+	reindexCtx, reindexCancel := context.WithCancel(context.Background())
 	a := &App{
-		dataDir:    dataDir,
-		configPath: filepath.Join(dataDir, config.FileName),
-		logger:     logger,
-		lock:       lock,
+		dataDir:       dataDir,
+		configPath:    filepath.Join(dataDir, config.FileName),
+		logger:        logger,
+		lock:          lock,
+		reindexCtx:    reindexCtx,
+		reindexCancel: reindexCancel,
 	}
 
 	cleanupOnErr := true
@@ -178,6 +244,9 @@ func Open(ctx context.Context, opts Options) (*App, error) {
 
 	a.engine = runtime.NewEngine(a.rdb, a.search, a, a.logger)
 	a.engine.SetTools(a.tools, a.dataDir)
+	if err := a.engine.RecoverOrphanTurns(ctx); err != nil {
+		a.logger.Warn("orphan turn recovery failed", "error", err)
+	}
 
 	cleanupOnErr = false
 	return a, nil
@@ -293,100 +362,158 @@ func (a *App) openStorage(ctx context.Context, cfg config.Config) error {
 	return nil
 }
 
+func sameJSONConfig(a, b any) bool {
+	ba, errA := json.Marshal(a)
+	bb, errB := json.Marshal(b)
+	return errA == nil && errB == nil && string(ba) == string(bb)
+}
+
 func (a *App) reloadProviders(ctx context.Context, cfg config.Config) {
-	var gw *gateway.Gateway
-	var degraded []string
+	a.reloadMu.Lock()
+	defer a.reloadMu.Unlock()
 
-	hasEnabledLLM := false
-	for _, p := range cfg.LLM.Providers {
-		if p.Enabled {
-			hasEnabledLLM = true
-			break
-		}
-	}
-	if hasEnabledLLM {
-		built, err := gateway.NewContext(ctx, cfg.GatewayConfig())
-		if err != nil {
-			degraded = append(degraded, fmt.Sprintf("llm: %v", err))
-		} else {
-			gw = built
-		}
-	}
+	a.providerMu.RLock()
+	curMG := a.gateway
+	curDec := a.decisionsReg
+	curEmb := a.embedder
+	a.providerMu.RUnlock()
 
-	var decReg *decisions.Registry
-	if len(cfg.Decisions.Models) > 0 || len(cfg.Decisions.Providers) > 0 {
-		reg, err := decisions.NewRegistry(cfg.Decisions, os.Getenv)
-		if err != nil {
-			degraded = append(degraded, fmt.Sprintf("decisions: %v", err))
-		} else {
-			decReg = reg
-			warmCtx, cancelWarm := context.WithTimeout(ctx, 10*time.Second)
-			_ = decReg.RefreshModels(warmCtx)
-			cancelWarm()
-		}
-	}
+	prevInit := a.providersInitialized
+	prevCfg := a.lastCfg
 
-	var emb appEmbedder
-	if cfg.Embeddings.Enabled {
-		if pid := strings.TrimSpace(cfg.Embeddings.ProviderID); pid != "" {
-			var found *gateway.ProviderConfig
-			for i := range cfg.LLM.Providers {
-				if strings.TrimSpace(cfg.LLM.Providers[i].ID) == pid {
-					found = &cfg.LLM.Providers[i]
-					break
-				}
+	llmNeedsRebuild := !prevInit || !sameJSONConfig(prevCfg.GatewayConfig(), cfg.GatewayConfig()) || a.llmDegraded != ""
+	decNeedsRebuild := !prevInit || !sameJSONConfig(prevCfg.Decisions, cfg.Decisions) || a.decDegraded != ""
+	mcpNeedsReconfig := !prevInit || !sameJSONConfig(prevCfg.Tools.MCPServers, cfg.Tools.MCPServers) || a.mcpDegraded != ""
+
+	nextMG := curMG
+	llmDegraded := a.llmDegraded
+	gatewayChanged := false
+
+	if llmNeedsRebuild {
+		llmDegraded = ""
+		hasEnabledLLM := false
+		for _, p := range cfg.LLM.Providers {
+			if p.Enabled {
+				hasEnabledLLM = true
+				break
 			}
-			switch {
-			case found == nil:
-				degraded = append(degraded, fmt.Sprintf("embeddings: provider %q not found", pid))
-			case !found.Enabled || gw == nil:
-				degraded = append(degraded, fmt.Sprintf("embeddings: provider %q is disabled or gateway unavailable", pid))
-			default:
-				builtEmb, err := newGatewayEmbedder(gw, *found, cfg.Embeddings)
-				if err != nil {
-					degraded = append(degraded, fmt.Sprintf("embeddings: %v", err))
-				} else {
-					emb = builtEmb
-				}
-			}
-		} else {
-			builtEmb, err := outbox.NewHTTPEmbedder(outbox.HTTPEmbedderConfig{
-				BaseURL:        cfg.Embeddings.BaseURL,
-				APIKeyEnv:      cfg.Embeddings.APIKeyEnv,
-				Model:          cfg.Embeddings.Model,
-				Dimensions:     cfg.Embeddings.Dimensions,
-				QueryPrefix:    cfg.Embeddings.QueryPrefix,
-				DocumentPrefix: cfg.Embeddings.DocumentPrefix,
-				Timeout:        time.Duration(cfg.Embeddings.TimeoutMS) * time.Millisecond,
-				LookupEnv:      os.Getenv,
-			})
+		}
+		if hasEnabledLLM {
+			built, err := gateway.NewContext(ctx, cfg.GatewayConfig())
 			if err != nil {
-				degraded = append(degraded, fmt.Sprintf("embeddings: %v", err))
+				llmDegraded = fmt.Sprintf("llm: %v", err)
+				nextMG = nil
 			} else {
-				emb = builtEmb
+				nextMG = newManagedGateway(built)
+			}
+		} else {
+			nextMG = nil
+		}
+		gatewayChanged = nextMG != curMG
+	}
+
+	nextDec := curDec
+	decDegraded := a.decDegraded
+	if decNeedsRebuild {
+		decDegraded = ""
+		nextDec = nil
+		if len(cfg.Decisions.Models) > 0 || len(cfg.Decisions.Providers) > 0 {
+			reg, err := decisions.NewRegistry(cfg.Decisions, os.Getenv)
+			if err != nil {
+				decDegraded = fmt.Sprintf("decisions: %v", err)
+			} else {
+				nextDec = reg
+				warmCtx, cancelWarm := context.WithTimeout(ctx, 10*time.Second)
+				_ = nextDec.RefreshModels(warmCtx)
+				cancelWarm()
 			}
 		}
 	}
 
-	if a.mcp != nil {
+	embNeedsRebuild := !prevInit || gatewayChanged || !sameJSONConfig(prevCfg.Embeddings, cfg.Embeddings) || a.embDegraded != ""
+	nextEmb := curEmb
+	embDegraded := a.embDegraded
+	if embNeedsRebuild {
+		embDegraded = ""
+		nextEmb = nil
+		if cfg.Embeddings.Enabled {
+			if pid := strings.TrimSpace(cfg.Embeddings.ProviderID); pid != "" {
+				var found *gateway.ProviderConfig
+				for i := range cfg.LLM.Providers {
+					if strings.TrimSpace(cfg.LLM.Providers[i].ID) == pid {
+						found = &cfg.LLM.Providers[i]
+						break
+					}
+				}
+				switch {
+				case found == nil:
+					embDegraded = fmt.Sprintf("embeddings: provider %q not found", pid)
+				case !found.Enabled || nextMG == nil:
+					embDegraded = fmt.Sprintf("embeddings: provider %q is disabled or gateway unavailable", pid)
+				default:
+					builtEmb, err := newGatewayEmbedder(nextMG, *found, cfg.Embeddings)
+					if err != nil {
+						embDegraded = fmt.Sprintf("embeddings: %v", err)
+					} else {
+						nextEmb = builtEmb
+					}
+				}
+			} else {
+				builtEmb, err := outbox.NewHTTPEmbedder(outbox.HTTPEmbedderConfig{
+					BaseURL:        cfg.Embeddings.BaseURL,
+					APIKeyEnv:      cfg.Embeddings.APIKeyEnv,
+					Model:          cfg.Embeddings.Model,
+					Dimensions:     cfg.Embeddings.Dimensions,
+					QueryPrefix:    cfg.Embeddings.QueryPrefix,
+					DocumentPrefix: cfg.Embeddings.DocumentPrefix,
+					Timeout:        time.Duration(cfg.Embeddings.TimeoutMS) * time.Millisecond,
+					LookupEnv:      os.Getenv,
+				})
+				if err != nil {
+					embDegraded = fmt.Sprintf("embeddings: %v", err)
+				} else {
+					nextEmb = builtEmb
+				}
+			}
+		}
+	}
+
+	mcpDegraded := a.mcpDegraded
+	if mcpNeedsReconfig && a.mcp != nil {
+		var mcpMsgs []string
 		for _, st := range a.mcp.Configure(ctx, cfg.Tools.MCPServers) {
 			if st.Error != "" {
-				degraded = append(degraded, fmt.Sprintf("mcp(%s): %s", st.ID, st.Error))
+				mcpMsgs = append(mcpMsgs, fmt.Sprintf("mcp(%s): %s", st.ID, st.Error))
 			}
+		}
+		mcpDegraded = strings.Join(mcpMsgs, "; ")
+	}
+
+	var degradedParts []string
+	for _, part := range []string{llmDegraded, decDegraded, embDegraded, mcpDegraded} {
+		if part != "" {
+			degradedParts = append(degradedParts, part)
 		}
 	}
 
 	a.providerMu.Lock()
-	oldGW := a.gateway
-	a.gateway = gw
-	a.decisionsReg = decReg
-	a.embedder = emb
-	a.degradedReason = strings.Join(degraded, "; ")
+	oldMG := a.gateway
+	a.gateway = nextMG
+	a.decisionsReg = nextDec
+	a.embedder = nextEmb
+	a.degradedReason = strings.Join(degradedParts, "; ")
 	a.providerMu.Unlock()
 
-	if a.outbox != nil {
-		if emb != nil {
-			a.outbox.SetEmbedder(emb)
+	a.providersInitialized = true
+	a.lastCfg = cfg
+	a.llmDegraded = llmDegraded
+	a.decDegraded = decDegraded
+	a.embDegraded = embDegraded
+	a.mcpDegraded = mcpDegraded
+
+	if a.outbox != nil && embNeedsRebuild {
+		if nextEmb != nil {
+			a.outbox.SetEmbedder(nextEmb)
 		} else {
 			a.outbox.SetEmbedder(nil)
 		}
@@ -394,8 +521,8 @@ func (a *App) reloadProviders(ctx context.Context, cfg config.Config) {
 	if a.loom != nil {
 		a.loom.Configure(loomOptionsFromConfig(cfg))
 	}
-	if oldGW != nil {
-		_ = oldGW.Close()
+	if oldMG != nil && oldMG != nextMG {
+		oldMG.Release()
 	}
 }
 
@@ -426,13 +553,22 @@ func (a *App) currentBrowserControl() config.BrowserControlConfig {
 }
 
 // Snapshot satisfies runtime.ProviderSource with the current hot-reloadable backends.
+// Callers must invoke Snapshot.Close() when done.
 func (a *App) Snapshot() runtime.ProviderSnapshot {
 	cfg := a.currentConfig()
 	a.providerMu.RLock()
-	gw := a.gateway
+	mg := a.gateway
 	dec := a.decisionsReg
 	emb := a.embedder
 	a.providerMu.RUnlock()
+
+	var gw *gateway.Gateway
+	var release func()
+	if mg != nil && mg.Acquire() {
+		gw = mg.gw
+		var once sync.Once
+		release = func() { once.Do(mg.Release) }
+	}
 
 	var qEmb memory.QueryEmbedder
 	if emb != nil {
@@ -443,6 +579,7 @@ func (a *App) Snapshot() runtime.ProviderSnapshot {
 		Gateway:   gw,
 		Decisions: dec,
 		Embedder:  qEmb,
+		Release:   release,
 	}
 }
 
@@ -455,14 +592,18 @@ func (a *App) resolveValueModel(ctx context.Context, roomID, characterID string)
 	if err != nil {
 		return nil, "", "", 0, err
 	}
-	snap := a.Snapshot()
-	if snap.Gateway == nil {
+	a.providerMu.RLock()
+	mg := a.gateway
+	a.providerMu.RUnlock()
+	if !mg.Acquire() {
 		return nil, "", "", 0, errors.New("app: no LLM gateway configured")
 	}
+	defer mg.Release()
+	cfg := a.currentConfig()
 	for _, m := range members {
 		if m.CharacterID == characterID {
-			r := runtime.ResolveModels(ctx, snap.Config, room, m.CharacterSnapshot, snap.Gateway)
-			return snap.Gateway, r.MemoryModel, r.MemoryReasoningEffort, r.ContextWindow, nil
+			r := runtime.ResolveModels(ctx, cfg, room, m.CharacterSnapshot, mg.gw)
+			return managedChatCompleter{mg: mg}, r.MemoryModel, r.MemoryReasoningEffort, r.ContextWindow, nil
 		}
 	}
 	return nil, "", "", 0, fmt.Errorf("app: character %q not found in room %q", characterID, roomID)
@@ -536,9 +677,12 @@ func (a *App) RDB() storage.RDBStore   { return a.rdb }
 
 func (a *App) Gateway() *gateway.Gateway {
 	a.providerMu.RLock()
-	gw := a.gateway
+	mg := a.gateway
 	a.providerMu.RUnlock()
-	return gw
+	if mg == nil {
+		return nil
+	}
+	return mg.gw
 }
 
 func (a *App) currentConfig() config.Config {
@@ -550,26 +694,28 @@ func (a *App) currentConfig() config.Config {
 
 func (a *App) listModels(ctx context.Context) ([]llmprovider.Model, error) {
 	a.providerMu.RLock()
-	gw := a.gateway
+	mg := a.gateway
 	a.providerMu.RUnlock()
-	if gw == nil {
+	if !mg.Acquire() {
 		return []llmprovider.Model{}, nil
 	}
-	return gw.Models(ctx)
+	defer mg.Release()
+	return mg.gw.Models(ctx)
 }
 
 func (a *App) refreshModels(ctx context.Context) ([]llmprovider.Model, error) {
 	a.providerMu.RLock()
-	gw := a.gateway
+	mg := a.gateway
 	dec := a.decisionsReg
 	a.providerMu.RUnlock()
 	if dec != nil {
 		_ = dec.RefreshModels(ctx)
 	}
-	if gw == nil {
+	if !mg.Acquire() {
 		return []llmprovider.Model{}, nil
 	}
-	return gw.RefreshModels(ctx)
+	defer mg.Release()
+	return mg.gw.RefreshModels(ctx)
 }
 
 func (a *App) listDecisionModels() ([]decisions.ModelInfo, string) {
@@ -615,6 +761,9 @@ func (a *App) Close(ctx context.Context) error {
 		if a.loom != nil {
 			a.loom.StopGCWorker()
 		}
+		if a.reindexCancel != nil {
+			a.reindexCancel()
+		}
 		a.reindexWG.Wait()
 		if a.outbox != nil {
 			a.outbox.Stop()
@@ -623,11 +772,11 @@ func (a *App) Close(ctx context.Context) error {
 			closeErr = errors.Join(closeErr, a.watcher.Close())
 		}
 		a.providerMu.Lock()
-		gw := a.gateway
+		mg := a.gateway
 		a.gateway = nil
 		a.providerMu.Unlock()
-		if gw != nil {
-			closeErr = errors.Join(closeErr, gw.Close())
+		if mg != nil {
+			mg.Release()
 		}
 		if a.search != nil {
 			closeErr = errors.Join(closeErr, a.search.Close())

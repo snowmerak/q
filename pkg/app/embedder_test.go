@@ -55,9 +55,10 @@ func TestGatewayEmbedderDocumentAndQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gateway.NewContext: %v", err)
 	}
-	defer func() { _ = gw.Close() }()
+	mg := newManagedGateway(gw)
+	defer mg.Release()
 
-	emb, err := newGatewayEmbedder(gw, providerCfg, config.EmbeddingsConfig{
+	emb, err := newGatewayEmbedder(mg, providerCfg, config.EmbeddingsConfig{
 		Enabled:        true,
 		ProviderID:     "openai",
 		Model:          "text-embedding-3-small",

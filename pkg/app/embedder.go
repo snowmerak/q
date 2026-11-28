@@ -21,7 +21,7 @@ type appEmbedder interface {
 }
 
 type gatewayEmbedder struct {
-	gw             *gateway.Gateway
+	mg             *managedGateway
 	routedModel    string
 	dimensions     int
 	queryPrefix    string
@@ -29,8 +29,8 @@ type gatewayEmbedder struct {
 	timeout        time.Duration
 }
 
-func newGatewayEmbedder(gw *gateway.Gateway, provider gateway.ProviderConfig, cfg config.EmbeddingsConfig) (*gatewayEmbedder, error) {
-	if gw == nil {
+func newGatewayEmbedder(mg *managedGateway, provider gateway.ProviderConfig, cfg config.EmbeddingsConfig) (*gatewayEmbedder, error) {
+	if mg == nil || mg.gw == nil {
 		return nil, errors.New("app: gateway is required for provider_id embeddings")
 	}
 	model := strings.TrimSpace(cfg.Model)
@@ -46,7 +46,7 @@ func newGatewayEmbedder(gw *gateway.Gateway, provider gateway.ProviderConfig, cf
 		timeout = 15 * time.Second
 	}
 	return &gatewayEmbedder{
-		gw:             gw,
+		mg:             mg,
 		routedModel:    routedModel,
 		dimensions:     cfg.Dimensions,
 		queryPrefix:    cfg.QueryPrefix,
@@ -77,6 +77,10 @@ func (e *gatewayEmbedder) embed(ctx context.Context, input string) ([]float32, e
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if !e.mg.Acquire() {
+		return nil, errors.New("app: gateway closed for embeddings")
+	}
+	defer e.mg.Release()
 	var cancel context.CancelFunc
 	if e.timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, e.timeout)
@@ -87,7 +91,7 @@ func (e *gatewayEmbedder) embed(ctx context.Context, input string) ([]float32, e
 		d := e.dimensions
 		dimPtr = &d
 	}
-	resp, err := e.gw.Embed(ctx, llmprovider.EmbeddingRequest{
+	resp, err := e.mg.gw.Embed(ctx, llmprovider.EmbeddingRequest{
 		Model:      e.routedModel,
 		Input:      input,
 		Dimensions: dimPtr,

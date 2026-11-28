@@ -723,33 +723,44 @@ func (idx *Index) ResetAndRebuild(ctx context.Context, docs <-chan storage.Searc
 		return err
 	}
 
+	abortGen := func() {
+		_ = nextIdx.bleveIdx.Close()
+		_ = os.RemoveAll(nextDir)
+	}
+
 	var batch []storage.SearchDocument
-	for doc := range docs {
-		if err := ctx.Err(); err != nil {
-			_ = nextIdx.bleveIdx.Close()
-			_ = os.RemoveAll(nextDir)
-			return err
-		}
-		batch = append(batch, doc)
-		if len(batch) >= 64 {
-			if err := nextIdx.UpsertBatch(ctx, batch); err != nil {
-				_ = nextIdx.bleveIdx.Close()
-				_ = os.RemoveAll(nextDir)
-				return err
+drainLoop:
+	for {
+		select {
+		case <-ctx.Done():
+			abortGen()
+			return ctx.Err()
+		case doc, ok := <-docs:
+			if !ok {
+				break drainLoop
 			}
-			batch = batch[:0]
+			batch = append(batch, doc)
+			if len(batch) >= 64 {
+				if err := nextIdx.UpsertBatch(ctx, batch); err != nil {
+					abortGen()
+					return err
+				}
+				batch = batch[:0]
+			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		abortGen()
+		return err
 	}
 	if len(batch) > 0 {
 		if err := nextIdx.UpsertBatch(ctx, batch); err != nil {
-			_ = nextIdx.bleveIdx.Close()
-			_ = os.RemoveAll(nextDir)
+			abortGen()
 			return err
 		}
 	}
 	if err := nextIdx.persistVectorsLocked(); err != nil {
-		_ = nextIdx.bleveIdx.Close()
-		_ = os.RemoveAll(nextDir)
+		abortGen()
 		return err
 	}
 	if err := writeManifest(idx.root, currentManifest{
@@ -757,8 +768,7 @@ func (idx *Index) ResetAndRebuild(ctx context.Context, docs <-chan storage.Searc
 		VectorModel: nextIdx.vecModel,
 		VectorDim:   nextIdx.vecDim,
 	}); err != nil {
-		_ = nextIdx.bleveIdx.Close()
-		_ = os.RemoveAll(nextDir)
+		abortGen()
 		return err
 	}
 

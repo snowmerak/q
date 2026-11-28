@@ -413,15 +413,8 @@ func hasRecallableData(ctx context.Context, rdb storage.RDBStore, roomID, actorI
 			}
 		}
 	}
-	if msgs, err := rdb.Messages().List(ctx, roomID, 0, len(excludeIDs)+12); err == nil {
-		for _, msg := range msgs {
-			if msg.Role == domain.MessageRoleSystem || !msg.ObservedByActor(actorID) {
-				continue
-			}
-			if _, excluded := excludeIDs[msg.ID]; !excluded {
-				return true
-			}
-		}
+	if hasObservedMessage(ctx, rdb, roomID, actorID, excludeIDs) {
+		return true
 	}
 	if rooms, err := rdb.Rooms().List(ctx); err == nil {
 		for _, rm := range rooms {
@@ -442,19 +435,35 @@ func hasRecallableData(ctx context.Context, rdb storage.RDBStore, roomID, actorI
 			if !participates {
 				continue
 			}
-			msgs, msgErr := rdb.Messages().List(ctx, rm.ID, 0, 20)
-			if msgErr != nil {
-				continue
-			}
-			for _, msg := range msgs {
-				if msg.Role == domain.MessageRoleSystem || !msg.ObservedByActor(actorID) {
-					continue
-				}
+			if hasObservedMessage(ctx, rdb, rm.ID, actorID, nil) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func hasObservedMessage(ctx context.Context, rdb storage.RDBStore, roomID, actorID string, excludeIDs map[string]struct{}) bool {
+	const pageLimit = 200
+	var beforeSeq int64
+	for {
+		msgs, err := rdb.Messages().List(ctx, roomID, beforeSeq, pageLimit)
+		if err != nil || len(msgs) == 0 {
+			return false
+		}
+		for _, msg := range msgs {
+			if msg.Role == domain.MessageRoleSystem || !msg.ObservedByActor(actorID) {
+				continue
+			}
+			if _, excluded := excludeIDs[msg.ID]; !excluded {
+				return true
+			}
+		}
+		if len(msgs) < pageLimit || msgs[0].Seq <= 1 {
+			return false
+		}
+		beforeSeq = msgs[0].Seq
+	}
 }
 
 func planRecallQueries(ctx context.Context, deps Deps, input RecallInput) ([]RecallQuery, bool) {

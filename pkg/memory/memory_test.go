@@ -579,4 +579,49 @@ func TestRecallCrossRoomMemoriesAndSpeechWithObserverIsolation(t *testing.T) {
 	if _, leaked := got[msgPriv.ID]; leaked {
 		t.Fatalf("unobserved message leaked across rooms: %+v", items)
 	}
+
+	// Verify pagination: append 25 newer unobserved messages in room1 (so older observed msgVis falls outside top 20)
+	// and recall again from room2 (which has zero local messages and zero memories).
+	for i := range 25 {
+		mUnobs, err := rdb.Messages().Append(ctx, domain.Message{
+			RoomID: room1.ID, TurnID: turn1.ID, Role: domain.MessageRoleCharacter, AuthorID: charB.ID, AuthorName: "Doyun",
+			Content: "Unrelated later chatter", ObservedBy: []string{charB.ID}, CreatedAt: int64(2000 + i),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = idx.Upsert(ctx, storage.SearchDocument{
+			ID: mUnobs.ID, EntityType: "message", Scope: "room:" + room1.ID, OwnerID: charB.ID,
+			ObservedBy: []string{charB.ID}, Text: mUnobs.Content, OccurredAt: mUnobs.CreatedAt, Revision: 1,
+		})
+	}
+	// Soft-archive the episodic memory so recallable detection depends strictly on finding old observed message msgVis.
+	if err := rdb.Memories().UpdateMemory(ctx, domain.Memory{
+		ID: "mem-cross-vis", RoomID: room1.ID, OwnerID: charA.ID, SourceTurnID: turn1.ID,
+		Kind: domain.MemoryKindEpisodic, Content: "Harbor lighthouse key is taped under the espresso drawer.",
+		ObservedBy: []string{charA.ID}, OccurredAt: 1000, Status: domain.MemoryStatusSuperseded, Revision: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	itemsOld, err := memory.Recall(ctx, rdb, idx, memory.Deps{}, memory.RecallInput{
+		RoomID:      room2.ID,
+		ActorID:     charA.ID,
+		ActorName:   charA.Name,
+		CurrentText: "What was the harbor lighthouse key code?",
+		OwnBudget:   4000,
+		NowMS:       5000,
+	})
+	if err != nil {
+		t.Fatalf("Recall older cross-room msg: %v", err)
+	}
+	foundOld := false
+	for _, it := range itemsOld {
+		if it.ID == msgVis.ID {
+			foundOld = true
+			break
+		}
+	}
+	if !foundOld {
+		t.Fatalf("expected older cross-room message %s recalled past >20 newer unobserved messages, got %+v", msgVis.ID, itemsOld)
+	}
 }

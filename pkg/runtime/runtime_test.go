@@ -572,3 +572,116 @@ func TestBuildActorPromptFormatsCrossRoomRecalledItems(t *testing.T) {
 		t.Fatalf("missing cross-room speech label in dynamic context: %s", dyn)
 	}
 }
+
+func TestOrphanRunningTurnRecoveryAndFencedToolRetry(t *testing.T) {
+	var promptSawFence atomic.Bool
+	eng, rdb, roomID := newRuntimeFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"chat-1"}]}`)
+		case "/v1/chat/completions":
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"stream":true`) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"r1","object":"chat.completion","model":"chat-1","choices":[{"index":0,"message":{"role":"assistant","content":"[]"},"finish_reason":"stop"}]}`)
+				return
+			}
+			if strings.Contains(string(body), "interrupted by a server restart") {
+				promptSawFence.Store(true)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, `data: {"id":"c1","object":"chat.completion.chunk","model":"chat-1","choices":[{"index":0,"delta":{"role":"assistant","content":"Resumed safely after restart."},"finish_reason":"stop"}]}`+"\n\n")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		}
+	}), nil)
+
+	members, _ := rdb.Rooms().ListMembers(t.Context(), roomID)
+	actorID := members[0].CharacterID
+	room, _ := rdb.Rooms().Get(t.Context(), roomID)
+	if _, _, err := rdb.Turns().CreateOrGetIdempotent(t.Context(), domain.Turn{
+		ID:        "orphan-turn-1",
+		RoomID:    roomID,
+		RequestID: "orphan-req-1",
+		InputHash: domain.HashInput("Run cleanup script.\x00"),
+		Status:    domain.TurnStatusRunning,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	msgUser, err := rdb.Messages().Append(t.Context(), domain.Message{
+		RoomID:     roomID,
+		TurnID:     "orphan-turn-1",
+		Role:       domain.MessageRoleUser,
+		AuthorID:   room.PersonaID,
+		AuthorName: "Alex",
+		Content:    "Run cleanup script.",
+		ObservedBy: []string{room.PersonaID, actorID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cpJSON, _ := json.Marshal(map[string]any{
+		"user_message_id": msgUser.ID,
+		"actor_id":        actorID,
+		"phase":           "tool_loop",
+		"remaining_calls": []map[string]any{{
+			"id":   "call_orphan_1",
+			"type": "function",
+			"function": map[string]any{
+				"name":      "run_command",
+				"arguments": `{"command":"echo should-not-rerun"}`,
+			},
+		}},
+		"tool_rounds": 1,
+	})
+	seededTurn, err := rdb.Turns().Get(t.Context(), "orphan-turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seededTurn.CheckpointJSON = string(cpJSON)
+	if err := rdb.Turns().Update(t.Context(), seededTurn); err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.Tools().CreateInvocation(t.Context(), domain.ToolInvocation{
+		ID:         "inv-orphan-1",
+		TurnID:     "orphan-turn-1",
+		RoomID:     roomID,
+		ActorID:    actorID,
+		CallID:     "call_orphan_1",
+		ToolName:   "run_command",
+		ToolSource: domain.ToolSourceBuiltin,
+		ArgsJSON:   `{"command":"echo should-not-rerun"}`,
+		GateMode:   domain.ApprovalBypass,
+		Status:     domain.ToolStatusRunning,
+		CreatedAt:  domain.NowMS(),
+		UpdatedAt:  domain.NowMS(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := eng.RecoverOrphanTurns(t.Context()); err != nil {
+		t.Fatalf("RecoverOrphanTurns: %v", err)
+	}
+
+	recoveredTurn, err := rdb.Turns().Get(t.Context(), "orphan-turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoveredTurn.Status != domain.TurnStatusFailed || recoveredTurn.ErrorCode != "interrupted" {
+		t.Fatalf("expected failed/interrupted orphan turn, got %+v", recoveredTurn)
+	}
+	recoveredInv, err := rdb.Tools().GetInvocation(t.Context(), "inv-orphan-1")
+	if err != nil || recoveredInv.Status != domain.ToolStatusFailed {
+		t.Fatalf("expected fenced running invocation marked failed, got %+v err=%v", recoveredInv, err)
+	}
+
+	ch, unsub := eng.Events().Subscribe(roomID, 0)
+	defer unsub()
+	if _, err := eng.RetryTurn(t.Context(), roomID, recoveredTurn.ID); err != nil {
+		t.Fatalf("RetryTurn on recovered turn: %v", err)
+	}
+	waitForEvent(t, ch, "turn.completed", 5*time.Second)
+
+	if !promptSawFence.Load() {
+		t.Fatal("expected retried prompt to receive interrupted tool notice instead of re-running remaining call")
+	}
+}

@@ -994,3 +994,242 @@ func TestMessagesToolInvocationsAndCompactionFiltering(t *testing.T) {
 		t.Fatalf("expected uncompacted turn 2 thinking preserved, got %q", afterCompact.Items[3].MetadataJSON)
 	}
 }
+
+func TestReindexEarlyBackendErrorDoesNotHangAndCloseCompletes(t *testing.T) {
+	var failIndex atomic.Bool
+	osSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if failIndex.Load() && r.Method == http.MethodPut {
+			http.Error(w, `{"error":"forced rebuild failure"}`, http.StatusInternalServerError)
+			return
+		}
+		if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/_alias/") {
+			http.Error(w, `{"error":"no alias"}`, http.StatusNotFound)
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/_aliases") {
+			_, _ = io.WriteString(w, `{"acknowledged":true}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"acknowledged":true}`)
+	}))
+	defer osSrv.Close()
+
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Storage.Search.Driver = "opensearch"
+	cfg.Storage.Search.OpenSearch.Endpoint = osSrv.URL
+	if err := config.Save(filepath.Join(dataDir, config.FileName), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := app.Open(t.Context(), app.Options{DataDir: dataDir, ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("app.Open: %v", err)
+	}
+
+	persona, _ := a.RDB().Personas().Create(t.Context(), domain.Persona{Name: "Alex"})
+	char, _ := a.RDB().Characters().Create(t.Context(), domain.Character{Name: "Hana"})
+	rm, _ := a.RDB().Rooms().Create(t.Context(), domain.Room{
+		Title: "Bulk Room", Mode: domain.RoomModeDirect, PersonaID: persona.ID, PersonaSnapshot: persona,
+	}, []domain.RoomMember{{CharacterID: char.ID, CharacterSnapshot: char, Active: true}})
+	trn, _, _ := a.RDB().Turns().CreateOrGetIdempotent(t.Context(), domain.Turn{
+		RoomID: rm.ID, RequestID: "seed-bulk", InputHash: "h", Status: domain.TurnStatusCompleted,
+	})
+	// Seed > 64 messages (docsCh buffer size) so producer would block if consumer failure didn't cancel it.
+	for i := range 90 {
+		if _, err := a.RDB().Messages().Append(t.Context(), domain.Message{
+			RoomID: rm.ID, TurnID: trn.ID, Role: domain.MessageRoleUser, AuthorID: persona.ID, AuthorName: "Alex",
+			Content: strings.Repeat("message payload ", 3), ObservedBy: []string{persona.ID, char.ID}, CreatedAt: int64(1000 + i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	failIndex.Store(true)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/storage/reindex", nil)
+	rec := httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("reindex status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		closeDone <- a.Close(closeCtx)
+	}()
+
+	select {
+	case closeErr := <-closeDone:
+		if closeErr != nil {
+			t.Fatalf("Close returned error: %v", closeErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("App.Close hung waiting on deadlocked reindex")
+	}
+}
+
+func TestConfigPutPreservesGatewayAndRefCountsRetirement(t *testing.T) {
+	llmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"m1"}]}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer llmSrv.Close()
+
+	dataDir := t.TempDir()
+	cfg := config.Default()
+	cfg.LLM.Providers = []gateway.ProviderConfig{{
+		ID:      "mock",
+		Type:    "openai-compatible",
+		Enabled: true,
+		BaseURL: llmSrv.URL + "/v1",
+	}}
+	cfg.LLM.Roles.ChatModel = "mock/m1"
+	if err := config.Save(filepath.Join(dataDir, config.FileName), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := app.Open(t.Context(), app.Options{DataDir: dataDir, ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close(context.Background()) }()
+
+	gwBefore := a.Gateway()
+	if gwBefore == nil {
+		t.Fatal("expected initial gateway")
+	}
+
+	// Changing non-provider tool setting must NOT rebuild or close the gateway.
+	cfgNonProvider := cfg
+	cfgNonProvider.Tools.MaxToolRounds = 180
+	raw, _ := json.Marshal(cfgNonProvider)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT /config non-provider = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if a.Gateway() != gwBefore {
+		t.Fatal("expected non-provider config update to keep the existing Gateway pointer untouched")
+	}
+
+	// Hold an active snapshot across a provider config change, then release it.
+	snap := a.Snapshot()
+	cfgProviderChanged := cfgNonProvider
+	cfgProviderChanged.LLM.Roles.ChatReasoningEffort = ""
+	cfgProviderChanged.LLM.Providers = []gateway.ProviderConfig{{
+		ID:      "mock",
+		Type:    "openai-compatible",
+		Prefix:  "mock2",
+		Enabled: true,
+		BaseURL: llmSrv.URL + "/v1",
+	}}
+	raw2, _ := json.Marshal(cfgProviderChanged)
+	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(raw2))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("PUT /config provider change = %d body=%s", rec2.Code, rec2.Body.String())
+	}
+	if a.Gateway() == nil || a.Gateway() == gwBefore {
+		t.Fatal("expected provider config change to install a fresh Gateway")
+	}
+	snap.Close()
+}
+
+func TestPatchRoomTransactionalRollbackAndOrphanRecoveryOnOpen(t *testing.T) {
+	dataDir := t.TempDir()
+	a, err := app.Open(t.Context(), app.Options{DataDir: dataDir, ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := a.Handler()
+	doJSON := func(handler http.Handler, method, path string, body any, out any) int {
+		var rBody io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			rBody = bytes.NewReader(b)
+		}
+		req := httptest.NewRequest(method, path, rBody)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if out != nil && rec.Body.Len() > 0 {
+			_ = json.Unmarshal(rec.Body.Bytes(), out)
+		}
+		return rec.Code
+	}
+
+	var persona domain.Persona
+	_ = doJSON(h, http.MethodPost, "/api/v1/personas", map[string]any{"name": "User"}, &persona)
+	var char domain.Character
+	_ = doJSON(h, http.MethodPost, "/api/v1/characters", map[string]any{"name": "Kai"}, &char)
+
+	var created struct {
+		Room domain.Room `json:"room"`
+	}
+	if code := doJSON(h, http.MethodPost, "/api/v1/rooms", map[string]any{
+		"title":         "Original Title",
+		"mode":          "group",
+		"persona_id":    persona.ID,
+		"character_ids": []string{char.ID},
+	}, &created); code != http.StatusCreated {
+		t.Fatalf("create room = %d", code)
+	}
+
+	// Failed PATCH with nonexistent character must roll back the title update too.
+	if code := doJSON(h, http.MethodPatch, "/api/v1/rooms/"+created.Room.ID, map[string]any{
+		"expected_version": created.Room.Version,
+		"title":            "Should Not Persist",
+		"character_ids":    []string{char.ID, "missing-character"},
+	}, nil); code != http.StatusNotFound {
+		t.Fatalf("expected 404 for nonexistent character, got %d", code)
+	}
+
+	var afterFailedPatch struct {
+		Room domain.Room `json:"room"`
+	}
+	_ = doJSON(h, http.MethodGet, "/api/v1/rooms/"+created.Room.ID, nil, &afterFailedPatch)
+	if afterFailedPatch.Room.Title != "Original Title" || afterFailedPatch.Room.Version != created.Room.Version {
+		t.Fatalf("expected transactional rollback on failed PATCH, got %+v", afterFailedPatch.Room)
+	}
+
+	// Seed an orphan running turn, close App, and verify reopening recovers it.
+	if _, _, err := a.RDB().Turns().CreateOrGetIdempotent(t.Context(), domain.Turn{
+		ID:        "app-orphan-turn",
+		RoomID:    created.Room.ID,
+		RequestID: "app-orphan-req",
+		InputHash: "h1",
+		Status:    domain.TurnStatusRunning,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	a2, err := app.Open(t.Context(), app.Options{DataDir: dataDir, ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatalf("reopen App: %v", err)
+	}
+	defer func() { _ = a2.Close(context.Background()) }()
+
+	var reloaded struct {
+		Turns []domain.Turn `json:"turns"`
+	}
+	if code := doJSON(a2.Handler(), http.MethodGet, "/api/v1/rooms/"+created.Room.ID, nil, &reloaded); code != http.StatusOK {
+		t.Fatalf("get room after reopen = %d", code)
+	}
+	if len(reloaded.Turns) != 1 || reloaded.Turns[0].Status != domain.TurnStatusFailed || reloaded.Turns[0].ErrorCode != "interrupted" {
+		t.Fatalf("expected orphan turn recovered to failed/interrupted on open, got %+v", reloaded.Turns)
+	}
+}

@@ -192,6 +192,25 @@ type CharacterValue struct {
 	Text string `json:"text"`
 }
 
+type PromptSnapshotState struct {
+	Self          ActorAffect             `json:"self"`
+	Relationships map[string]Relationship `json:"relationships,omitempty"`
+	Values        []CharacterValue        `json:"values,omitempty"`
+	WorkDir       string                  `json:"work_dir,omitempty"`
+}
+
+type PromptInjection struct {
+	AfterSeq int64  `json:"after_seq"`
+	Content  string `json:"content"`
+}
+
+type PromptCacheState struct {
+	EpochSeq    int64                `json:"epoch_seq"`
+	Baseline    *PromptSnapshotState `json:"baseline,omitempty"`
+	LastEmitted *PromptSnapshotState `json:"last_emitted,omitempty"`
+	Injections  []PromptInjection    `json:"injections,omitempty"`
+}
+
 type ActorState struct {
 	Self                   ActorAffect             `json:"self"`
 	StateUpdatedAt         int64                   `json:"state_updated_at,omitempty"`
@@ -201,6 +220,7 @@ type ActorState struct {
 	CompactedThroughSeq    int64                   `json:"compacted_through_seq,omitempty"`
 	Values                 []CharacterValue        `json:"values,omitempty"`
 	ValuesRevision         int64                   `json:"values_revision"`
+	PromptCache            *PromptCacheState       `json:"prompt_cache,omitempty"`
 }
 
 type Room struct {
