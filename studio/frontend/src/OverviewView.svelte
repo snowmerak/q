@@ -2,24 +2,26 @@
   import { ArrowRight, FolderOpen, GitBranch, MessageSquare, MessageSquarePlus, Settings } from '@lucide/svelte';
   import { onMount } from 'svelte';
   import { requestJSON } from './api';
+  import { readOverviewCache, writeOverviewCache } from './sessions/cache';
   import { formatSessionTime } from './sessions/format';
   import type { RegisteredSessionTree } from './sessions/types';
 
   export let onopen: (path: string) => void;
 
-  let sessions: RegisteredSessionTree[] = [];
-  let loading = true;
+  let sessions: RegisteredSessionTree[] = readOverviewCache() || [];
+  let loading = sessions.length === 0;
   let error = '';
 
   async function loadSessions() {
-    loading = true;
+    if (sessions.length === 0) loading = true;
     error = '';
     try {
-      const result = await requestJSON<{ sessions: RegisteredSessionTree[] }>('GET', '/api/v1/registered-sessions');
+      const result = await requestJSON<{ sessions: RegisteredSessionTree[] }>('GET', '/api/v1/registered-sessions?include_delegations=0&limit=5');
       sessions = result.sessions.filter(session => !session.issue)
         .sort((a, b) => Date.parse(b.session.updated_at) - Date.parse(a.session.updated_at)).slice(0, 5);
+      writeOverviewCache(sessions);
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'Could not load recent sessions';
+      if (sessions.length === 0) error = cause instanceof Error ? cause.message : 'Could not load recent sessions';
     } finally {
       loading = false;
     }

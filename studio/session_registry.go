@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/snowmerak/q/coordinator"
@@ -54,13 +57,28 @@ type registerSessionRequest struct {
 func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:
+		includeDelegations := true
+		if raw := request.URL.Query().Get("include_delegations"); raw != "" {
+			parsed, err := strconv.ParseBool(raw)
+			if err != nil {
+				writeAPIError(writer, http.StatusBadRequest, errors.New("include_delegations must be a boolean"))
+				return
+			}
+			includeDelegations = parsed
+		}
+		limit := 0
+		if raw := request.URL.Query().Get("limit"); raw != "" {
+			parsed, err := strconv.Atoi(raw)
+			if err != nil || parsed < 1 || parsed > 200 {
+				writeAPIError(writer, http.StatusBadRequest, errors.New("limit must be between 1 and 200"))
+				return
+			}
+			limit = parsed
+		}
+
 		projects, err := service.projects.list()
 		if err != nil {
 			writeAPIError(writer, http.StatusInternalServerError, err)
-			return
-		}
-		if err := service.ensureProjectManagers(request.Context(), projects); err != nil {
-			writeSessionError(writer, err)
 			return
 		}
 		items, err := service.registry.list()
@@ -68,18 +86,66 @@ func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWr
 			writeAPIError(writer, http.StatusInternalServerError, err)
 			return
 		}
-		trees := make([]registeredSessionTree, 0, len(items))
-		for _, item := range items {
-			project, managed, err := service.projectForRegistration(projects, item)
+		changed, err := service.ensureProjectManagersIfMissing(request.Context(), projects, items)
+		if err != nil {
+			writeSessionError(writer, err)
+			return
+		}
+		if changed {
+			items, err = service.registry.list()
 			if err != nil {
-				writeSessionError(writer, err)
+				writeAPIError(writer, http.StatusInternalServerError, err)
 				return
 			}
-			if managed && project == nil {
-				continue
+		}
+
+		type treeSlot struct {
+			tree registeredSessionTree
+			keep bool
+			err  error
+		}
+		slots := make([]treeSlot, len(items))
+		if len(items) > 0 {
+			workers := min(len(items), max(4, runtime.GOMAXPROCS(0)))
+			jobs := make(chan int, len(items))
+			for idx := range items {
+				jobs <- idx
 			}
-			tree := service.registeredTree(item, project)
-			trees = append(trees, tree)
+			close(jobs)
+			var wg sync.WaitGroup
+			wg.Add(workers)
+			for range workers {
+				go func() {
+					defer wg.Done()
+					for idx := range jobs {
+						item := items[idx]
+						project, managed, projErr := service.projectForRegistration(projects, item)
+						if projErr != nil {
+							slots[idx].err = projErr
+							continue
+						}
+						if managed && project == nil {
+							continue
+						}
+						slots[idx] = treeSlot{
+							tree: service.registeredTree(item, project, includeDelegations),
+							keep: true,
+						}
+					}
+				}()
+			}
+			wg.Wait()
+		}
+
+		trees := make([]registeredSessionTree, 0, len(items))
+		for _, slot := range slots {
+			if slot.err != nil {
+				writeSessionError(writer, slot.err)
+				return
+			}
+			if slot.keep {
+				trees = append(trees, slot.tree)
+			}
 		}
 		sort.SliceStable(trees, func(left, right int) bool {
 			if trees[left].Issue != "" && trees[right].Issue == "" {
@@ -90,6 +156,9 @@ func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWr
 			}
 			return trees[left].Session.UpdatedAt.After(trees[right].Session.UpdatedAt)
 		})
+		if limit > 0 && len(trees) > limit {
+			trees = trees[:limit]
+		}
 		writeJSON(writer, http.StatusOK, registeredSessionsResponse{Projects: projects, Sessions: trees})
 	case http.MethodPost:
 		var input registerSessionRequest
@@ -139,7 +208,7 @@ func (service *sessionsService) serveRegisteredCollection(writer http.ResponseWr
 			writeSessionError(writer, err)
 			return
 		}
-		writeJSON(writer, http.StatusCreated, service.registeredTree(item, project))
+		writeJSON(writer, http.StatusCreated, service.registeredTree(item, project, true))
 	default:
 		writer.Header().Set("Allow", "GET, POST")
 		writeAPIError(writer, http.StatusMethodNotAllowed, errors.New("method not allowed"))
@@ -182,7 +251,14 @@ func (service *sessionsService) serveRegisteredItem(writer http.ResponseWriter, 
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (service *sessionsService) registeredTree(item registeredSession, project *studioProject) registeredSessionTree {
+func (service *sessionsService) summaryLoader() *sessionSummaryCache {
+	if service.summaryCache == nil {
+		return newSessionSummaryCache()
+	}
+	return service.summaryCache
+}
+
+func (service *sessionsService) registeredTree(item registeredSession, project *studioProject, includeDelegations bool) registeredSessionTree {
 	tree := registeredSessionTree{
 		RegistrationID: item.ID, WorkspaceRoot: item.WorkspaceRoot,
 		Session: sessionSummary{SessionID: item.SessionID}, RegisteredAt: item.RegisteredAt,
@@ -199,13 +275,20 @@ func (service *sessionsService) registeredTree(item registeredSession, project *
 		tree.Issue = err.Error()
 		return tree
 	}
-	value, err := store.Load()
+	summary, err := service.summaryLoader().load(store)
 	if err != nil {
 		tree.Issue = err.Error()
 		return tree
 	}
-	tree.Session = detailFromSession(item.WorkspaceRoot, store, value).Session
-	if value.Type != workspace.Interaction {
+	sessionType := summary.Type.Effective()
+	tree.Session = sessionSummary{
+		Type:      sessionType,
+		SessionID: store.SessionID,
+		RunID:     summary.RunID,
+		Title:     summary.Title,
+		UpdatedAt: summary.UpdatedAt,
+	}
+	if !includeDelegations || sessionType != workspace.Interaction {
 		return tree
 	}
 	remaining := maximumDelegationTreeNodes

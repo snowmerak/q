@@ -7,6 +7,7 @@
   import { appendImages, imageDataURL, imageFiles } from './workitems/images';
   import ModelTimings from './sessions/ModelTimings.svelte';
   import { loadDraft, saveDraft } from './sessions/drafts';
+  import { readSessionTreeCache, writeSessionTreeCache } from './sessions/cache';
   import { historyPageSize, mergeHistory } from './sessions/history';
   import SessionRegistration from './sessions/SessionRegistration.svelte';
   import SessionModelPicker from './sessions/SessionModelPicker.svelte';
@@ -368,6 +369,11 @@
   }
 
   async function loadRegisteredSessions(preferredRegistration = '', approved = false) {
+    const cached = readSessionTreeCache();
+    if (cached && !registeredSessions.length) {
+      projects = cached.projects;
+      registeredSessions = cached.sessions;
+    }
     workspaceLoading = true;
     error = '';
     try {
@@ -375,6 +381,7 @@
       const result = (await response.json()) as { projects?: StudioProject[]; sessions: RegisteredSessionTree[] };
       projects = result.projects || [];
       registeredSessions = result.sessions;
+      writeSessionTreeCache({ projects, sessions: registeredSessions });
       const legacy = window.location.pathname.match(/^\/(councils|composers)(?:\/([^/]+))?$/);
       if (legacy) typeFilter = legacy[1] === 'councils' ? 'council' : 'composer';
       const targetID = preferredRegistration || selectedRegistration?.registration_id || sessionFromLocation();
@@ -382,7 +389,7 @@
       const target = legacyTarget || registeredSessions.find((registration) => registration.registration_id === targetID && !registration.issue)
         || (!legacy?.[2] ? registeredSessions.find((registration) => sessionListVisible(registration.kind) && !registration.issue && (typeFilter === 'all' || registration.session.type === typeFilter)) : null);
       if (target) {
-        await selectRegisteredSession(target, false, approved);
+        await selectRegisteredSession(target, false, approved, true);
         window.history.replaceState({}, '', currentPath());
       } else {
         clearSelectedSession();
@@ -405,6 +412,7 @@
     try {
       const response = await requestResponse(workflow ? `/api/v1/${workflow === 'council' ? 'councils' : 'composers'}/${encodeURIComponent(registration.session.session_id)}` : `/api/v1/${chat ? 'chats' : 'registered-sessions'}/${encodeURIComponent(registration.registration_id)}`, { method: 'DELETE' });
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== registration.registration_id);
+      writeSessionTreeCache({ projects, sessions: registeredSessions });
       if (selectedRegistration?.registration_id === registration.registration_id) {
         workflowDirty = false;
         const next = registeredSessions.find((item) => sessionListVisible(item.kind) && !item.issue);
@@ -432,6 +440,7 @@
       const response = await requestResponse(`/api/v1/sessions/${encodeURIComponent(selected.session.session_id)}?workspace_root=${encodeURIComponent(workspaceRoot)}`, { method: 'DELETE' });
       await fetch(`/api/v1/registered-sessions/${encodeURIComponent(selectedRegistration.registration_id)}`, { method: 'DELETE' });
       registeredSessions = registeredSessions.filter((item) => item.registration_id !== selectedRegistration?.registration_id);
+      writeSessionTreeCache({ projects, sessions: registeredSessions });
       const next = registeredSessions.find((item) => sessionListVisible(item.kind) && !item.issue);
       if (next) await selectRegisteredSession(next, false);
       else clearSelectedSession();
@@ -462,7 +471,7 @@
     }
   }
 
-  async function selectRegisteredSession(registration: RegisteredSessionTree, push = true, approved = false) {
+  async function selectRegisteredSession(registration: RegisteredSessionTree, push = true, approved = false, skipDelegationFetch = false) {
     if (registration.registration_id !== selectedRegistration?.registration_id || workflowCreate) {
       if (!approved && !canLeave()) return;
     } else if (registration.session.type && registration.session.type !== 'interaction') {
@@ -505,7 +514,11 @@
       activeRun = null;
       questionAnswer = '';
       if (push) window.history.pushState({}, '', `/sessions/${encodeURIComponent(registration.registration_id)}`);
-      await Promise.all([reconnectLatestRun(sessionID), loadDelegations(sessionID)]);
+      if (skipDelegationFetch) {
+        await reconnectLatestRun(sessionID);
+      } else {
+        await Promise.all([reconnectLatestRun(sessionID), loadDelegations(sessionID)]);
+      }
     } catch (cause) {
       if (isCurrentSession(generation)) error = cause instanceof Error ? cause.message : 'Could not load the session';
     } finally {
@@ -759,6 +772,7 @@
     const result = (await response.json()) as { projects?: StudioProject[]; sessions: RegisteredSessionTree[] };
     projects = result.projects || [];
     registeredSessions = result.sessions;
+    writeSessionTreeCache({ projects, sessions: registeredSessions });
     if (selectedRegistration) {
       selectedRegistration = registeredSessions.find((registration) => registration.registration_id === selectedRegistration?.registration_id) || selectedRegistration;
     }

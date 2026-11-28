@@ -2,6 +2,7 @@
 package workspace
 
 import (
+	"bufio"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -109,6 +110,15 @@ type ActiveTask struct {
 	Objective          string    `json:"objective"`
 	CompletionCriteria []string  `json:"completion_criteria,omitempty"`
 	StartedAt          time.Time `json:"started_at"`
+}
+
+type SessionSummary struct {
+	Version   int
+	ID        string
+	Type      SessionType
+	RunID     string
+	Title     string
+	UpdatedAt time.Time
 }
 
 type Store struct {
@@ -262,6 +272,69 @@ func (s Store) Load() (Session, error) {
 	return cloneSession(session), nil
 }
 
+// LoadSummary reads only top-level session metadata without allocating transcript,
+// context, replay, or thought slices.
+func (s Store) LoadSummary() (SessionSummary, error) {
+	if s.nestedDir != "" {
+		if err := rejectSymlinks(s.Root, s.Path()); err != nil {
+			return SessionSummary{}, err
+		}
+	}
+	file, err := fsopen.Open(s.Path())
+	if errors.Is(err, os.ErrNotExist) {
+		return SessionSummary{}, ErrNotFound
+	}
+	if err != nil {
+		return SessionSummary{}, fmt.Errorf("workspace: open %s: %w", s.Path(), err)
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return SessionSummary{}, fmt.Errorf("workspace: inspect %s: %w", s.Path(), err)
+	}
+	if info.Size() > maximumSize {
+		return SessionSummary{}, fmt.Errorf("workspace: session exceeds %d bytes", maximumSize)
+	}
+
+	decoder := json.NewDecoder(bufio.NewReaderSize(io.LimitReader(file, maximumSize), 64<<10))
+	var raw struct {
+		Version   int         `json:"version"`
+		ID        string      `json:"id"`
+		Type      SessionType `json:"type"`
+		RunID     string      `json:"run_id"`
+		Title     string      `json:"title"`
+		UpdatedAt *time.Time  `json:"updated_at"`
+	}
+	if err := decoder.Decode(&raw); err != nil {
+		return SessionSummary{}, fmt.Errorf("workspace: decode %s: %w", s.Path(), err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return SessionSummary{}, fmt.Errorf("workspace: decode %s: multiple JSON values", s.Path())
+		}
+		return SessionSummary{}, fmt.Errorf("workspace: decode %s: %w", s.Path(), err)
+	}
+	if raw.Version != CurrentVersion {
+		return SessionSummary{}, fmt.Errorf("workspace: unsupported session version %d", raw.Version)
+	}
+	if s.SessionID != "" && raw.ID != "" && raw.ID != s.SessionID {
+		return SessionSummary{}, fmt.Errorf("workspace: session ID %q does not match directory %q", raw.ID, s.SessionID)
+	}
+	var updatedAt time.Time
+	if raw.UpdatedAt != nil {
+		updatedAt = raw.UpdatedAt.UTC()
+	}
+	return SessionSummary{
+		Version:   raw.Version,
+		ID:        raw.ID,
+		Type:      raw.Type.Effective(),
+		RunID:     raw.RunID,
+		Title:     raw.Title,
+		UpdatedAt: updatedAt,
+	}, nil
+}
+
 func (s Store) Save(session Session) error {
 	session = cloneSession(session)
 	if session.Type == "" {
@@ -338,17 +411,14 @@ func (s Store) ListSessions() ([]SessionEntry, error) {
 			continue
 		}
 		store := Store{Root: s.Root, SessionID: entry.Name()}
-		session, loadErr := store.Load()
+		summary, loadErr := store.LoadSummary()
 		if errors.Is(loadErr, ErrNotFound) {
 			continue
 		}
 		if loadErr != nil {
 			return nil, loadErr
 		}
-		updatedAt := time.Time{}
-		if session.UpdatedAt != nil {
-			updatedAt = session.UpdatedAt.UTC()
-		}
+		updatedAt := summary.UpdatedAt
 		if updatedAt.IsZero() {
 			info, statErr := os.Stat(store.Path())
 			if statErr != nil {
@@ -357,7 +427,7 @@ func (s Store) ListSessions() ([]SessionEntry, error) {
 			updatedAt = info.ModTime().UTC()
 		}
 		result = append(result, SessionEntry{
-			Store: store, Type: session.Type, RunID: session.RunID, Title: session.Title, UpdatedAt: updatedAt,
+			Store: store, Type: summary.Type, RunID: summary.RunID, Title: summary.Title, UpdatedAt: updatedAt,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {

@@ -69,7 +69,7 @@ func (service *sessionsService) serveCreateChat(writer http.ResponseWriter, requ
 		writeSessionError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusCreated, service.registeredTree(item, nil))
+	writeJSON(writer, http.StatusCreated, service.registeredTree(item, nil, true))
 }
 
 func (service *sessionsService) serveDeleteChat(writer http.ResponseWriter, request *http.Request) {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/snowmerak/q/app"
@@ -38,6 +39,9 @@ type sessionsService struct {
 	composers        *composerService
 	embeddingSync    *embeddingSyncService
 	embeddingChanges *embeddingChangeService
+	summaryCache     *sessionSummaryCache
+	verifiedMu       sync.Mutex
+	verifiedManagers map[string]struct{}
 }
 
 type sessionSummary struct {
@@ -98,7 +102,9 @@ func newSessionsService(parent context.Context, runner sessionRunner, configDire
 	service := &sessionsService{
 		main:   config.Store{Dir: configDirectory},
 		runner: runner, runs: newSessionRunService(parent, runner), registry: newSessionRegistry(configDirectory),
-		projects: newStudioProjectStore(configDirectory),
+		projects:         newStudioProjectStore(configDirectory),
+		summaryCache:     newSessionSummaryCache(),
+		verifiedManagers: make(map[string]struct{}),
 	}
 	if setter, ok := runner.(interface {
 		SetCoordinatorDelivery(func(context.Context, workspace.Store, string, string) error)

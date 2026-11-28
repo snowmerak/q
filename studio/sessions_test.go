@@ -169,6 +169,11 @@ func TestRegisteredSessionsPersistTreesAndUnregisterWithoutDeletingSource(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := child.SaveDelegationState(workspace.DelegationState{
+		Agent: bookmark.Agent, Prompt: bookmark.Prompt, RunID: bookmark.RunID, Status: "running",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := child.Save(workspace.Session{
 		Title: "Research", UpdatedAt: &now,
 		Transcript: []client.Message{{Role: client.RoleAssistant, Content: "child conversation"}},
@@ -195,7 +200,7 @@ func TestRegisteredSessionsPersistTreesAndUnregisterWithoutDeletingSource(t *tes
 		t.Fatal(err)
 	}
 	if registered.RegistrationID == "" || registered.Session.Title != "Registered root" || len(registered.Delegations) != 1 ||
-		len(registered.Delegations[0].Transcript) != 1 {
+		registered.Delegations[0].Bookmark.InvocationID == "" || len(registered.Delegations[0].Transcript) != 0 {
 		t.Fatalf("registered tree = %#v", registered)
 	}
 
@@ -205,8 +210,17 @@ func TestRegisteredSessionsPersistTreesAndUnregisterWithoutDeletingSource(t *tes
 	}
 	list := httptest.NewRecorder()
 	reopened.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/v1/registered-sessions", nil))
-	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "child conversation") {
+	if list.Code != http.StatusOK || !strings.Contains(list.Body.String(), "Registered root") ||
+		!strings.Contains(list.Body.String(), registered.Delegations[0].Bookmark.InvocationID) ||
+		strings.Contains(list.Body.String(), "child conversation") {
 		t.Fatalf("persisted registry = %d %s", list.Code, list.Body.String())
+	}
+
+	childReq := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+store.SessionID+"/delegations/session?workspace_root="+url.QueryEscape(root)+"&path="+url.QueryEscape(registered.Delegations[0].Bookmark.InvocationID), nil)
+	childRec := httptest.NewRecorder()
+	reopened.ServeHTTP(childRec, childReq)
+	if childRec.Code != http.StatusOK || !strings.Contains(childRec.Body.String(), "child conversation") {
+		t.Fatalf("delegation session = %d %s", childRec.Code, childRec.Body.String())
 	}
 
 	unregister := httptest.NewRecorder()
@@ -352,8 +366,15 @@ func TestSessionDelegationTreeIncludesChildStateAndTranscript(t *testing.T) {
 		http.MethodGet, "/api/v1/sessions/"+store.SessionID+"/delegations?workspace_root="+url.QueryEscape(root), nil,
 	))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"agent":"builtin/research"`) ||
-		!strings.Contains(response.Body.String(), `"name":"read_file"`) || !strings.Contains(response.Body.String(), "Inspecting files") {
+		!strings.Contains(response.Body.String(), `"name":"read_file"`) || strings.Contains(response.Body.String(), "Inspecting files") {
 		t.Fatalf("delegation tree = %d %s", response.Code, response.Body.String())
+	}
+	detailResp := httptest.NewRecorder()
+	handler.ServeHTTP(detailResp, httptest.NewRequest(
+		http.MethodGet, "/api/v1/sessions/"+store.SessionID+"/delegations/session?workspace_root="+url.QueryEscape(root)+"&path=child-one", nil,
+	))
+	if detailResp.Code != http.StatusOK || !strings.Contains(detailResp.Body.String(), "Inspecting files") {
+		t.Fatalf("delegation session = %d %s", detailResp.Code, detailResp.Body.String())
 	}
 }
 

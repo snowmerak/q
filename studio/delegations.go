@@ -106,11 +106,6 @@ func loadDelegationNodes(store workspace.Store, depth int, remaining *int) ([]de
 		} else if !errors.Is(stateErr, os.ErrNotExist) {
 			node.Issue = stateErr.Error()
 		}
-		if session, sessionErr := child.Load(); sessionErr == nil {
-			node.Transcript = detailFromSession(store.Root, child, session).Transcript
-		} else if !errors.Is(sessionErr, workspace.ErrNotFound) && node.Issue == "" {
-			node.Issue = sessionErr.Error()
-		}
 		children, childErr := loadDelegationNodes(child, depth+1, remaining)
 		if childErr != nil {
 			return nil, childErr
