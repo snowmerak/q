@@ -326,6 +326,18 @@ func (g *Gateway) Models(ctx context.Context) ([]llmprovider.Model, error) {
 	return models, nil
 }
 
+// RefreshModels forces an immediate model discovery pass and returns the
+// updated model list.
+func (g *Gateway) RefreshModels(ctx context.Context) ([]llmprovider.Model, error) {
+	if g == nil {
+		return nil, nil
+	}
+	refreshCtx, cancel := context.WithTimeout(ctx, g.modelRefreshTimeout)
+	defer cancel()
+	g.refreshModelCache(refreshCtx)
+	return g.Models(ctx)
+}
+
 // WaitForAuthentication drains sign-in transactions after HTTP requests have
 // stopped reaching this Gateway, before closing a retired generation.
 func (g *Gateway) WaitForAuthentication(ctx context.Context) error {
