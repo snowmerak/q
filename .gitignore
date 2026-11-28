@@ -1,10 +1,27 @@
+# Go build & test outputs
 /bin/
-./q.exe
-./q
-.q
-/studio/frontend/node_modules/
-/studio/frontend/test-results/
-/studio/frontend/playwright-report/
-/go.work.sum
-/desktop/*.exe
-/desktop/desktop
+/q
+/q.exe
+*.exe
+*.test
+*.out
+go.work.sum
+
+# Local runtime & secrets
+.q/
+.env
+.env.local
+config/*.local.json
+config/*.local.yaml
+
+# Frontend (React / Vite)
+web/node_modules/
+web/dist/
+web/.vite/
+web/test-results/
+web/playwright-report/
+
+# Desktop (Wails v3)
+desktop/build/bin/
+desktop/*.exe
+desktop/desktop

@@ -1,7 +1,0 @@
-go 1.27.4
-
-use (
-	.
-	./third_party/acp-go-sdk
-	./third_party/acp-go-sdk/cmd/generate
-)
