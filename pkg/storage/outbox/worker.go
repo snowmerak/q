@@ -30,6 +30,7 @@ type Payload struct {
 type Worker struct {
 	rdb          storage.RDBStore
 	search       storage.SearchIndex
+	embedderMu   sync.RWMutex
 	embedder     Embedder
 	pollInterval time.Duration
 	batchSize    int
@@ -39,6 +40,23 @@ type Worker struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	onError func(error)
+}
+
+// SetEmbedder swaps the document embedder used for subsequent outbox items.
+func (w *Worker) SetEmbedder(embedder Embedder) {
+	if w == nil {
+		return
+	}
+	w.embedderMu.Lock()
+	w.embedder = embedder
+	w.embedderMu.Unlock()
+}
+
+func (w *Worker) currentEmbedder() Embedder {
+	w.embedderMu.RLock()
+	e := w.embedder
+	w.embedderMu.RUnlock()
+	return e
 }
 
 type Option func(*Worker)
@@ -169,8 +187,9 @@ func (w *Worker) handleEntry(ctx context.Context, entry domain.OutboxEntry) erro
 	}
 
 	var embErr error
-	if doc.Vector == nil && w.embedder != nil && payload.Text != "" {
-		model, dim, vec, err := w.embedder.EmbedDocument(ctx, payload.Text)
+	embedder := w.currentEmbedder()
+	if doc.Vector == nil && embedder != nil && payload.Text != "" {
+		model, dim, vec, err := embedder.EmbedDocument(ctx, payload.Text)
 		if err != nil {
 			embErr = err
 		} else if len(vec) > 0 && dim > 0 {

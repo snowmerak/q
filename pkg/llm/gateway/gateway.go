@@ -437,8 +437,14 @@ func effectiveProviderKind(config ProviderConfig) string {
 	case "openai-compatible":
 		if config.BaseURL != "" {
 			endpoint, err := url.Parse(config.BaseURL)
-			if err == nil && strings.EqualFold(endpoint.Hostname(), "api.x.ai") {
-				return "grok"
+			if err == nil {
+				host := endpoint.Hostname()
+				if strings.EqualFold(host, "api.x.ai") {
+					return "grok"
+				}
+				if strings.EqualFold(host, "generativelanguage.googleapis.com") {
+					return "generic"
+				}
 			}
 		}
 		return "openai"

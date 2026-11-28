@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snowmerak/q/v2/internal/fsutil"
@@ -21,6 +22,8 @@ import (
 	llmprovider "github.com/snowmerak/q/v2/pkg/llm"
 	"github.com/snowmerak/q/v2/pkg/llm/decisions"
 	"github.com/snowmerak/q/v2/pkg/llm/gateway"
+	"github.com/snowmerak/q/v2/pkg/memory"
+	"github.com/snowmerak/q/v2/pkg/runtime"
 	"github.com/snowmerak/q/v2/pkg/storage"
 	"github.com/snowmerak/q/v2/pkg/storage/blob/localfs"
 	"github.com/snowmerak/q/v2/pkg/storage/outbox"
@@ -40,18 +43,23 @@ type App struct {
 	listenAddr string
 	logger     *slog.Logger
 
-	lock    *fsutil.InstanceLock
-	watcher *config.Watcher
-
-	rdb    storage.RDBStore
-	search storage.SearchIndex
-	blob   storage.BlobStore
-	outbox *outbox.Worker
+	lock        *fsutil.InstanceLock
+	watcher     *config.Watcher
+	rdb         storage.RDBStore
+	search      storage.SearchIndex
+	blob        storage.BlobStore
+	outbox      *outbox.Worker
+	valueWorker *memory.ValueWorker
+	engine      *runtime.Engine
 
 	providerMu     sync.RWMutex
 	gateway        *gateway.Gateway
 	decisionsReg   *decisions.Registry
+	embedder       *outbox.HTTPEmbedder
 	degradedReason string
+
+	reindexRunning atomic.Bool
+	reindexWG      sync.WaitGroup
 
 	serverMu  sync.Mutex
 	listener  net.Listener
@@ -110,12 +118,17 @@ func Open(ctx context.Context, opts Options) (*App, error) {
 	if err := a.openStorage(ctx, cfg); err != nil {
 		return nil, err
 	}
-	a.reloadProviders(ctx, cfg)
 
 	a.outbox = outbox.NewWorker(a.rdb, a.search, nil, outbox.WithErrorHandler(func(err error) {
 		a.logger.Warn("outbox worker error", "error", err)
 	}))
+	a.reloadProviders(ctx, cfg)
 	a.outbox.Start(ctx)
+
+	a.valueWorker = memory.NewValueWorker(a.rdb, a.resolveValueModel, memory.WithValueErrorHandler(func(err error) {
+		a.logger.Warn("value worker error", "error", err)
+	}))
+	a.valueWorker.Start(ctx)
 
 	watcher, err := config.StartWatcher(ctx, a.configPath, cfg, func(prev, next config.Config) {
 		if restartFields := config.DiffRestartRequired(prev, next); len(restartFields) > 0 {
@@ -129,6 +142,8 @@ func Open(ctx context.Context, opts Options) (*App, error) {
 		return nil, fmt.Errorf("start config watcher: %w", err)
 	}
 	a.watcher = watcher
+
+	a.engine = runtime.NewEngine(a.rdb, a.search, a, a.logger)
 
 	cleanupOnErr = false
 	return a, nil
@@ -194,21 +209,96 @@ func (a *App) reloadProviders(ctx context.Context, cfg config.Config) {
 		}
 	}
 
-	decReg, err := decisions.NewRegistry(cfg.Decisions, os.Getenv)
-	if err != nil {
-		degraded = append(degraded, fmt.Sprintf("decisions: %v", err))
+	var decReg *decisions.Registry
+	if len(cfg.Decisions.Models) > 0 || len(cfg.Decisions.Providers) > 0 {
+		reg, err := decisions.NewRegistry(cfg.Decisions, os.Getenv)
+		if err != nil {
+			degraded = append(degraded, fmt.Sprintf("decisions: %v", err))
+		} else {
+			decReg = reg
+		}
+	}
+
+	var emb *outbox.HTTPEmbedder
+	if cfg.Embeddings.Enabled {
+		builtEmb, err := outbox.NewHTTPEmbedder(outbox.HTTPEmbedderConfig{
+			BaseURL:        cfg.Embeddings.BaseURL,
+			APIKeyEnv:      cfg.Embeddings.APIKeyEnv,
+			Model:          cfg.Embeddings.Model,
+			Dimensions:     cfg.Embeddings.Dimensions,
+			QueryPrefix:    cfg.Embeddings.QueryPrefix,
+			DocumentPrefix: cfg.Embeddings.DocumentPrefix,
+			Timeout:        time.Duration(cfg.Embeddings.TimeoutMS) * time.Millisecond,
+			LookupEnv:      os.Getenv,
+		})
+		if err != nil {
+			degraded = append(degraded, fmt.Sprintf("embeddings: %v", err))
+		} else {
+			emb = builtEmb
+		}
 	}
 
 	a.providerMu.Lock()
 	oldGW := a.gateway
 	a.gateway = gw
 	a.decisionsReg = decReg
+	a.embedder = emb
 	a.degradedReason = strings.Join(degraded, "; ")
 	a.providerMu.Unlock()
 
+	if a.outbox != nil {
+		if emb != nil {
+			a.outbox.SetEmbedder(emb)
+		} else {
+			a.outbox.SetEmbedder(nil)
+		}
+	}
 	if oldGW != nil {
 		_ = oldGW.Close()
 	}
+}
+
+// Snapshot satisfies runtime.ProviderSource with the current hot-reloadable backends.
+func (a *App) Snapshot() runtime.ProviderSnapshot {
+	cfg := a.currentConfig()
+	a.providerMu.RLock()
+	gw := a.gateway
+	dec := a.decisionsReg
+	emb := a.embedder
+	a.providerMu.RUnlock()
+
+	var qEmb memory.QueryEmbedder
+	if emb != nil {
+		qEmb = emb
+	}
+	return runtime.ProviderSnapshot{
+		Config:    cfg,
+		Gateway:   gw,
+		Decisions: dec,
+		Embedder:  qEmb,
+	}
+}
+
+func (a *App) resolveValueModel(ctx context.Context, roomID, characterID string) (memory.ChatCompleter, string, string, int, error) {
+	room, err := a.rdb.Rooms().Get(ctx, roomID)
+	if err != nil {
+		return nil, "", "", 0, err
+	}
+	members, err := a.rdb.Rooms().ListMembers(ctx, roomID)
+	if err != nil {
+		return nil, "", "", 0, err
+	}
+	snap := a.Snapshot()
+	if snap.Gateway == nil {
+		return nil, "", "", 0, errors.New("app: no LLM gateway configured")
+	}
+	for _, m := range members {
+		if m.CharacterID == characterID {
+			r := runtime.ResolveModels(ctx, snap.Config, room, m.CharacterSnapshot, snap.Gateway)
+			return snap.Gateway, r.MemoryModel, r.MemoryReasoningEffort, r.ContextWindow, nil
+		}
+	}
+	return nil, "", "", 0, fmt.Errorf("app: character %q not found in room %q", characterID, roomID)
 }
 
 // Start binds the HTTP listener and blocks until ctx is cancelled or the server stops.
@@ -258,7 +348,16 @@ func (a *App) Addr() string {
 	return a.listenAddr
 }
 
-func (a *App) DataDir() string { return a.dataDir }
+func (a *App) DataDir() string         { return a.dataDir }
+func (a *App) Engine() *runtime.Engine { return a.engine }
+func (a *App) RDB() storage.RDBStore   { return a.rdb }
+
+func (a *App) Gateway() *gateway.Gateway {
+	a.providerMu.RLock()
+	gw := a.gateway
+	a.providerMu.RUnlock()
+	return gw
+}
 
 func (a *App) currentConfig() config.Config {
 	if a.watcher != nil {
@@ -301,7 +400,7 @@ func (a *App) listDecisionModels() ([]decisions.ModelInfo, string) {
 	return models, reg.DefaultModelID()
 }
 
-// Close shuts down the HTTP server, background workers, storage backends, and instance lock.
+// Close shuts down the HTTP server, runtime engine, background workers, storage backends, and instance lock.
 func (a *App) Close(ctx context.Context) error {
 	var closeErr error
 	a.closeOnce.Do(func() {
@@ -315,6 +414,13 @@ func (a *App) Close(ctx context.Context) error {
 		if srv != nil {
 			closeErr = errors.Join(closeErr, srv.Shutdown(ctx))
 		}
+		if a.engine != nil {
+			a.engine.Close()
+		}
+		if a.valueWorker != nil {
+			a.valueWorker.Stop()
+		}
+		a.reindexWG.Wait()
 		if a.outbox != nil {
 			a.outbox.Stop()
 		}
