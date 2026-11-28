@@ -341,3 +341,93 @@ func jsonQuote(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
+
+func TestSystemWideAccessWhenAllowedRootsEmpty(t *testing.T) {
+	base := t.TempDir()
+	anywhere := filepath.Join(base, "anywhere")
+	dataDir := filepath.Join(base, "qdata")
+	if err := os.MkdirAll(anywhere, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(dataDir, "q.sqlite"), []byte("secret-db"), 0o600)
+	_ = os.WriteFile(filepath.Join(dataDir, "config.json"), []byte(`{"version":2}`), 0o600)
+
+	cmdMgr := task.NewCommandManager(10 * time.Second)
+	t.Cleanup(cmdMgr.Close)
+	reg := task.NewRegistry(task.RegistryDeps{Commands: cmdMgr})
+	call := task.CallContext{
+		AllowedRoots: nil, // Empty allowed_roots = full system access
+		DataDir:      dataDir,
+	}
+
+	targetFile := filepath.Join(anywhere, "friend-note.txt")
+	out, err := reg.Execute(t.Context(), call, "write_file", `{"path":`+jsonQuote(targetFile)+`,"content":"hi there"}`)
+	if err != nil || out.IsError {
+		t.Fatalf("write_file anywhere: %+v err=%v", out, err)
+	}
+	out, _ = reg.Execute(t.Context(), call, "read_file", `{"path":`+jsonQuote(targetFile)+`}`)
+	if out.IsError || !strings.Contains(out.Content, "hi there") {
+		t.Fatalf("read_file anywhere: %+v", out)
+	}
+	subDir := filepath.Join(anywhere, "nested")
+	out, _ = reg.Execute(t.Context(), call, "create_directory", `{"path":`+jsonQuote(subDir)+`}`)
+	if out.IsError {
+		t.Fatalf("create_directory anywhere: %+v", out)
+	}
+	copied := filepath.Join(subDir, "copied.txt")
+	moved := filepath.Join(subDir, "moved.txt")
+	out, _ = reg.Execute(t.Context(), call, "copy_path", `{"source":`+jsonQuote(targetFile)+`,"destination":`+jsonQuote(copied)+`}`)
+	if out.IsError {
+		t.Fatalf("copy_path anywhere: %+v", out)
+	}
+	out, _ = reg.Execute(t.Context(), call, "move_path", `{"source":`+jsonQuote(copied)+`,"destination":`+jsonQuote(moved)+`}`)
+	if out.IsError {
+		t.Fatalf("move_path anywhere: %+v", out)
+	}
+	out, _ = reg.Execute(t.Context(), call, "list_directory", `{"path":`+jsonQuote(subDir)+`}`)
+	if out.IsError || !strings.Contains(out.Content, "moved.txt") {
+		t.Fatalf("list_directory anywhere: %+v", out)
+	}
+
+	// Shell command with explicit cwd outside DataDir must succeed when allowed_roots is empty.
+	cmdStr := "echo anywhere-ok"
+	if goruntime.GOOS == "windows" {
+		cmdStr = "Write-Output 'anywhere-ok'"
+	}
+	outCmd, _ := reg.Execute(t.Context(), call, "run_command", `{"command":`+jsonQuote(cmdStr)+`,"cwd":`+jsonQuote(anywhere)+`}`)
+	if outCmd.IsError {
+		t.Fatalf("run_command anywhere: %+v", outCmd)
+	}
+	var started struct {
+		CommandID string `json:"command_id"`
+	}
+	_ = json.Unmarshal([]byte(outCmd.Content), &started)
+	outWait, _ := reg.Execute(t.Context(), call, "wait", `{"command_id":`+jsonQuote(started.CommandID)+`,"seconds":10}`)
+	if outWait.IsError || !strings.Contains(outWait.Content, "anywhere-ok") {
+		t.Fatalf("wait anywhere output: %+v", outWait)
+	}
+
+	// remove_path works inside anywhere...
+	out, _ = reg.Execute(t.Context(), call, "remove_path", `{"path":`+jsonQuote(moved)+`}`)
+	if out.IsError {
+		t.Fatalf("remove_path anywhere: %+v", out)
+	}
+
+	// ...but Q internal storage files remain protected!
+	for _, internal := range []string{filepath.Join(dataDir, "q.sqlite"), filepath.Join(dataDir, "config.json")} {
+		out, _ = reg.Execute(t.Context(), call, "read_file", `{"path":`+jsonQuote(internal)+`}`)
+		if !out.IsError || !strings.Contains(out.Content, "protected") {
+			t.Fatalf("expected protected internal rejection for %s, got %+v", internal, out)
+		}
+	}
+
+	// And filesystem root removal must always be refused.
+	fsRoot := filepath.VolumeName(anywhere) + string(filepath.Separator)
+	out, _ = reg.Execute(t.Context(), call, "remove_path", `{"path":`+jsonQuote(fsRoot)+`,"recursive":true}`)
+	if !out.IsError || !strings.Contains(out.Content, "filesystem root") {
+		t.Fatalf("expected filesystem root removal rejection for %q, got %+v", fsRoot, out)
+	}
+}

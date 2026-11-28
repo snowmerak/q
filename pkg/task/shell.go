@@ -210,14 +210,14 @@ func (m *CommandManager) Close() {
 func registerShellTools(r *Registry, mgr *CommandManager) {
 	r.register(ToolSpec{
 		Name:        "run_command",
-		Description: "Start an asynchronous shell command inside allowed_roots and return its command_id.",
+		Description: "Start an asynchronous shell command and return its command_id.",
 		Source:      domain.ToolSourceBuiltin,
 		Risk:        RiskExec,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"command":    map[string]any{"type": "string"},
-				"cwd":        map[string]any{"type": "string", "description": "Optional working directory inside allowed_roots."},
+				"cwd":        map[string]any{"type": "string", "description": "Optional working directory (restricted to allowed_roots only if configured)."},
 				"timeout_ms": map[string]any{"type": "integer"},
 			},
 			"required": []string{"command"},
@@ -234,23 +234,19 @@ func registerShellTools(r *Registry, mgr *CommandManager) {
 			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 				return ToolOutput{Content: "invalid args: " + err.Error(), IsError: true}, nil
 			}
+			guard, err := newPathGuard(call.AllowedRoots, call.DataDir)
+			if err != nil {
+				return ToolOutput{Content: err.Error(), IsError: true}, nil
+			}
 			workDir := ""
-			if len(call.AllowedRoots) > 0 {
-				guard, err := newPathGuard(call.AllowedRoots, call.DataDir)
-				if err != nil {
-					return ToolOutput{Content: err.Error(), IsError: true}, nil
-				}
-				target := args.Cwd
-				if strings.TrimSpace(target) == "" {
-					target = guard.allowedRoots[0]
-				}
-				resolved, err := guard.resolve(target)
+			if strings.TrimSpace(args.Cwd) != "" {
+				resolved, err := guard.resolve(args.Cwd)
 				if err != nil {
 					return ToolOutput{Content: err.Error(), IsError: true}, nil
 				}
 				workDir = filepath.Clean(resolved)
-			} else if strings.TrimSpace(args.Cwd) != "" {
-				return ToolOutput{Content: "cwd rejected: tools.allowed_roots is empty", IsError: true}, nil
+			} else if base := guard.defaultBaseDir(); base != "" {
+				workDir = base
 			}
 
 			var timeout time.Duration

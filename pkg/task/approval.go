@@ -72,7 +72,7 @@ func EvaluateApproval(
 			},
 		}, sdk.Questions{
 			"requires_approval": sdk.NoulQuestion{
-				Instructions: "Should this tool call require explicit user confirmation before executing? Return false for low-risk read-only queries clearly matching user_request (reading files within workspace, searching archive/knowledge/skills, inspecting artifacts). Return true for file writes/deletes, shell execution, external MCP/browser actions, or anything ambiguous/destructive.",
+				Instructions: "Should this tool call require explicit user confirmation before executing? Return false for low-risk read-only queries clearly matching user_request (reading files or listing directories, searching archive/knowledge/skills, inspecting artifacts). Return true for file writes/deletes, shell execution, external MCP/browser actions, or anything ambiguous/destructive.",
 			},
 		})
 		if err != nil {

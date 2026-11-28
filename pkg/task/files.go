@@ -62,9 +62,6 @@ func newPathGuard(allowedRoots []string, dataDir string) (*pathGuard, error) {
 		}
 		roots = append(roots, filepath.Clean(abs))
 	}
-	if len(roots) == 0 {
-		return nil, errors.New("file access denied: tools.allowed_roots is empty")
-	}
 	var cleanDataDir string
 	if strings.TrimSpace(dataDir) != "" {
 		if abs, err := filepath.Abs(dataDir); err == nil {
@@ -77,23 +74,47 @@ func newPathGuard(allowedRoots []string, dataDir string) (*pathGuard, error) {
 	return &pathGuard{allowedRoots: roots, dataDir: cleanDataDir}, nil
 }
 
-// resolve validates that rawPath lies lexically AND via resolved symlinks inside
-// allowed_roots, while rejecting protected Q data-dir internals.
+func (g *pathGuard) defaultBaseDir() string {
+	if len(g.allowedRoots) > 0 {
+		return g.allowedRoots[0]
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		return filepath.Clean(home)
+	}
+	if wd, err := os.Getwd(); err == nil && strings.TrimSpace(wd) != "" {
+		return filepath.Clean(wd)
+	}
+	return ""
+}
+
+// resolve validates rawPath against optional allowed_roots (or allows full system
+// access when allowed_roots is empty) while always rejecting protected Q data-dir internals.
 func (g *pathGuard) resolve(rawPath string) (string, error) {
 	rawPath = strings.TrimSpace(rawPath)
 	if rawPath == "" {
 		return "", errors.New("path is required")
 	}
 	candidate := rawPath
+	if candidate == "~" || strings.HasPrefix(candidate, "~/") || strings.HasPrefix(candidate, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			if candidate == "~" {
+				candidate = home
+			} else {
+				candidate = filepath.Join(home, candidate[2:])
+			}
+		}
+	}
 	if !filepath.IsAbs(candidate) {
-		candidate = filepath.Join(g.allowedRoots[0], candidate)
+		if base := g.defaultBaseDir(); base != "" {
+			candidate = filepath.Join(base, candidate)
+		}
 	}
 	abs, err := filepath.Abs(candidate)
 	if err != nil {
 		return "", err
 	}
 	abs = filepath.Clean(abs)
-	if !g.withinAllowed(abs) {
+	if len(g.allowedRoots) > 0 && !g.withinAllowed(abs) {
 		return "", fmt.Errorf("path %q escapes configured allowed_roots", rawPath)
 	}
 
@@ -101,7 +122,7 @@ func (g *pathGuard) resolve(rawPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !g.withinAllowed(resolved) {
+	if len(g.allowedRoots) > 0 && !g.withinAllowed(resolved) {
 		return "", fmt.Errorf("symlink %q escapes configured allowed_roots", rawPath)
 	}
 	if g.isProtectedInternal(resolved) {
@@ -292,7 +313,7 @@ func registerFileTools(r *Registry) {
 
 	r.register(ToolSpec{
 		Name:        "write_file",
-		Description: "Atomically create or overwrite a file within allowed_roots.",
+		Description: "Atomically create or overwrite a file (restricted to allowed_roots only if configured).",
 		Source:      domain.ToolSourceBuiltin,
 		Risk:        RiskWrite,
 		Parameters: map[string]any{
@@ -328,7 +349,7 @@ func registerFileTools(r *Registry) {
 
 	r.register(ToolSpec{
 		Name:        "list_directory",
-		Description: "List entries inside a directory within allowed_roots.",
+		Description: "List entries inside a directory (restricted to allowed_roots only if configured).",
 		Source:      domain.ToolSourceBuiltin,
 		Risk:        RiskRead,
 		Parameters: map[string]any{
@@ -372,7 +393,7 @@ func registerFileTools(r *Registry) {
 
 	r.register(ToolSpec{
 		Name:        "create_directory",
-		Description: "Create a directory (and parents) inside allowed_roots.",
+		Description: "Create a directory and parents (restricted to allowed_roots only if configured).",
 		Source:      domain.ToolSourceBuiltin,
 		Risk:        RiskWrite,
 		Parameters: map[string]any{
@@ -406,7 +427,7 @@ func registerFileTools(r *Registry) {
 
 	r.register(ToolSpec{
 		Name:        "move_path",
-		Description: "Move/rename a file or directory within allowed_roots.",
+		Description: "Move or rename a file or directory (restricted to allowed_roots only if configured).",
 		Source:      domain.ToolSourceBuiltin,
 		Risk:        RiskWrite,
 		Parameters: map[string]any{
@@ -449,7 +470,7 @@ func registerFileTools(r *Registry) {
 
 	r.register(ToolSpec{
 		Name:        "copy_path",
-		Description: "Copy a file within allowed_roots.",
+		Description: "Copy a file (restricted to allowed_roots only if configured).",
 		Source:      domain.ToolSourceBuiltin,
 		Risk:        RiskWrite,
 		Parameters: map[string]any{
@@ -506,7 +527,7 @@ func registerFileTools(r *Registry) {
 
 	r.register(ToolSpec{
 		Name:        "remove_path",
-		Description: "Remove a file or directory tree inside allowed_roots (cannot remove an allowed_root itself).",
+		Description: "Remove a file or directory tree (cannot remove a filesystem root or an allowed_root itself).",
 		Source:      domain.ToolSourceBuiltin,
 		Risk:        RiskWrite,
 		Parameters: map[string]any{
@@ -532,6 +553,9 @@ func registerFileTools(r *Registry) {
 			target, err := guard.resolve(args.Path)
 			if err != nil {
 				return ToolOutput{Content: err.Error(), IsError: true}, nil
+			}
+			if filepath.Dir(target) == target {
+				return ToolOutput{Content: "refusing to remove filesystem root", IsError: true}, nil
 			}
 			for _, root := range guard.allowedRoots {
 				if target == root {

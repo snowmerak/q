@@ -291,7 +291,7 @@ export function ToolsAndMCPSection({
       <CardHeader>
         <CardTitle>Tools, Browser Control &amp; MCP</CardTitle>
         <CardDescription>
-          Manage approval gate policies, workspace root guards, browser automation drivers, and external MCP servers.
+          Manage approval gate policies, optional directory restrictions, browser automation drivers, and external MCP servers.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
@@ -322,7 +322,7 @@ export function ToolsAndMCPSection({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="tools-roots">Allowed File Roots (one path per line)</Label>
+          <Label htmlFor="tools-roots">Allowed File Roots (optional — leave empty for full system access)</Label>
           <Textarea
             id="tools-roots"
             className="min-h-[76px] font-mono text-xs"
@@ -334,7 +334,7 @@ export function ToolsAndMCPSection({
                 .filter(Boolean);
               updateTools({ allowed_roots: roots.length > 0 ? roots : undefined });
             }}
-            placeholder="Leave empty to restrict writes safely or list allowed directories"
+            placeholder="Leave empty to allow access anywhere on the system, or list specific directories (one per line) to restrict access"
           />
         </div>
 
