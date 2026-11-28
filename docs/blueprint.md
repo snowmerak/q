@@ -239,13 +239,13 @@ flowchart LR
 
 ---
 
-## 7. 프로젝트 구성 **[확정 — 세부 파일 배치와 멀티모듈 여부는 M1에서 미세 조정]**
+## 7. 프로젝트 구성 **[확정 — 세부 파일 배치는 구현 시 미세 조정]**
 
 공개 라이브러리 중심(`pkg/`) 계층화, `llm-provider`/`cdp-q-driver` 코드 통합 및 독립 CLI 제공, `cmd/q`와 `desktop/`의 `pkg/app` 공유 원칙을 반영한 확정 구조입니다.
 
 ```text
 q/                              # Go module: github.com/snowmerak/q/v2
-├── go.mod
+├── go.mod                      # 루트 단일 모듈 (cmd/*, pkg/*, internal/* 포함)
 ├── .gitignore                  # web/dist, bin, .q 등 제외
 ├── Taskfile.yml                # 빌드·테스트·프런트엔드·독립 CLI·데스크톱 패키징
 ├── cmd/
@@ -275,7 +275,7 @@ q/                              # Go module: github.com/snowmerak/q/v2
 ```
 
 > [!NOTE]
-> **Go 모듈 경계 세부 결정 노트 (M1 착수 시 확정):** `pkg/llm`과 `pkg/cdp`를 루트 `go.mod`(`github.com/snowmerak/q/v2`) 단일 모듈 안에 둘지, 외부 소비자가 RDB/Bleve 의존성 없이 `llm-provider` 또는 `cdp-q-driver`만 가볍게 가져갈 수 있도록 하위 `go.mod` 멀티모듈(또는 `go.work`)로 분리할지는 M1 착수 시 `ADR-0004`에서 최종 결정합니다.
+> **Go 모듈 경계 확정 (`ADR-0004` 옵션 B):** `pkg/llm`과 `pkg/cdp`를 포함해 코어 전체는 단일 루트 `go.mod`(`github.com/snowmerak/q/v2`)로 관리하고, Wails v3 네이티브 GUI 의존성이 있는 `desktop/`만 별도 `desktop/go.mod`로 분리합니다. 단, `pkg/llm`과 `pkg/cdp`는 상위 코어 패키지를 절대 역참조하지 않도록 유지해 독립 CLI 바이너리의 경량성을 보장합니다.
 
 ---
 
@@ -297,7 +297,7 @@ q/                              # Go module: github.com/snowmerak/q/v2
 | 리스크 | 영향 | 완화 방향 |
 | --- | --- | --- |
 | **파일·셸 내장 도구 도입에 따른 로컬 실행 안전 경계** | 봇이 로컬 파일 수정(`write_file`/`edit_file`/`remove_path`)이나 셸 명령(`run_command`)을 실행하므로 의도치 않은 시스템 변경 위험 존재 | 승인 게이트 기본값을 `auto-detection` 또는 `request`로 두고, 작업 루트/허용 경로·셸 타임아웃·출력 상한을 `ADR-0003`에 명시 |
-| **공개 패키지의 전이 의존성 비대화** | 외부 사용자가 `pkg/llm`이나 `pkg/cdp`만 import하려 할 때 루트 모듈의 DB/검색 의존성이 함께 딸려올 수 있음 | `pkg/llm`, `pkg/cdp`가 상위 코어(`pkg/app`, `pkg/storage`)를 역참조하지 않도록 엄격히 분리하고, 필요 시 하위 `go.mod` 멀티모듈 분리 검토(`ADR-0004`) |
+| **공개 패키지의 전이 의존성 노출** | 단일 루트 `go.mod` 채택(`ADR-0004`)으로 외부 Go 프로젝트가 `pkg/llm`·`pkg/cdp`만 import해도 MVS 그래프에 루트 의존성이 노출될 수 있음 | `pkg/llm`, `pkg/cdp`가 상위 코어(`pkg/app`, `pkg/storage` 등)를 역참조하지 않도록 정적 검사(`go list -deps`)로 강제해 바이너리 링킹 경량성 유지 |
 | **HNSW 영속화·재색인 및 임베딩 차원 변경 관리** | 로컬 `Bleve + HNSW` 조합에서 비정상 종료 시 Bleve와 HNSW 간 상태 불일치나 임베딩 모델 변경 시 차원 충돌 위험 | `index_outbox` 커서와 HNSW 세대 디렉터리 분리, 시작 시 정합성 검증 및 RDB 원문 기반 재색인 제공 |
 | **승인 게이트 `auto-detection` 판정 오류** | Decisions가 위험 도구를 통과(미탐)시키거나 무해한 도구를 매번 차단(과차단)해 UX 저하 | 도구 메타데이터(읽기/쓰기/셸/외부 부수효과 분류)를 Decisions 입력에 명시하고, 고위험 도구는 강제 `request` 정책 지정 가능하게 설계 |
 | **RDB 3종(`SQLite`/`PostgreSQL`/`MySQL`) 동시 지원 비용** | SQL 방언, JSON 연산, 마이그레이션 차이로 유지보수 비용 증가 | 단일 인스턴스 전제로 분산 락 SQL을 제거하고, 공통 저장소 계약 테스트(Contract Test Suite)와 단순한 쿼리 계층 유지 |
@@ -308,4 +308,4 @@ q/                              # Go module: github.com/snowmerak/q/v2
 1. **[`ADR-0001`](./adr/0001-storage-authority-and-hybrid-search.md):** RDB 단일 권위 + `Bleve + HNSW` / `OpenSearch` 파생 프로젝션 및 Outbox 재색인 계약 *(확정 · 세부 스키마 제안)*
 2. **[`ADR-0002`](./adr/0002-chat-bubble-room-and-decisions-protocol.md):** 채팅 버블 기반 멀티캐릭터 룸 + Decisions 조율 및 `observedBy` 격리 프로토콜 *(확정 · 세부 파라미터 제안)*
 3. **[`ADR-0003`](./adr/0003-tools-approval-gate-and-browser-control.md):** 1차 내장 도구 7개 영역, 3단계 승인 게이트 및 `browser_control` 계약 *(확정 · 세부 가드 제안)*
-4. **[`ADR-0004`](./adr/0004-module-layout-and-independent-distribution.md):** 공개 `pkg/` 계층, 공유 코어 및 `llm`/`cdp` 독립 배포 모듈 경계 *(부분 확정 / 모듈 분리 방식 제안)*
+4. **[`ADR-0004`](./adr/0004-module-layout-and-independent-distribution.md):** 공개 `pkg/` 계층, 공유 코어 및 `llm`/`cdp` 독립 배포 모듈 경계 *(확정 — 단일 루트 `go.mod` + `desktop/go.mod` 분리)*
