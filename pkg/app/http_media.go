@@ -208,6 +208,14 @@ func (a *App) runReindex(ctx context.Context) error {
 	jobCtx, cancelJob := context.WithCancel(ctx)
 	defer cancelJob()
 
+	if a.outbox != nil {
+		resumeOutbox, err := a.outbox.Pause(jobCtx)
+		if err != nil {
+			return err
+		}
+		defer resumeOutbox()
+	}
+
 	docsCh := make(chan storage.SearchDocument, 64)
 	errCh := make(chan error, 1)
 

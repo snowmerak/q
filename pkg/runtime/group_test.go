@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -934,4 +935,233 @@ func TestGroupTurnAtomicCheckpointCommitAndOrphanRecovery(t *testing.T) {
 			t.Fatalf("expected 1 character message after handoff=true on recovery, got %d", charCount)
 		}
 	})
+}
+
+func TestGroupTurnRetryAfterLaterCompletedTurnUsesOwnReplyForHandoff(t *testing.T) {
+	const firstReply = "Turn1-Alpha"
+	const laterReply = "Turn2-Beta"
+	handoffEntered := make(chan struct{})
+	var retrying, retryHandoffSeen atomic.Bool
+	var generations atomic.Int32
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = io.WriteString(w, `{"data":[{"id":"chat-1","context_length":32768}]}`)
+		case "/v1/decisions":
+			body, _ := io.ReadAll(r.Body)
+			raw := string(body)
+			switch {
+			case strings.Contains(raw, `"participation"`):
+				// Both characters wait after Turn 2's reply, letting it finish with one step.
+				choice, actProbability := "act", 0.9
+				if !retrying.Load() && strings.Contains(raw, laterReply) {
+					choice, actProbability = "wait", 0.1
+				}
+				_, _ = fmt.Fprintf(w, `{"model":"dec-1","usage":{"input_tokens":5,"output_tokens":1},"answers":[{"name":"participation","type":"choice","choice":%q,"confidence":0.9,"probabilities":[{"value":"act","probability":%.1f},{"value":"wait","probability":%.1f}]}]}`, choice, actProbability, 1-actProbability)
+			case strings.Contains(raw, `"handoff"`):
+				// The Decisions endpoint receives state as JSON encoded in the input string.
+				var req struct {
+					Input string `json:"input"`
+				}
+				var state struct {
+					LastActorName string `json:"last_actor_name"`
+					LastReply     string `json:"last_reply"`
+				}
+				if err := json.Unmarshal(body, &req); err != nil {
+					t.Errorf("decode decision request: %v", err)
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				if err := json.Unmarshal([]byte(req.Input), &state); err != nil {
+					t.Errorf("decode handoff state: %v", err)
+					http.Error(w, "invalid state", http.StatusBadRequest)
+					return
+				}
+				if !retrying.Load() && state.LastReply == firstReply {
+					close(handoffEntered)
+					<-r.Context().Done()
+					return
+				}
+				if retrying.Load() {
+					retryHandoffSeen.Store(true)
+					if state.LastActorName != "A" || state.LastReply != firstReply {
+						t.Errorf("retry handoff got actor %q and reply %q, want A and %q", state.LastActorName, state.LastReply, firstReply)
+					}
+					if strings.Contains(raw, laterReply) {
+						t.Errorf("retry handoff request contains later reply %q", laterReply)
+					}
+				}
+				probability := 0.05
+				if state.LastReply == firstReply {
+					probability = 0.95
+				}
+				_, _ = fmt.Fprintf(w, `{"model":"dec-1","usage":{"input_tokens":5,"output_tokens":1},"answers":[{"name":"handoff","type":"predicate","probability":%.2f}]}`, probability)
+			default:
+				_, _ = io.WriteString(w, `{"model":"dec-1","usage":{"input_tokens":5,"output_tokens":1},"answers":[]}`)
+			}
+		case "/v1/chat/completions":
+			var req struct {
+				Stream bool `json:"stream"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if !req.Stream {
+				_, _ = io.WriteString(w, `{"choices":[{"index":0,"message":{"role":"assistant","content":"[]"}}]}`)
+				return
+			}
+			reply := "Unexpected extra reply"
+			switch generations.Add(1) {
+			case 1:
+				reply = firstReply
+			case 2:
+				reply = laterReply
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":%q}}]}\n\ndata: [DONE]\n\n", reply)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	ctx := t.Context()
+	dir := t.TempDir()
+	rdb, err := sqlite.Open(ctx, filepath.Join(dir, "q.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rdb.Close() })
+	idx, err := blevehnsw.Open(filepath.Join(dir, "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = idx.Close() })
+
+	cfg := config.Default()
+	cfg.LLM.Providers = []gateway.ProviderConfig{{ID: "mock", Type: "openai-compatible", Enabled: true, BaseURL: srv.URL + "/v1"}}
+	cfg.LLM.Roles.ChatModel = "mock/chat-1"
+	cfg.LLM.Roles.MemoryModel = ""
+	cfg.Decisions = decisions.Config{
+		Providers:      []decisions.ProviderConfig{{ID: "d", Protocol: "openai", BaseURL: srv.URL + "/v1"}},
+		Models:         []decisions.ModelConfig{{ID: "d/dec-1", ProviderID: "d", Model: "dec-1"}},
+		DefaultModelID: "d/dec-1",
+	}
+	gw, err := gateway.NewContext(ctx, cfg.GatewayConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = gw.Close() })
+	decReg, err := decisions.NewRegistry(cfg.Decisions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providers := staticProviders{snap: runtime.ProviderSnapshot{Config: cfg, Gateway: gw, Decisions: decReg}}
+
+	persona, err := rdb.Personas().Create(ctx, domain.Persona{Name: "Alex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := rdb.Characters().Create(ctx, domain.Character{Name: "A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := rdb.Characters().Create(ctx, domain.Character{Name: "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, err := rdb.Rooms().Create(ctx, domain.Room{
+		Title:            "Group retry",
+		Mode:             domain.RoomModeGroup,
+		PersonaID:        persona.ID,
+		PersonaSnapshot:  persona,
+		MaxTurnsPerInput: 2,
+	}, []domain.RoomMember{
+		{CharacterID: a.ID, CharacterSnapshot: a, BaseSpeed: 60, Active: true},
+		{CharacterID: b.ID, CharacterSnapshot: b, BaseSpeed: 50, Active: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	getTurn := func(id string) domain.Turn {
+		t.Helper()
+		turn, err := rdb.Turns().Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return turn
+	}
+
+	eng1 := runtime.NewEngine(rdb, idx, providers, nil)
+	t.Cleanup(eng1.Close)
+	first, err := eng1.SubmitTurn(ctx, room.ID, runtime.SubmitTurnRequest{RequestID: "turn-1", Text: "Go once"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handoffEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for Turn 1's handoff")
+	}
+	orphan := getTurn(first.Turn.ID)
+	var cp struct {
+		Phase      string `json:"phase"`
+		GroupSteps int    `json:"group_steps"`
+	}
+	if err := json.Unmarshal([]byte(orphan.CheckpointJSON), &cp); err != nil {
+		t.Fatal(err)
+	}
+	if orphan.Status != domain.TurnStatusRunning || cp.Phase != "group_step_committed" || cp.GroupSteps != 1 {
+		t.Fatalf("expected running Turn 1 with one committed step, got status=%s checkpoint=%+v", orphan.Status, cp)
+	}
+	eng1.Close()
+	// Restore the running checkpoint that an ungraceful exit would leave behind.
+	if err := rdb.Turns().Update(ctx, orphan); err != nil {
+		t.Fatal(err)
+	}
+
+	eng2 := runtime.NewEngine(rdb, idx, providers, nil)
+	t.Cleanup(eng2.Close)
+	if err := eng2.RecoverOrphanTurns(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if recovered := getTurn(orphan.ID); recovered.Status != domain.TurnStatusFailed || recovered.ErrorCode != "interrupted" {
+		t.Fatalf("expected interrupted Turn 1, got status=%s error=%s", recovered.Status, recovered.ErrorCode)
+	}
+	ch, unsubscribe := eng2.Events().Subscribe(room.ID, 0)
+	defer unsubscribe()
+	later, err := eng2.SubmitTurn(ctx, room.ID, runtime.SubmitTurnRequest{RequestID: "turn-2", Text: "B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForEvent(t, ch, "turn.completed", 5*time.Second)
+	if status := getTurn(later.Turn.ID).Status; status != domain.TurnStatusCompleted {
+		t.Fatalf("expected completed Turn 2, got %s", status)
+	}
+
+	retrying.Store(true)
+	if _, err := eng2.RetryTurn(ctx, room.ID, orphan.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForEvent(t, ch, "turn.completed", 5*time.Second)
+	if status := getTurn(orphan.ID).Status; status != domain.TurnStatusCompleted || !retryHandoffSeen.Load() {
+		t.Fatalf("retry status=%s handoff evaluated=%t", status, retryHandoffSeen.Load())
+	}
+
+	msgs, err := rdb.Messages().List(ctx, room.ID, 0, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies := make(map[string][]string)
+	for _, msg := range msgs {
+		if msg.Role == domain.MessageRoleCharacter {
+			replies[msg.TurnID] = append(replies[msg.TurnID], msg.Content)
+		}
+	}
+	if !slices.Equal(replies[orphan.ID], []string{firstReply}) {
+		t.Errorf("Turn 1 replies = %q, want only %q", replies[orphan.ID], firstReply)
+	}
+	if !slices.Equal(replies[later.Turn.ID], []string{laterReply}) {
+		t.Errorf("Turn 2 replies = %q, want only %q", replies[later.Turn.ID], laterReply)
+	}
 }

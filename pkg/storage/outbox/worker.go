@@ -35,6 +35,7 @@ type Worker struct {
 	pollInterval time.Duration
 	batchSize    int
 	maxAttempts  int
+	procSem      chan struct{}
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
@@ -83,6 +84,7 @@ func NewWorker(rdb storage.RDBStore, search storage.SearchIndex, embedder Embedd
 		pollInterval: 500 * time.Millisecond,
 		batchSize:    32,
 		maxAttempts:  8,
+		procSem:      make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -131,11 +133,35 @@ func (w *Worker) Stop() {
 	w.wg.Wait()
 }
 
+// Pause waits for any active batch and blocks processing until resume is called.
+func (w *Worker) Pause(ctx context.Context) (func(), error) {
+	if w == nil || w.procSem == nil {
+		return func() {}, nil
+	}
+	select {
+	case w.procSem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() { <-w.procSem })
+	}, nil
+}
+
 // ProcessOnce drains up to one batch of due outbox entries and returns how many
 // entries were handled.
 func (w *Worker) ProcessOnce(ctx context.Context) (int, error) {
 	if w == nil || w.rdb == nil || w.search == nil {
 		return 0, nil
+	}
+	if w.procSem != nil {
+		select {
+		case w.procSem <- struct{}{}:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+		defer func() { <-w.procSem }()
 	}
 	entries, err := w.rdb.Outbox().ListPending(ctx, domain.NowMS(), w.batchSize)
 	if err != nil {

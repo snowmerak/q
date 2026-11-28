@@ -5,6 +5,8 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/snowmerak/q/v2/pkg/domain"
 	"github.com/snowmerak/q/v2/pkg/storage"
@@ -22,6 +24,58 @@ func (e *stubEmbedder) EmbedDocument(_ context.Context, _ string) (string, int, 
 		return "", 0, nil, errors.New("embedding server offline")
 	}
 	return "stub-emb", 3, []float32{0.1, 0.9, 0}, nil
+}
+
+type emptyOutboxStore struct{ storage.RDBStore }
+
+func (emptyOutboxStore) Outbox() storage.OutboxRepo { return emptyOutboxRepo{} }
+
+type emptyOutboxRepo struct{ storage.OutboxRepo }
+
+func (emptyOutboxRepo) ListPending(context.Context, int64, int) ([]domain.OutboxEntry, error) {
+	return nil, nil
+}
+
+func TestWorkerPauseBlocksProcessOnceAndRespectsContext(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		worker := outbox.NewWorker(emptyOutboxStore{}, struct{ storage.SearchIndex }{}, nil)
+		resume, err := worker.Pause(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resume()
+
+		processDone := make(chan struct{})
+		go func() {
+			defer close(processDone)
+			if n, err := worker.ProcessOnce(ctx); n != 0 || err != nil {
+				t.Errorf("ProcessOnce: n=%d err=%v", n, err)
+			}
+		}()
+		synctest.Wait()
+		select {
+		case <-processDone:
+			t.Fatal("ProcessOnce returned while the worker was paused")
+		default:
+		}
+
+		pauseCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		secondResume, err := worker.Pause(pauseCtx)
+		if secondResume != nil || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("second Pause: resume returned=%t err=%v, want context deadline exceeded", secondResume != nil, err)
+		}
+
+		resume()
+		synctest.Wait()
+		select {
+		case <-processDone:
+		default:
+			t.Fatal("ProcessOnce still blocked after resume")
+		}
+		resume()
+	})
 }
 
 func TestOutboxWorkerDegradesToLexicalOnEmbeddingFailureAndRecovers(t *testing.T) {

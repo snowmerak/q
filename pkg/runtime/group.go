@@ -341,14 +341,20 @@ func (e *Engine) executeGroupTurn(roomID string, turn domain.Turn, specCtx conte
 					return false
 				}
 				if cp.Phase == "group_step_committed" {
-					var lastActorID, lastActorName, lastReply string
+					lastCharIdx := -1
 					for i := len(allMsgs) - 1; i >= 0; i-- {
-						if allMsgs[i].Role == domain.MessageRoleCharacter {
-							lastActorID = allMsgs[i].AuthorID
-							lastActorName = allMsgs[i].AuthorName
-							lastReply = allMsgs[i].Content
+						if allMsgs[i].Role == domain.MessageRoleCharacter && allMsgs[i].TurnID == turn.ID {
+							lastCharIdx = i
 							break
 						}
+					}
+					var lastActorID, lastActorName, lastReply string
+					msgsForHandoff := allMsgs
+					if lastCharIdx >= 0 {
+						lastActorID = allMsgs[lastCharIdx].AuthorID
+						lastActorName = allMsgs[lastCharIdx].AuthorName
+						lastReply = allMsgs[lastCharIdx].Content
+						msgsForHandoff = allMsgs[:lastCharIdx+1]
 					}
 					lastChar := activeMembers[0].CharacterSnapshot
 					for _, m := range members {
@@ -366,7 +372,7 @@ func (e *Engine) executeGroupTurn(roomID string, turn domain.Turn, specCtx conte
 					if snap.Decisions != nil {
 						decEval = snap.Decisions
 					}
-					handoff := e.evaluateUserTurn(specCtx, decEval, decModel, room, len(activeMembers), allMsgs, lastActorName, lastReply, cp.GroupSteps)
+					handoff := e.evaluateUserTurn(specCtx, decEval, decModel, room, len(activeMembers), msgsForHandoff, lastActorName, lastReply, cp.GroupSteps)
 					if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
 						return false
 					} else if interrupted == interceptCutIn {

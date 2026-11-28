@@ -2,6 +2,7 @@ package opensearch_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"io"
 	"math"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/snowmerak/q/v2/pkg/domain"
 	"github.com/snowmerak/q/v2/pkg/storage"
@@ -526,6 +528,77 @@ func TestResetAndRebuildSwapErrorHandling(t *testing.T) {
 			t.Fatalf("expected original document still searchable, hits=%+v err=%v", hits, err)
 		}
 	})
+}
+
+func TestResetAndRebuildBlocksConcurrentWritesUntilSwap(t *testing.T) {
+	mock := newControllableMockOpenSearchServer()
+	t.Cleanup(mock.srv.Close)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	var workers sync.WaitGroup
+	defer workers.Wait()
+	defer cancel()
+
+	idx, err := opensearch.Open(ctx, opensearch.Config{Endpoint: mock.srv.URL, IndexPrefix: "q_rebuild"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(ctx, storage.SearchDocument{ID: "old", EntityType: "memory", Text: "old lantern"}); err != nil {
+		t.Fatal(err)
+	}
+
+	docsCh := make(chan storage.SearchDocument)
+	rebuildDone := make(chan error, 1)
+	workers.Go(func() { rebuildDone <- idx.ResetAndRebuild(ctx, docsCh) })
+	select {
+	case docsCh <- storage.SearchDocument{ID: "rebuilt", EntityType: "memory", Text: "new lantern"}:
+		// The rebuild has reached the document stream and cannot swap until it closes.
+	case err := <-rebuildDone:
+		t.Fatalf("rebuild ended before receiving documents: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	upsertStarted := make(chan struct{})
+	upsertDone := make(chan error, 1)
+	workers.Go(func() {
+		close(upsertStarted)
+		upsertDone <- idx.Upsert(ctx, storage.SearchDocument{ID: "concurrent", EntityType: "memory", Text: "new lantern"})
+	})
+	<-upsertStarted
+	query := storage.SearchQuery{Mode: "lexical", Text: "lantern"}
+	hits, err := idx.Search(ctx, query)
+	if err != nil || len(hits) != 1 || hits[0].ID != "old" {
+		t.Fatalf("expected only the old document during rebuild, got %+v err=%v", hits, err)
+	}
+	select {
+	case err := <-upsertDone:
+		t.Fatalf("upsert returned before the alias swap: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(docsCh)
+	if err := <-rebuildDone; err != nil {
+		t.Fatalf("ResetAndRebuild: %v", err)
+	}
+	if err := <-upsertDone; err != nil {
+		t.Fatalf("concurrent Upsert: %v", err)
+	}
+
+	mock.mu.Lock()
+	targets := slices.Clone(mock.aliases["q_rebuild_records"])
+	mock.mu.Unlock()
+	if !slices.Equal(targets, []string{"q_rebuild_records_2"}) {
+		t.Fatalf("expected alias pointing to gen 2, got %v", targets)
+	}
+	hits, err = idx.Search(ctx, query)
+	if err != nil || len(hits) != 2 {
+		t.Fatalf("expected rebuilt and concurrent documents, got %+v err=%v", hits, err)
+	}
+	for _, id := range []string{"rebuilt", "concurrent"} {
+		if !slices.ContainsFunc(hits, func(hit storage.SearchHit) bool { return hit.ID == id }) {
+			t.Errorf("missing document %q after swap: %+v", id, hits)
+		}
+	}
 }
 
 func TestOpenSearchContractLiveEnvGated(t *testing.T) {

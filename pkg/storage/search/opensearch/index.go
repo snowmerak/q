@@ -42,6 +42,7 @@ type Index struct {
 	bearerToken string
 	client      *http.Client
 
+	writeMu     sync.RWMutex // Serializes alias changes with writes.
 	mu          sync.Mutex
 	gen         int64
 	vectorModel string
@@ -245,6 +246,15 @@ func (i *Index) ConfigureVector(ctx context.Context, model string, dim int) erro
 	if dim <= 0 {
 		return fmt.Errorf("%w: vector dim must be > 0", storage.ErrInvalidInput)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	i.writeMu.Lock()
+	defer i.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	i.mu.Lock()
 	if i.vectorDim == dim {
 		i.vectorModel = model
@@ -293,6 +303,14 @@ func (i *Index) Upsert(ctx context.Context, doc storage.SearchDocument) error {
 }
 
 func (i *Index) UpsertBatch(ctx context.Context, docs []storage.SearchDocument) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	i.writeMu.RLock()
+	defer i.writeMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(docs) == 0 {
 		return nil
 	}
@@ -353,6 +371,14 @@ func (i *Index) bulkUpsert(ctx context.Context, target string, docs []storage.Se
 }
 
 func (i *Index) Delete(ctx context.Context, entityType, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	i.writeMu.RLock()
+	defer i.writeMu.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	path := "/" + url.PathEscape(i.alias) + "/_doc/" + url.PathEscape(docKey(entityType, id)) + "?refresh=wait_for"
 	status, body, err := i.doJSON(ctx, http.MethodDelete, path, nil)
 	if err != nil {
@@ -532,6 +558,15 @@ func fuseRRF(lex, vec []storage.SearchHit, kwWeight float64, limit int) []storag
 }
 
 func (i *Index) ResetAndRebuild(ctx context.Context, docs <-chan storage.SearchDocument) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	i.writeMu.Lock()
+	defer i.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	oldTargets, _ := i.currentAliasTargets(ctx)
 
 	i.mu.Lock()
