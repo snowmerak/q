@@ -294,7 +294,7 @@ q/                              # Go module: github.com/snowmerak/q/v2
 | **M2. 1:1 캐릭터 봇 + 기본 UI** | 캐릭터/페르소나 CRUD, 1:1 대화 루프, 기억 회상/가치관 기초, React + shadcn/ui(라이트/다크) 채팅 버블 화면, `web/dist` 빌드 임베드 | **완료 및 검증** (`pnpm typecheck/test/build`, SSE/재시도 테스트, 5개 라이브 프로바이더 세션 검증 통과) |
 | **M3. 7대 도구 · 승인 게이트 · 지식/스킬/위임** | `pkg/task` 도구 루프(파일·셸·아카이브/지식·Loom·Skills·MCP/`browser_control`·`ask_to_user`/서브에이전트) + 3단계 승인 게이트, `pkg/knowledge` 수집·검색 | **완료 및 검증** (7대 도구, 3모드 승인 게이트, 브라우저 드라이버 전환, 지식/도구 UI 통과) |
 | **M4. 멀티캐릭터 룸 & 확장 저장소** | Decisions 기반 멀티캐릭터 채팅 버블 루프·`observedBy`·실시간 인터럽트, `PostgreSQL` / `MySQL` / `OpenSearch` / `S3` 어댑터 완성 | **완료 및 검증** (그룹 런타임·UI, Docker PostgreSQL 18 / MySQL 8.4 / OpenSearch 3.9.0 기준 6종 조합 테스트 통과) |
-| **M5. Wails v3 데스크톱 앱 & 패키징** | `desktop/` Wails v3 셸(`pkg/app` 인프로세스 공유)·트레이·로그인 자동 시작·OS별 패키징 매니페스트(`desktop/packaging/`, `Taskfile.yml`) | **완료 및 검증** (`desktop/` 테스트·빌드 통과; 최종 설치 파일 산출은 각 OS 패키징 도구 체인에서 실행) |
+| **M5. Wails v3 데스크톱 앱 & 패키징** | `desktop/` Wails v3 셸(`pkg/app` 인프로세스 공유)·트레이·로그인 자동 시작·OS별 패키징 매니페스트(`desktop/packaging/`, `Taskfile.yml`) | **완료 및 검증** (`desktop/` 테스트·빌드 및 `task package:windows` NSIS 인스톨러 산출 통과; macOS DMG / Linux DEB·RPM 패키지는 해당 OS 도구 체인에서 실행) |
 
 ### 8.2 주요 기술 리스크
 
