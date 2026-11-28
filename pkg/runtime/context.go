@@ -134,6 +134,21 @@ func clonePromptSnapshot(src *domain.PromptSnapshotState) *domain.PromptSnapshot
 	return &out
 }
 
+func clonePromptCache(src *domain.PromptCacheState) *domain.PromptCacheState {
+	if src == nil {
+		return nil
+	}
+	out := &domain.PromptCacheState{
+		EpochSeq:    src.EpochSeq,
+		Baseline:    clonePromptSnapshot(src.Baseline),
+		LastEmitted: clonePromptSnapshot(src.LastEmitted),
+	}
+	if len(src.Injections) > 0 {
+		out.Injections = slices.Clone(src.Injections)
+	}
+	return out
+}
+
 func formatRecalledSection(recalled []memory.RecalledItem) string {
 	if len(recalled) == 0 {
 		return ""
@@ -402,6 +417,7 @@ func BuildActorPrompt(
 	}
 
 	visible := make([]domain.Message, 0, len(allMessages))
+	var lastVisibleSeq int64
 	for _, m := range allMessages {
 		if m.Seq <= member.ActorState.CompactedThroughSeq {
 			continue
@@ -409,6 +425,7 @@ func BuildActorPrompt(
 		if !m.ObservedByActor(member.CharacterID) {
 			continue
 		}
+		lastVisibleSeq = m.Seq
 		visible = append(visible, m)
 		role := llmprovider.RoleUser
 		if m.Role == domain.MessageRoleCharacter && m.AuthorID == member.CharacterID {
@@ -444,7 +461,7 @@ func BuildActorPrompt(
 		}
 	}
 
-	if !usedPromptCache && len(recalled) > 0 {
+	if _, anchorHasInj := injBySeq[lastVisibleSeq]; (!usedPromptCache || !anchorHasInj) && len(recalled) > 0 {
 		if recallText := formatRecalledSection(recalled); recallText != "" {
 			wrapped := "<turn_context>\n" + recallText + "\n</turn_context>"
 			if n := len(msgs); n > 0 && msgs[n-1].Role == llmprovider.RoleUser {
@@ -484,7 +501,12 @@ func CompactIfNeeded(
 	models ResolvedModels,
 	turnID string,
 ) (domain.RoomMember, bool, error) {
-	assembled, err := BuildActorPrompt(room, member, recalled, allMessages, models.ContextWindow)
+	previewMember := member
+	previewMember.ActorState.PromptCache = clonePromptCache(member.ActorState.PromptCache)
+	if prepped, prepErr := PrepareAppendOnlyContext(ctx, nil, room, previewMember, recalled, allMessages); prepErr == nil {
+		previewMember = prepped
+	}
+	assembled, err := BuildActorPrompt(room, previewMember, recalled, allMessages, models.ContextWindow)
 	if err != nil {
 		return member, false, err
 	}

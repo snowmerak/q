@@ -33,16 +33,42 @@ type mockDoc struct {
 }
 
 type mockOpenSearchServer struct {
-	srv      *httptest.Server
-	mu       sync.Mutex
-	indices  map[string]map[string]mockDoc
-	aliases  map[string][]string
-	deleted  []string
-	swapMode string // "", "commit_then_drop", "fail_500"
+	srv         *httptest.Server
+	mu          sync.Mutex
+	indices     map[string]map[string]mockDoc
+	aliases     map[string][]string
+	deleted     []string
+	swapMode    string // "", "commit_then_drop", "delayed_commit_after_recheck", "fail_400"
+	pendingSwap []byte
 }
 
 func newMockOpenSearchServer() *httptest.Server {
 	return newControllableMockOpenSearchServer().srv
+}
+
+func applyMockAliasActions(aliases map[string][]string, bodyBytes []byte) {
+	var req struct {
+		Actions []map[string]struct {
+			Index string `json:"index"`
+			Alias string `json:"alias"`
+		} `json:"actions"`
+	}
+	_ = json.Unmarshal(bodyBytes, &req)
+	for _, act := range req.Actions {
+		if rem, ok := act["remove"]; ok {
+			cur := aliases[rem.Alias]
+			next := cur[:0]
+			for _, x := range cur {
+				if x != rem.Index {
+					next = append(next, x)
+				}
+			}
+			aliases[rem.Alias] = next
+		}
+		if add, ok := act["add"]; ok {
+			aliases[add.Alias] = append(aliases[add.Alias], add.Index)
+		}
+	}
 }
 
 func newControllableMockOpenSearchServer() *mockOpenSearchServer {
@@ -70,7 +96,12 @@ func newControllableMockOpenSearchServer() *mockOpenSearchServer {
 		switch {
 		case strings.HasPrefix(path, "/_alias/"):
 			aliasName, _ := url.PathUnescape(strings.TrimPrefix(path, "/_alias/"))
-			targets := m.aliases[aliasName]
+			targets := slices.Clone(m.aliases[aliasName])
+			if len(m.pendingSwap) > 0 {
+				// Simulate cluster state applying an in-flight alias swap right as GET /_alias returns the old view.
+				applyMockAliasActions(m.aliases, m.pendingSwap)
+				m.pendingSwap = nil
+			}
 			if len(targets) == 0 {
 				m.mu.Unlock()
 				w.WriteHeader(http.StatusNotFound)
@@ -85,35 +116,27 @@ func newControllableMockOpenSearchServer() *mockOpenSearchServer {
 
 		case path == "/_aliases" && r.Method == http.MethodPost:
 			mode := m.swapMode
-			if mode == "fail_500" {
+			if mode == "fail_400" {
 				m.swapMode = ""
 				m.mu.Unlock()
-				w.WriteHeader(http.StatusInternalServerError)
-				_, _ = io.WriteString(w, `{"error":"injected alias swap failure"}`)
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"error":"rejected alias swap"}`)
 				return
 			}
-			var req struct {
-				Actions []map[string]struct {
-					Index string `json:"index"`
-					Alias string `json:"alias"`
-				} `json:"actions"`
-			}
-			_ = json.Unmarshal(bodyBytes, &req)
-			for _, act := range req.Actions {
-				if rem, ok := act["remove"]; ok {
-					cur := m.aliases[rem.Alias]
-					next := cur[:0]
-					for _, x := range cur {
-						if x != rem.Index {
-							next = append(next, x)
-						}
+			if mode == "delayed_commit_after_recheck" {
+				m.swapMode = ""
+				m.pendingSwap = slices.Clone(bodyBytes)
+				m.mu.Unlock()
+				if hj, ok := w.(http.Hijacker); ok {
+					if conn, _, err := hj.Hijack(); err == nil {
+						_ = conn.Close()
+						return
 					}
-					m.aliases[rem.Alias] = next
 				}
-				if add, ok := act["add"]; ok {
-					m.aliases[add.Alias] = append(m.aliases[add.Alias], add.Index)
-				}
+				w.WriteHeader(http.StatusBadGateway)
+				return
 			}
+			applyMockAliasActions(m.aliases, bodyBytes)
 			if mode == "commit_then_drop" {
 				m.swapMode = ""
 				m.mu.Unlock()
@@ -400,6 +423,56 @@ func TestResetAndRebuildSwapErrorHandling(t *testing.T) {
 		}
 	})
 
+	t.Run("delayed_commit_after_recheck_does_not_delete_new_index", func(t *testing.T) {
+		mock := newControllableMockOpenSearchServer()
+		t.Cleanup(mock.srv.Close)
+
+		idx, err := opensearch.Open(t.Context(), opensearch.Config{
+			Endpoint:    mock.srv.URL,
+			IndexPrefix: "q_swap_delay",
+		})
+		if err != nil {
+			t.Fatalf("opensearch.Open: %v", err)
+		}
+		if err := idx.Upsert(t.Context(), storage.SearchDocument{
+			ID: "old-1", EntityType: "memory", Scope: "room:r1", Text: "old harbor", ObservedBy: []string{"alice"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		mock.mu.Lock()
+		mock.swapMode = "delayed_commit_after_recheck"
+		mock.mu.Unlock()
+
+		docsCh := make(chan storage.SearchDocument, 1)
+		docsCh <- storage.SearchDocument{
+			ID: "new-delay-1", EntityType: "memory", Scope: "room:r1", Text: "delayed rebuilt doc", ObservedBy: []string{"alice"},
+		}
+		close(docsCh)
+
+		if err := idx.ResetAndRebuild(t.Context(), docsCh); err == nil {
+			t.Fatal("expected ResetAndRebuild to report error when alias swap response dropped before re-check observed commit")
+		}
+
+		mock.mu.Lock()
+		activeTargets := slices.Clone(mock.aliases["q_swap_delay_records"])
+		deleted := slices.Clone(mock.deleted)
+		_, hasGen2 := mock.indices["q_swap_delay_records_2"]
+		mock.mu.Unlock()
+
+		if !slices.Equal(activeTargets, []string{"q_swap_delay_records_2"}) {
+			t.Fatalf("expected delayed commit alias pointing to gen 2, got %v", activeTargets)
+		}
+		if !hasGen2 || slices.Contains(deleted, "q_swap_delay_records_2") {
+			t.Fatalf("expected newly activated index q_swap_delay_records_2 NOT deleted after TOCTOU re-check (deleted=%v)", deleted)
+		}
+
+		hits, err := idx.Search(t.Context(), storage.SearchQuery{Mode: "lexical", Text: "delayed rebuilt doc"})
+		if err != nil || len(hits) != 1 || hits[0].ID != "new-delay-1" {
+			t.Fatalf("expected delayed-commit rebuilt document searchable via alias, hits=%+v err=%v", hits, err)
+		}
+	})
+
 	t.Run("failed_swap_cleans_up_staged_index", func(t *testing.T) {
 		mock := newControllableMockOpenSearchServer()
 		t.Cleanup(mock.srv.Close)
@@ -418,7 +491,7 @@ func TestResetAndRebuildSwapErrorHandling(t *testing.T) {
 		}
 
 		mock.mu.Lock()
-		mock.swapMode = "fail_500"
+		mock.swapMode = "fail_400"
 		mock.mu.Unlock()
 
 		docsCh := make(chan storage.SearchDocument, 1)
@@ -428,7 +501,7 @@ func TestResetAndRebuildSwapErrorHandling(t *testing.T) {
 		close(docsCh)
 
 		if err := idx.ResetAndRebuild(t.Context(), docsCh); err == nil {
-			t.Fatal("expected ResetAndRebuild to return error on HTTP 500 swap failure")
+			t.Fatal("expected ResetAndRebuild to return error on HTTP 400 swap rejection")
 		}
 
 		mock.mu.Lock()

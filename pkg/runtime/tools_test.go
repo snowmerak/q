@@ -15,6 +15,7 @@ import (
 	"github.com/snowmerak/q/v2/pkg/app/config"
 	"github.com/snowmerak/q/v2/pkg/domain"
 	"github.com/snowmerak/q/v2/pkg/llm/gateway"
+	"github.com/snowmerak/q/v2/pkg/memory"
 	"github.com/snowmerak/q/v2/pkg/runtime"
 	"github.com/snowmerak/q/v2/pkg/storage"
 	"github.com/snowmerak/q/v2/pkg/storage/blob/localfs"
@@ -676,5 +677,142 @@ func TestCompactIfNeededDropsStaleTailStateDeltas(t *testing.T) {
 				t.Fatalf("stale pre-compaction state %q re-appeared in tail message: %q", stale, msg.Content)
 			}
 		}
+	}
+}
+
+func TestCompactIfNeededAccountsForCurrentTurnRecalledItems(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"chat-1"}]}`)
+		case "/v1/chat/completions":
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), "running memory summary") {
+				_, _ = io.WriteString(w, `{"id":"sum1","object":"chat.completion","model":"chat-1","choices":[{"index":0,"message":{"role":"assistant","content":"Concise summary."},"finish_reason":"stop"}]}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"id":"val1","object":"chat.completion","model":"chat-1","choices":[{"index":0,"message":{"role":"assistant","content":"[]"},"finish_reason":"stop"}]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	rdb, err := sqlite.Open(t.Context(), filepath.Join(dir, "q.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdb.Close()
+
+	cfg := config.Default()
+	cfg.LLM.Providers = []gateway.ProviderConfig{{
+		ID: "mock", Type: "openai-compatible", Enabled: true, BaseURL: srv.URL + "/v1",
+	}}
+	cfg.LLM.Roles.ChatModel = "mock/chat-1"
+	cfg.LLM.Roles.MemoryModel = "mock/chat-1"
+	gw, err := gateway.NewContext(t.Context(), cfg.GatewayConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
+
+	persona, _ := rdb.Personas().Create(t.Context(), domain.Persona{Name: "Alex"})
+	char, _ := rdb.Characters().Create(t.Context(), domain.Character{Name: "Noa"})
+	room, err := rdb.Rooms().Create(t.Context(), domain.Room{
+		Title:           "RecallCompact",
+		Mode:            domain.RoomModeDirect,
+		PersonaID:       persona.ID,
+		PersonaSnapshot: persona,
+	}, []domain.RoomMember{{
+		CharacterID:       char.ID,
+		CharacterSnapshot: char,
+		Active:            true,
+		ActorState: domain.ActorState{
+			// Pre-existing PromptCache from an earlier turn puts usedPromptCache=true.
+			PromptCache: &domain.PromptCacheState{
+				EpochSeq:    0,
+				Baseline:    &domain.PromptSnapshotState{},
+				LastEmitted: &domain.PromptSnapshotState{},
+			},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turn, _, _ := rdb.Turns().CreateOrGetIdempotent(t.Context(), domain.Turn{
+		RoomID: room.ID, RequestID: "req-recall-compact", InputHash: "h1", Status: domain.TurnStatusCompleted,
+	})
+	oldText := strings.Repeat("older dialogue record ", 14)
+	var msgs []domain.Message
+	for _, c := range []string{oldText, oldText, "recent check"} {
+		m, err := rdb.Messages().Append(t.Context(), domain.Message{
+			RoomID:     room.ID,
+			TurnID:     turn.ID,
+			Role:       domain.MessageRoleUser,
+			AuthorID:   persona.ID,
+			AuthorName: "Alex",
+			Content:    c,
+			ObservedBy: []string{persona.ID, char.ID},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgs = append(msgs, m)
+	}
+
+	recalled := []memory.RecalledItem{{
+		ID:         "mem-big",
+		Kind:       "memory",
+		RoomTitle:  "RecallCompact",
+		OccurredAt: 1700000000000,
+		Text:       strings.Repeat("recalled archival fact ", 15),
+	}}
+
+	mems, _ := rdb.Rooms().ListMembers(t.Context(), room.ID)
+	const contextWindow = 400
+	threshold := int(float64(contextWindow) * 0.85) // 340
+
+	withoutRecall, err := runtime.BuildActorPrompt(room, mems[0], nil, msgs, contextWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withoutRecall.EstimatedInputTokens > threshold {
+		t.Fatalf("test setup error: prompt without recalled (%d) must be <= threshold (%d)", withoutRecall.EstimatedInputTokens, threshold)
+	}
+
+	withRecall, err := runtime.BuildActorPrompt(room, mems[0], recalled, msgs, contextWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withRecall.EstimatedInputTokens <= threshold {
+		t.Fatalf("expected BuildActorPrompt with current-turn recalled to exceed threshold %d, got %d", threshold, withRecall.EstimatedInputTokens)
+	}
+
+	models := runtime.ResolvedModels{
+		ChatModel:     "mock/chat-1",
+		MemoryModel:   "mock/chat-1",
+		ContextWindow: contextWindow,
+	}
+	updated, compacted, err := runtime.CompactIfNeeded(t.Context(), rdb, gw, room, mems[0], recalled, msgs, models, turn.ID)
+	if err != nil {
+		t.Fatalf("CompactIfNeeded: %v", err)
+	}
+	if !compacted || updated.ActorState.CompactedThroughSeq == 0 {
+		t.Fatalf("expected CompactIfNeeded to compact when recalled pushes total (%d) above threshold (%d)", withRecall.EstimatedInputTokens, threshold)
+	}
+
+	prepped, err := runtime.PrepareAppendOnlyContext(t.Context(), rdb, room, updated, recalled, msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterPrompt, err := runtime.BuildActorPrompt(room, prepped, recalled, msgs, contextWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterPrompt.EstimatedInputTokens >= withRecall.EstimatedInputTokens {
+		t.Fatalf("expected compacted prompt tokens (%d) < uncompacted (%d)", afterPrompt.EstimatedInputTokens, withRecall.EstimatedInputTokens)
 	}
 }

@@ -340,6 +340,48 @@ func (e *Engine) executeGroupTurn(roomID string, turn domain.Turn, specCtx conte
 					}
 					return false
 				}
+				if cp.Phase == "group_step_committed" {
+					var lastActorID, lastActorName, lastReply string
+					for i := len(allMsgs) - 1; i >= 0; i-- {
+						if allMsgs[i].Role == domain.MessageRoleCharacter {
+							lastActorID = allMsgs[i].AuthorID
+							lastActorName = allMsgs[i].AuthorName
+							lastReply = allMsgs[i].Content
+							break
+						}
+					}
+					lastChar := activeMembers[0].CharacterSnapshot
+					for _, m := range members {
+						if m.CharacterID == lastActorID {
+							lastChar = m.CharacterSnapshot
+							break
+						}
+					}
+					var modelLookup memory.ModelLookup
+					if snap.Gateway != nil {
+						modelLookup = snap.Gateway
+					}
+					decModel := ResolveModels(baseCtx, snap.Config, room, lastChar, modelLookup).DecisionModel
+					var decEval memory.DecisionEvaluator
+					if snap.Decisions != nil {
+						decEval = snap.Decisions
+					}
+					handoff := e.evaluateUserTurn(specCtx, decEval, decModel, room, len(activeMembers), allMsgs, lastActorName, lastReply, cp.GroupSteps)
+					if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
+						return false
+					} else if interrupted == interceptCutIn {
+						specCtx = nextCtx
+						cp = reloadCheckpoint(turn.CheckpointJSON)
+						return true
+					}
+					if handoff {
+						if err := e.finishCompleted(baseCtx, roomID, &turn, lastUsage); err != nil {
+							e.finishFailed(baseCtx, roomID, &turn, "internal", err.Error(), true)
+						}
+						return false
+					}
+					cp.Phase = "group_continue"
+				}
 				chosen, nextGauges := ReserveActor(activeMembers, cp.GroupGauges, cp.GroupWaited, allMsgs)
 				if chosen == nil {
 					if err := e.finishCompleted(baseCtx, roomID, &turn, lastUsage); err != nil {
@@ -408,26 +450,6 @@ func (e *Engine) executeGroupTurn(roomID string, turn domain.Turn, specCtx conte
 					specCtx = nextCtx
 					cp = reloadCheckpoint(turn.CheckpointJSON)
 					return true
-				}
-
-				updatedMsgs, _ := e.rdb.Messages().List(baseCtx, roomID, 0, 500)
-				var decEval memory.DecisionEvaluator
-				if snap.Decisions != nil {
-					decEval = snap.Decisions
-				}
-				handoff := e.evaluateUserTurn(specCtx, decEval, res.models.DecisionModel, room, len(activeMembers), updatedMsgs, member.CharacterSnapshot.Name, res.replyText, cp.GroupSteps)
-				if interrupted, nextCtx := e.handlePostCancel(baseCtx, roomID, &turn, room, members); interrupted == interceptStop {
-					return false
-				} else if interrupted == interceptCutIn {
-					specCtx = nextCtx
-					cp = reloadCheckpoint(turn.CheckpointJSON)
-					return true
-				}
-				if handoff {
-					if err := e.finishCompleted(baseCtx, roomID, &turn, lastUsage); err != nil {
-						e.finishFailed(baseCtx, roomID, &turn, "internal", err.Error(), true)
-					}
-					return false
 				}
 			}
 			return true

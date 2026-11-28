@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -207,6 +208,16 @@ func (i *Index) currentAliasTargets(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
+type httpStatusError struct {
+	op     string
+	status int
+	body   string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("%s: status %d: %s", e.op, e.status, e.body)
+}
+
 func (i *Index) swapAlias(ctx context.Context, removeIndices []string, addIndex string) error {
 	actions := make([]map[string]any, 0, len(removeIndices)+1)
 	for _, old := range removeIndices {
@@ -225,7 +236,7 @@ func (i *Index) swapAlias(ctx context.Context, removeIndices []string, addIndex 
 		return err
 	}
 	if status >= 300 {
-		return fmt.Errorf("opensearch swap alias: status %d: %s", status, string(body))
+		return &httpStatusError{op: "opensearch swap alias", status: status, body: string(body)}
 	}
 	return nil
 }
@@ -585,21 +596,22 @@ drained:
 		checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		targets, targetErr := i.currentAliasTargets(checkCtx)
-		if targetErr != nil {
-			return err
-		}
-		if !slices.Contains(targets, nextIdx) {
-			cleanupNext()
-			return err
-		}
-		// Swap actually succeeded on OpenSearch despite the lost/errored HTTP response.
-		for _, old := range oldTargets {
-			if old != nextIdx && !slices.Contains(targets, old) {
-				_, _, _ = i.doJSON(checkCtx, http.MethodDelete, "/"+url.PathEscape(old), nil)
+		if targetErr == nil && slices.Contains(targets, nextIdx) {
+			// Swap already committed on OpenSearch despite the lost/errored HTTP response.
+			for _, old := range oldTargets {
+				if old != nextIdx && !slices.Contains(targets, old) {
+					_, _, _ = i.doJSON(checkCtx, http.MethodDelete, "/"+url.PathEscape(old), nil)
+				}
 			}
+			_, _, _ = i.doJSON(checkCtx, http.MethodPost, "/"+url.PathEscape(nextIdx)+"/_refresh", nil)
+			return nil
 		}
-		_, _, _ = i.doJSON(checkCtx, http.MethodPost, "/"+url.PathEscape(nextIdx)+"/_refresh", nil)
-		return nil
+		var statusErr *httpStatusError
+		if targetErr == nil && errors.As(err, &statusErr) &&
+			statusErr.status >= 400 && statusErr.status < 500 && statusErr.status != http.StatusRequestTimeout {
+			cleanupNext()
+		}
+		return err
 	}
 	for _, old := range oldTargets {
 		if old != nextIdx {

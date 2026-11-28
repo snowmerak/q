@@ -461,17 +461,27 @@ func TestGroupTurnAtomicCheckpointCommitAndOrphanRecovery(t *testing.T) {
 				_, _ = io.WriteString(w, `{"data":[{"id":"chat-1","context_length":32768}]}`)
 			case "/v1/decisions":
 				body, _ := io.ReadAll(r.Body)
-				if strings.Contains(string(body), `"participation"`) {
+				raw := string(body)
+				switch {
+				case strings.Contains(raw, `"participation"`):
 					_ = json.NewEncoder(w).Encode(map[string]any{
 						"model":   "dec-1",
+						"usage":   map[string]any{"input_tokens": 5, "output_tokens": 1},
 						"answers": []map[string]any{{"name": "participation", "type": "choice", "choice": "act", "confidence": 0.9, "probabilities": []map[string]any{{"value": "act", "probability": 0.9}, {"value": "wait", "probability": 0.1}}}},
 					})
-					return
+				case strings.Contains(raw, `"handoff"`):
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"model":   "dec-1",
+						"usage":   map[string]any{"input_tokens": 5, "output_tokens": 1},
+						"answers": []map[string]any{{"name": "handoff", "type": "predicate", "probability": 0.05}},
+					})
+				default:
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"model":   "dec-1",
+						"usage":   map[string]any{"input_tokens": 5, "output_tokens": 1},
+						"answers": []map[string]any{},
+					})
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"model":   "dec-1",
-					"answers": []map[string]any{{"name": "handoff", "type": "predicate", "probability": 0.05}},
-				})
 			case "/v1/chat/completions":
 				body, _ := io.ReadAll(r.Body)
 				var req struct {
@@ -594,22 +604,32 @@ func TestGroupTurnAtomicCheckpointCommitAndOrphanRecovery(t *testing.T) {
 				_, _ = io.WriteString(w, `{"data":[{"id":"chat-1","context_length":32768}]}`)
 			case "/v1/decisions":
 				body, _ := io.ReadAll(r.Body)
-				if strings.Contains(string(body), `"participation"`) {
+				raw := string(body)
+				switch {
+				case strings.Contains(raw, `"participation"`):
 					_ = json.NewEncoder(w).Encode(map[string]any{
 						"model":   "dec-1",
+						"usage":   map[string]any{"input_tokens": 5, "output_tokens": 1},
 						"answers": []map[string]any{{"name": "participation", "type": "choice", "choice": "act", "confidence": 0.9, "probabilities": []map[string]any{{"value": "act", "probability": 0.9}, {"value": "wait", "probability": 0.1}}}},
 					})
-					return
+				case strings.Contains(raw, `"handoff"`):
+					if handoffCalls.Add(1) == 1 {
+						close(handoffEntered)
+						<-r.Context().Done()
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"model":   "dec-1",
+						"usage":   map[string]any{"input_tokens": 5, "output_tokens": 1},
+						"answers": []map[string]any{{"name": "handoff", "type": "predicate", "probability": 0.05}},
+					})
+				default:
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"model":   "dec-1",
+						"usage":   map[string]any{"input_tokens": 5, "output_tokens": 1},
+						"answers": []map[string]any{},
+					})
 				}
-				if handoffCalls.Add(1) == 1 {
-					close(handoffEntered)
-					<-r.Context().Done()
-					return
-				}
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"model":   "dec-1",
-					"answers": []map[string]any{{"name": "handoff", "type": "predicate", "probability": 0.05}},
-				})
 			case "/v1/chat/completions":
 				body, _ := io.ReadAll(r.Body)
 				var req struct {
@@ -750,6 +770,168 @@ func TestGroupTurnAtomicCheckpointCommitAndOrphanRecovery(t *testing.T) {
 		}
 		if charCount != 2 {
 			t.Fatalf("expected exactly 2 character messages after crash recovery (not 3), got %d", charCount)
+		}
+	})
+
+	t.Run("max_turns_2_orphan_recovery_honors_handoff_to_user", func(t *testing.T) {
+		var handoffCalls atomic.Int32
+		handoffEntered := make(chan struct{})
+		stepCount := atomic.Int32{}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch r.URL.Path {
+			case "/v1/models":
+				_, _ = io.WriteString(w, `{"data":[{"id":"chat-1","context_length":32768}]}`)
+			case "/v1/decisions":
+				body, _ := io.ReadAll(r.Body)
+				raw := string(body)
+				switch {
+				case strings.Contains(raw, `"participation"`):
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"model":   "dec-1",
+						"usage":   map[string]any{"input_tokens": 5, "output_tokens": 1},
+						"answers": []map[string]any{{"name": "participation", "type": "choice", "choice": "act", "confidence": 0.9, "probabilities": []map[string]any{{"value": "act", "probability": 0.9}, {"value": "wait", "probability": 0.1}}}},
+					})
+				case strings.Contains(raw, `"handoff"`):
+					callN := handoffCalls.Add(1)
+					if callN == 1 {
+						close(handoffEntered)
+						<-r.Context().Done()
+						return
+					}
+					// On retry recovery, decision evaluates handoff=true -> yield to user immediately.
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"model":   "dec-1",
+						"usage":   map[string]any{"input_tokens": 5, "output_tokens": 1},
+						"answers": []map[string]any{{"name": "handoff", "type": "predicate", "probability": 0.95}},
+					})
+				default:
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"model":   "dec-1",
+						"usage":   map[string]any{"input_tokens": 5, "output_tokens": 1},
+						"answers": []map[string]any{},
+					})
+				}
+			case "/v1/chat/completions":
+				body, _ := io.ReadAll(r.Body)
+				var req struct {
+					Stream bool `json:"stream"`
+				}
+				_ = json.Unmarshal(body, &req)
+				if !req.Stream {
+					_ = json.NewEncoder(w).Encode(map[string]any{"choices": []map[string]any{{"index": 0, "message": map[string]any{"role": "assistant", "content": `[]`}}}})
+					return
+				}
+				n := stepCount.Add(1)
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = w.Write([]byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Handoff check step " + string(rune('0'+n)) + "\"}}]}\n\n"))
+				_, _ = w.Write([]byte("data: [DONE]\n\n"))
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		dir := t.TempDir()
+		rdb, err := sqlite.Open(t.Context(), filepath.Join(dir, "q.sqlite"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = rdb.Close() }()
+		idx, err := blevehnsw.Open(filepath.Join(dir, "index"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = idx.Close() }()
+
+		cfg := config.Default()
+		cfg.LLM.Providers = []gateway.ProviderConfig{{ID: "mock", Type: "openai-compatible", Enabled: true, BaseURL: srv.URL + "/v1"}}
+		cfg.LLM.Roles.ChatModel = "mock/chat-1"
+		cfg.LLM.Roles.MemoryModel = ""
+		cfg.Decisions = decisions.Config{
+			Providers:      []decisions.ProviderConfig{{ID: "d", Protocol: "openai", BaseURL: srv.URL + "/v1"}},
+			Models:         []decisions.ModelConfig{{ID: "d/dec-1", ProviderID: "d", Model: "dec-1"}},
+			DefaultModelID: "d/dec-1",
+		}
+		gw, _ := gateway.NewContext(t.Context(), cfg.GatewayConfig())
+		defer func() { _ = gw.Close() }()
+		decReg, _ := decisions.NewRegistry(cfg.Decisions, nil)
+
+		ctx := t.Context()
+		persona, _ := rdb.Personas().Create(ctx, domain.Persona{Name: "Alex"})
+		c1, _ := rdb.Characters().Create(ctx, domain.Character{Name: "A"})
+		c2, _ := rdb.Characters().Create(ctx, domain.Character{Name: "B"})
+		room, _ := rdb.Rooms().Create(ctx, domain.Room{
+			Title:            "Cap2Handoff",
+			Mode:             domain.RoomModeGroup,
+			PersonaID:        persona.ID,
+			PersonaSnapshot:  persona,
+			MaxTurnsPerInput: 2,
+		}, []domain.RoomMember{
+			{CharacterID: c1.ID, CharacterSnapshot: c1, BaseSpeed: 60, Active: true},
+			{CharacterID: c2.ID, CharacterSnapshot: c2, BaseSpeed: 50, Active: true},
+		})
+
+		eng1 := runtime.NewEngine(rdb, idx, staticProviders{snap: runtime.ProviderSnapshot{
+			Config:    cfg,
+			Gateway:   gw,
+			Decisions: decReg,
+		}}, nil)
+		ch1, cancel1 := eng1.Events().Subscribe(room.ID, 0)
+		sub, err := eng1.SubmitTurn(ctx, room.ID, runtime.SubmitTurnRequest{RequestID: "req-cap2-handoff", Text: "Stop if satisfied"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitForEvent(t, ch1, "bubble.completed", 5*time.Second)
+		select {
+		case <-handoffEntered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for handoff evaluation after step 1")
+		}
+
+		midTurn, err := rdb.Turns().Get(ctx, sub.Turn.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cancel1()
+		eng1.Close()
+
+		midTurn.Status = domain.TurnStatusRunning
+		midTurn.CompletedAt = nil
+		if err := rdb.Turns().Update(context.Background(), midTurn); err != nil {
+			t.Fatal(err)
+		}
+
+		eng2 := runtime.NewEngine(rdb, idx, staticProviders{snap: runtime.ProviderSnapshot{
+			Config:    cfg,
+			Gateway:   gw,
+			Decisions: decReg,
+		}}, nil)
+		defer eng2.Close()
+
+		if err := eng2.RecoverOrphanTurns(ctx); err != nil {
+			t.Fatalf("RecoverOrphanTurns: %v", err)
+		}
+		ch2, cancel2 := eng2.Events().Subscribe(room.ID, 0)
+		defer cancel2()
+		if _, err := eng2.RetryTurn(ctx, room.ID, sub.Turn.ID); err != nil {
+			t.Fatalf("RetryTurn: %v", err)
+		}
+		waitForEvent(t, ch2, "turn.completed", 5*time.Second)
+
+		if gotSteps := stepCount.Load(); gotSteps != 1 {
+			t.Fatalf("expected only 1 actor generation (recovery must honor handoff=true instead of speaking again), got %d", gotSteps)
+		}
+		msgs, _ := rdb.Messages().List(ctx, room.ID, 0, 20)
+		charCount := 0
+		for _, m := range msgs {
+			if m.Role == domain.MessageRoleCharacter {
+				charCount++
+			}
+		}
+		if charCount != 1 {
+			t.Fatalf("expected 1 character message after handoff=true on recovery, got %d", charCount)
 		}
 	})
 }
