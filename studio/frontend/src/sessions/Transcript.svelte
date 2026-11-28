@@ -122,9 +122,9 @@
           {/if}
           {#if responseIndex !== undefined && responseIndex !== editingIndex}
             <div class="response-actions" role="group" aria-label="Response actions">
-              <button type="button" title={canRegenerate ? 'Regenerate response' : 'Choose an API model to regenerate'} aria-label="Regenerate response" disabled={responseActionsDisabled || !canRegenerate} onclick={() => onresponse?.('regenerate', responseIndex)}><RotateCcw aria-hidden="true" size={14} /></button>
-              <button type="button" title="Edit response" aria-label="Edit response" disabled={responseActionsDisabled} onclick={() => { editingIndex = responseIndex; responseDraft = message.content || ''; }}><Pencil aria-hidden="true" size={14} /></button>
-              <button type="button" title="Delete response" aria-label="Delete response" disabled={responseActionsDisabled} onclick={() => { if (window.confirm('Delete this response from the conversation?')) onresponse?.('delete', responseIndex); }}><Trash2 aria-hidden="true" size={14} /></button>
+              <button type="button" class="icon-button" title={canRegenerate ? 'Regenerate response' : 'Choose an API model to regenerate'} aria-label="Regenerate response" disabled={responseActionsDisabled || !canRegenerate} onclick={() => onresponse?.('regenerate', responseIndex)}><RotateCcw aria-hidden="true" size={14} /></button>
+              <button type="button" class="icon-button" title="Edit response" aria-label="Edit response" disabled={responseActionsDisabled} onclick={() => { editingIndex = responseIndex; responseDraft = message.content || ''; }}><Pencil aria-hidden="true" size={14} /></button>
+              <button type="button" class="icon-button" title="Delete response" aria-label="Delete response" disabled={responseActionsDisabled} onclick={() => { if (window.confirm('Delete this response from the conversation?')) onresponse?.('delete', responseIndex); }}><Trash2 aria-hidden="true" size={14} /></button>
             </div>
           {/if}
         </div>
@@ -146,7 +146,8 @@
   .message-progress { color:var(--muted); font-size:calc(13px * var(--text-scale)); }
   .message-failure { color:var(--error); font-size:calc(13px * var(--text-scale)); overflow-wrap:anywhere; }
   .response-actions { display: flex; align-items: center; gap: 6px; margin-top: .45rem; }
-  .response-actions button[aria-label] { display: grid; place-items: center; width: 28px; height: 28px; color: var(--muted); }
-  .response-actions button[aria-label]:hover:not(:disabled) { color: var(--text); }
+  .response-actions .icon-button { width: 28px; min-height: 28px; color: var(--muted); border: 0; background: transparent; }
+  .response-actions .icon-button:hover:not(:disabled) { color: var(--text); }
+  .response-actions .icon-button:disabled { cursor: not-allowed; opacity: .55; }
   .response-editor textarea { width: 100%; resize: vertical; }
 </style>
