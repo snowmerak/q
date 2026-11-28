@@ -25,6 +25,7 @@ type createRoomInput struct {
 	ApprovalModeOverride *domain.ApprovalMode `json:"approval_mode_override,omitempty"`
 	ModelOverrides       *domain.ModelPrefs   `json:"model_overrides,omitempty"`
 	MaxTurnsPerInput     int                  `json:"max_turns_per_input,omitempty"`
+	WorkDir              string               `json:"work_dir,omitempty"`
 }
 
 type patchRoomInput struct {
@@ -34,6 +35,7 @@ type patchRoomInput struct {
 	ApprovalModeOverride *domain.ApprovalMode `json:"approval_mode_override,omitempty"`
 	ModelOverrides       *domain.ModelPrefs   `json:"model_overrides,omitempty"`
 	MaxTurnsPerInput     *int                 `json:"max_turns_per_input,omitempty"`
+	WorkDir              *string              `json:"work_dir,omitempty"`
 }
 
 type roomDetailResponse struct {
@@ -119,6 +121,7 @@ func (a *App) handleCreateRoom(w http.ResponseWriter, r *http.Request) {
 		ApprovalModeOverride: in.ApprovalModeOverride,
 		ModelOverrides:       in.ModelOverrides,
 		MaxTurnsPerInput:     in.MaxTurnsPerInput,
+		WorkDir:              strings.TrimSpace(in.WorkDir),
 	}
 
 	snap := a.Snapshot()
@@ -235,6 +238,9 @@ func (a *App) handlePatchRoom(w http.ResponseWriter, r *http.Request) {
 	}
 	if patch.MaxTurnsPerInput != nil && *patch.MaxTurnsPerInput > 0 {
 		cur.MaxTurnsPerInput = *patch.MaxTurnsPerInput
+	}
+	if patch.WorkDir != nil {
+		cur.WorkDir = strings.TrimSpace(*patch.WorkDir)
 	}
 
 	updated, err := a.rdb.Rooms().Update(ctx, cur)

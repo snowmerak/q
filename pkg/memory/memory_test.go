@@ -386,3 +386,83 @@ func containsSubstr(s, sub string) bool {
 		return false
 	}()
 }
+
+func TestRecallIncludesScopedKnowledgeAndIsolatesPrivateScopes(t *testing.T) {
+	rdb, idx := openTestStores(t)
+	ctx := t.Context()
+
+	persona, _ := rdb.Personas().Create(ctx, domain.Persona{Name: "Player"})
+	char, _ := rdb.Characters().Create(ctx, domain.Character{Name: "Hana"})
+	room, _ := rdb.Rooms().Create(ctx, domain.Room{
+		Title: "Lab", Mode: domain.RoomModeDirect, PersonaID: persona.ID,
+	}, []domain.RoomMember{{
+		CharacterID: char.ID, CharacterSnapshot: char, Active: true,
+	}})
+
+	type kSpec struct {
+		id    string
+		scope string
+		title string
+		text  string
+	}
+	specs := []kSpec{
+		{id: "k-global", scope: "global", title: "Global Manual", text: "quantum_beacon calibration code is cobalt"},
+		{id: "k-room", scope: "room:" + room.ID, title: "Room Blueprint", text: "quantum_beacon sits on the third shelf"},
+		{id: "k-char", scope: "character:" + char.ID, title: "Hana Personal Notes", text: "quantum_beacon battery replacement reminder"},
+		{id: "k-other-room", scope: "room:other-room", title: "Other Room Secret", text: "quantum_beacon other room secret override"},
+		{id: "k-other-char", scope: "character:other-char", title: "Other Char Secret", text: "quantum_beacon other character private key"},
+	}
+
+	for _, sp := range specs {
+		doc, err := rdb.Knowledge().CreateDoc(ctx, domain.KnowledgeDoc{
+			ID: sp.id, Scope: sp.scope, Title: sp.title, MediaType: "text/markdown",
+			Content: sp.text, Revision: 1, Status: domain.KnowledgeStatusActive,
+			CreatedAt: 1000, UpdatedAt: 1000,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		chID := sp.id + "-c0"
+		if err := rdb.Knowledge().ReplaceChunks(ctx, doc.ID, []domain.KnowledgeChunk{{
+			ID: chID, DocID: doc.ID, DocRevision: 1, ChunkOrdinal: 0, CharOffset: 0, Text: sp.text,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := idx.Upsert(ctx, storage.SearchDocument{
+			ID: chID, EntityType: "knowledge_chunk", Scope: sp.scope, OwnerID: doc.ID,
+			Text: sp.title + "\n\n" + sp.text, OccurredAt: 1000, Revision: 1,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	items, err := memory.Recall(ctx, rdb, idx, memory.Deps{}, memory.RecallInput{
+		RoomID:      room.ID,
+		ActorID:     char.ID,
+		ActorName:   char.Name,
+		CurrentText: "What do we know about quantum_beacon?",
+		OwnBudget:   4000,
+		NowMS:       5000,
+	})
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+
+	gotIDs := make(map[string]bool, len(items))
+	for _, it := range items {
+		gotIDs[it.OwnerID] = true
+		if it.Kind != "knowledge" {
+			t.Fatalf("expected knowledge item, got %+v", it)
+		}
+	}
+	for _, want := range []string{"k-global", "k-room", "k-char"} {
+		if !gotIDs[want] {
+			t.Fatalf("expected visible knowledge %s in recall results, got %+v", want, items)
+		}
+	}
+	for _, forbid := range []string{"k-other-room", "k-other-char"} {
+		if gotIDs[forbid] {
+			t.Fatalf("private scoped knowledge %s leaked into recall results: %+v", forbid, items)
+		}
+	}
+}

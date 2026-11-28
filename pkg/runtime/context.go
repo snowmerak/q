@@ -182,9 +182,22 @@ func BuildActorPrompt(
 		dynamicCtx.WriteString(strconv.FormatBool(rel.Stressed))
 		dynamicCtx.WriteByte('\n')
 	}
+	if wd := strings.TrimSpace(room.WorkDir); wd != "" {
+		dynamicCtx.WriteString("Room Working Directory: ")
+		dynamicCtx.WriteString(wd)
+		dynamicCtx.WriteByte('\n')
+	}
 	if len(recalled) > 0 {
-		dynamicCtx.WriteString("\nRecalled Memories & Earlier Dialogue:\n")
+		dynamicCtx.WriteString("\nRecalled Memories, Earlier Dialogue & Reference Knowledge:\n")
 		for _, item := range recalled {
+			if item.Kind == "knowledge" {
+				if item.AuthorName != "" {
+					dynamicCtx.WriteString(fmt.Sprintf("- [Knowledge: %s] %s\n", item.AuthorName, item.Text))
+				} else {
+					dynamicCtx.WriteString(fmt.Sprintf("- [Knowledge] %s\n", item.Text))
+				}
+				continue
+			}
 			ts := time.UnixMilli(item.OccurredAt).UTC().Format("2006-01-02 15:04")
 			if item.Kind == "speech" && item.AuthorName != "" {
 				dynamicCtx.WriteString(fmt.Sprintf("- [%s | %s] %s\n", ts, item.AuthorName, item.Text))

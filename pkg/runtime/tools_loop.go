@@ -370,6 +370,7 @@ func (e *Engine) processToolCalls(
 			UserRequest:  latestUserText,
 			ApprovalMode: effectiveMode,
 			AllowedRoots: snap.Config.Tools.AllowedRoots,
+			WorkDir:      room.WorkDir,
 			DataDir:      dataDir,
 			ProgressFn: func(msg string) {
 				e.events.Publish(roomID, "tool.progress", map[string]any{

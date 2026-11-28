@@ -33,6 +33,7 @@ type CallContext struct {
 	UserRequest  string
 	ApprovalMode domain.ApprovalMode
 	AllowedRoots []string
+	WorkDir      string
 	DataDir      string
 	ProgressFn   func(message string)
 }

@@ -217,7 +217,7 @@ func registerShellTools(r *Registry, mgr *CommandManager) {
 			"type": "object",
 			"properties": map[string]any{
 				"command":    map[string]any{"type": "string"},
-				"cwd":        map[string]any{"type": "string", "description": "Optional working directory (restricted to allowed_roots only if configured)."},
+				"cwd":        map[string]any{"type": "string", "description": "Optional working directory (defaults to room work_dir or home; restricted to allowed_roots only if configured)."},
 				"timeout_ms": map[string]any{"type": "integer"},
 			},
 			"required": []string{"command"},
@@ -234,19 +234,21 @@ func registerShellTools(r *Registry, mgr *CommandManager) {
 			if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 				return ToolOutput{Content: "invalid args: " + err.Error(), IsError: true}, nil
 			}
-			guard, err := newPathGuard(call.AllowedRoots, call.DataDir)
+			guard, err := newPathGuard(call.AllowedRoots, call.DataDir, call.WorkDir)
 			if err != nil {
 				return ToolOutput{Content: err.Error(), IsError: true}, nil
 			}
+			targetCwd := strings.TrimSpace(args.Cwd)
+			if targetCwd == "" {
+				targetCwd = guard.defaultBaseDir()
+			}
 			workDir := ""
-			if strings.TrimSpace(args.Cwd) != "" {
-				resolved, err := guard.resolve(args.Cwd)
+			if targetCwd != "" {
+				resolved, err := guard.resolve(targetCwd)
 				if err != nil {
 					return ToolOutput{Content: err.Error(), IsError: true}, nil
 				}
 				workDir = filepath.Clean(resolved)
-			} else if base := guard.defaultBaseDir(); base != "" {
-				workDir = base
 			}
 
 			var timeout time.Duration

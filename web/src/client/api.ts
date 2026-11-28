@@ -193,6 +193,7 @@ export class QClient {
     character_ids: string[];
     approval_mode_override?: string;
     max_turns_per_input?: number;
+    work_dir?: string;
   }) {
     return this.request<RoomDetail>("/api/v1/rooms", {
       method: "POST",
@@ -211,6 +212,7 @@ export class QClient {
       approval_mode_override?: ApprovalMode;
       model_overrides?: ModelPrefs;
       max_turns_per_input?: number;
+      work_dir?: string;
     },
   ) {
     return this.request<RoomDetail>(`/api/v1/rooms/${encodeURIComponent(id)}`, {

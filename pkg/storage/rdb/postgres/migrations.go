@@ -219,6 +219,12 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		version: 2,
+		stmts: []string{
+			`ALTER TABLE rooms ADD COLUMN IF NOT EXISTS work_dir TEXT NOT NULL DEFAULT ''`,
+		},
+	},
 }
 
 func migrate(ctx context.Context, db *sql.DB) error {

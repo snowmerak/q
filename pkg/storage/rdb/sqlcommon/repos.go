@@ -373,6 +373,7 @@ func (r roomRepo) Create(ctx context.Context, rm domain.Room, members []domain.R
 	if rm.MaxTurnsPerInput <= 0 {
 		rm.MaxTurnsPerInput = 3
 	}
+	rm.WorkDir = strings.TrimSpace(rm.WorkDir)
 	now := domain.NowMS()
 	if rm.CreatedAt == 0 {
 		rm.CreatedAt = now
@@ -399,8 +400,8 @@ func (r roomRepo) Create(ctx context.Context, rm domain.Room, members []domain.R
 	}
 
 	run := func(exec Execer) error {
-		q := r.d.Rebind(`INSERT INTO rooms (id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, context_version, version, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
-		if _, err := exec.ExecContext(ctx, q, rm.ID, rm.Title, string(rm.Mode), rm.PersonaID, personaJSON, approvalArg, overridesArg, rm.MaxTurnsPerInput, rm.ContextVersion, rm.Version, rm.CreatedAt, rm.UpdatedAt); err != nil {
+		q := r.d.Rebind(`INSERT INTO rooms (id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, work_dir, context_version, version, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`)
+		if _, err := exec.ExecContext(ctx, q, rm.ID, rm.Title, string(rm.Mode), rm.PersonaID, personaJSON, approvalArg, overridesArg, rm.MaxTurnsPerInput, rm.WorkDir, rm.ContextVersion, rm.Version, rm.CreatedAt, rm.UpdatedAt); err != nil {
 			return r.mapErr(err)
 		}
 		for _, m := range members {
@@ -439,7 +440,7 @@ func scanRoom(scan func(dest ...any) error) (domain.Room, error) {
 	var approval sql.NullString
 	var overrides sql.NullString
 	var deleted sql.NullInt64
-	if err := scan(&rm.ID, &rm.Title, &mode, &rm.PersonaID, &personaJSON, &approval, &overrides, &rm.MaxTurnsPerInput, &rm.ContextVersion, &rm.Version, &rm.CreatedAt, &rm.UpdatedAt, &deleted); err != nil {
+	if err := scan(&rm.ID, &rm.Title, &mode, &rm.PersonaID, &personaJSON, &approval, &overrides, &rm.MaxTurnsPerInput, &rm.WorkDir, &rm.ContextVersion, &rm.Version, &rm.CreatedAt, &rm.UpdatedAt, &deleted); err != nil {
 		return domain.Room{}, err
 	}
 	rm.Mode = domain.RoomMode(mode)
@@ -464,7 +465,7 @@ func scanRoom(scan func(dest ...any) error) (domain.Room, error) {
 }
 
 func (r roomRepo) Get(ctx context.Context, id string) (domain.Room, error) {
-	q := r.d.Rebind(`SELECT id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, context_version, version, created_at, updated_at, deleted_at FROM rooms WHERE id = ? AND deleted_at IS NULL`)
+	q := r.d.Rebind(`SELECT id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, work_dir, context_version, version, created_at, updated_at, deleted_at FROM rooms WHERE id = ? AND deleted_at IS NULL`)
 	rm, err := scanRoom(r.q.QueryRowContext(ctx, q, id).Scan)
 	if err != nil {
 		return domain.Room{}, r.mapErr(err)
@@ -473,7 +474,7 @@ func (r roomRepo) Get(ctx context.Context, id string) (domain.Room, error) {
 }
 
 func (r roomRepo) List(ctx context.Context) ([]domain.Room, error) {
-	rows, err := r.q.QueryContext(ctx, r.d.Rebind(`SELECT id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, context_version, version, created_at, updated_at, deleted_at FROM rooms WHERE deleted_at IS NULL ORDER BY updated_at DESC`))
+	rows, err := r.q.QueryContext(ctx, r.d.Rebind(`SELECT id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, work_dir, context_version, version, created_at, updated_at, deleted_at FROM rooms WHERE deleted_at IS NULL ORDER BY updated_at DESC`))
 	if err != nil {
 		return nil, r.mapErr(err)
 	}
@@ -491,6 +492,7 @@ func (r roomRepo) List(ctx context.Context) ([]domain.Room, error) {
 
 func (r roomRepo) Update(ctx context.Context, rm domain.Room) (domain.Room, error) {
 	rm.Title = strings.TrimSpace(rm.Title)
+	rm.WorkDir = strings.TrimSpace(rm.WorkDir)
 	if rm.ID == "" || rm.Title == "" {
 		return domain.Room{}, fmt.Errorf("%w: room id and title are required", storage.ErrInvalidInput)
 	}
@@ -512,8 +514,8 @@ func (r roomRepo) Update(ctx context.Context, rm domain.Room) (domain.Room, erro
 		}
 		overridesArg = sql.NullString{String: s, Valid: true}
 	}
-	q := r.d.Rebind(`UPDATE rooms SET title = ?, persona_id = ?, persona_snapshot_json = ?, approval_mode_override = ?, model_overrides_json = ?, max_turns_per_input = ?, context_version = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ? AND deleted_at IS NULL`)
-	res, err := r.q.ExecContext(ctx, q, rm.Title, rm.PersonaID, personaJSON, approvalArg, overridesArg, rm.MaxTurnsPerInput, rm.ContextVersion, rm.UpdatedAt, rm.ID, rm.Version)
+	q := r.d.Rebind(`UPDATE rooms SET title = ?, persona_id = ?, persona_snapshot_json = ?, approval_mode_override = ?, model_overrides_json = ?, max_turns_per_input = ?, work_dir = ?, context_version = ?, version = version + 1, updated_at = ? WHERE id = ? AND version = ? AND deleted_at IS NULL`)
+	res, err := r.q.ExecContext(ctx, q, rm.Title, rm.PersonaID, personaJSON, approvalArg, overridesArg, rm.MaxTurnsPerInput, rm.WorkDir, rm.ContextVersion, rm.UpdatedAt, rm.ID, rm.Version)
 	if err != nil {
 		return domain.Room{}, r.mapErr(err)
 	}

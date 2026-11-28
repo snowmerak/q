@@ -362,6 +362,7 @@ export interface Room {
   approval_mode_override?: ApprovalMode;
   model_overrides?: ModelPrefs;
   max_turns_per_input: number;
+  work_dir?: string;
   context_version: number;
   version: number;
   created_at: number;

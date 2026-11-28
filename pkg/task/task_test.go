@@ -14,8 +14,10 @@ import (
 	sdk "github.com/snowmerak/decisions"
 	"github.com/snowmerak/q/v2/pkg/app/config"
 	"github.com/snowmerak/q/v2/pkg/domain"
+	"github.com/snowmerak/q/v2/pkg/knowledge"
 	"github.com/snowmerak/q/v2/pkg/storage"
 	"github.com/snowmerak/q/v2/pkg/storage/blob/localfs"
+	"github.com/snowmerak/q/v2/pkg/storage/outbox"
 	"github.com/snowmerak/q/v2/pkg/storage/rdb/sqlite"
 	"github.com/snowmerak/q/v2/pkg/storage/search/blevehnsw"
 	"github.com/snowmerak/q/v2/pkg/task"
@@ -429,5 +431,150 @@ func TestSystemWideAccessWhenAllowedRootsEmpty(t *testing.T) {
 	out, _ = reg.Execute(t.Context(), call, "remove_path", `{"path":`+jsonQuote(fsRoot)+`,"recursive":true}`)
 	if !out.IsError || !strings.Contains(out.Content, "filesystem root") {
 		t.Fatalf("expected filesystem root removal rejection for %q, got %+v", fsRoot, out)
+	}
+}
+
+func TestSearchArchiveFindsKnowledgeWithoutObserverLeak(t *testing.T) {
+	dir := t.TempDir()
+	ctx := t.Context()
+
+	rdb, err := sqlite.Open(ctx, filepath.Join(dir, "q.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdb.Close()
+
+	idx, err := blevehnsw.Open(filepath.Join(dir, "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	persona, _ := rdb.Personas().Create(ctx, domain.Persona{Name: "User"})
+	char, _ := rdb.Characters().Create(ctx, domain.Character{Name: "Mira"})
+	room, _ := rdb.Rooms().Create(ctx, domain.Room{Title: "Library", Mode: domain.RoomModeDirect, PersonaID: persona.ID}, []domain.RoomMember{{
+		CharacterID: char.ID, CharacterSnapshot: char, Active: true,
+	}})
+
+	_ = rdb.Memories().CreateMemory(ctx, domain.Memory{
+		ID: "m-secret", RoomID: room.ID, OwnerID: "other", Kind: domain.MemoryKindEpisodic,
+		Content: "zephyr_protocol secret memory belonging to other actor", ObservedBy: []string{"other"},
+		OccurredAt: 1000, Status: domain.MemoryStatusActive, Revision: 1,
+	})
+	_ = idx.Upsert(ctx, storage.SearchDocument{
+		ID: "m-secret", EntityType: "memory", Scope: "room:" + room.ID, OwnerID: "other", ObservedBy: []string{"other"},
+		Text: "zephyr_protocol secret memory belonging to other actor", OccurredAt: 1000, Revision: 1,
+	})
+
+	ksvc := knowledge.NewService(rdb, idx, nil)
+	globalDoc, err := ksvc.CreateDoc(ctx, knowledge.CreateDocInput{
+		Scope: "global", Title: "Global Zephyr Runbook", Content: "Use zephyr_protocol mode 7 for diagnostics.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	charDoc, err := ksvc.CreateDoc(ctx, knowledge.CreateDocInput{
+		Scope: "character:" + char.ID, Title: "Mira Notebook", Content: "Personal zephyr_protocol checklist.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRoomDoc, err := ksvc.CreateDoc(ctx, knowledge.CreateDocInput{
+		Scope: "room:other-room", Title: "Other Room Notes", Content: "Private zephyr_protocol credentials.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := outbox.NewWorker(rdb, idx, nil).ProcessOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	reg := task.NewRegistry(task.RegistryDeps{RDB: rdb, Search: idx})
+	call := task.CallContext{RoomID: room.ID, TurnID: "t1", ActorID: char.ID, ActorName: char.Name}
+
+	out, err := reg.Execute(ctx, call, "search_archive", `{"query":"zephyr_protocol"}`)
+	if err != nil || out.IsError {
+		t.Fatalf("search_archive failed: %+v err=%v", out, err)
+	}
+	if !strings.Contains(out.Content, "Global Zephyr Runbook") || !strings.Contains(out.Content, "Personal zephyr_protocol") {
+		t.Fatalf("expected global and character-scoped knowledge in search_archive results, got %s", out.Content)
+	}
+	if strings.Contains(out.Content, "Other Room Notes") || strings.Contains(out.Content, "secret memory belonging to other actor") {
+		t.Fatalf("observer or scope leak detected in search_archive results: %s", out.Content)
+	}
+
+	// Verify get_archive_record allows visible knowledge chunk and rejects hidden room knowledge chunk.
+	globalChunks, _ := rdb.Knowledge().ListChunksByDoc(ctx, globalDoc.ID)
+	charChunks, _ := rdb.Knowledge().ListChunksByDoc(ctx, charDoc.ID)
+	otherChunks, _ := rdb.Knowledge().ListChunksByDoc(ctx, otherRoomDoc.ID)
+
+	for _, chID := range []string{globalChunks[0].ID, charChunks[0].ID} {
+		recOut, _ := reg.Execute(ctx, call, "get_archive_record", `{"entity_type":"knowledge_chunk","id":`+jsonQuote(chID)+`}`)
+		if recOut.IsError {
+			t.Fatalf("expected get_archive_record to allow %s, got %+v", chID, recOut)
+		}
+	}
+	forbidOut, _ := reg.Execute(ctx, call, "get_archive_record", `{"entity_type":"knowledge_chunk","id":`+jsonQuote(otherChunks[0].ID)+`}`)
+	if !forbidOut.IsError {
+		t.Fatalf("expected get_archive_record to reject out-of-scope knowledge chunk, got %+v", forbidOut)
+	}
+}
+
+func TestRoomWorkDirDefaultsAndSystemWideAccess(t *testing.T) {
+	base := t.TempDir()
+	roomDir := filepath.Join(base, "room-project")
+	elsewhere := filepath.Join(base, "elsewhere")
+	dataDir := filepath.Join(base, "qdata")
+	for _, d := range []string{roomDir, elsewhere, dataDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cmdMgr := task.NewCommandManager(10 * time.Second)
+	t.Cleanup(cmdMgr.Close)
+	reg := task.NewRegistry(task.RegistryDeps{Commands: cmdMgr})
+	call := task.CallContext{
+		AllowedRoots: nil,
+		WorkDir:      roomDir,
+		DataDir:      dataDir,
+	}
+
+	// Relative file ops resolve inside room.WorkDir.
+	out, err := reg.Execute(t.Context(), call, "write_file", `{"path":"notes/todo.txt","content":"check sensors"}`)
+	if err != nil || out.IsError {
+		t.Fatalf("relative write_file with WorkDir: %+v err=%v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(roomDir, "notes", "todo.txt")); err != nil {
+		t.Fatalf("expected file inside roomDir, stat err: %v", err)
+	}
+	out, _ = reg.Execute(t.Context(), call, "read_file", `{"path":"notes/todo.txt"}`)
+	if out.IsError || !strings.Contains(out.Content, "check sensors") {
+		t.Fatalf("relative read_file with WorkDir: %+v", out)
+	}
+
+	// Default run_command cwd uses room.WorkDir.
+	pwdCmd := "pwd"
+	if goruntime.GOOS == "windows" {
+		pwdCmd = "(Get-Location).Path"
+	}
+	outCmd, _ := reg.Execute(t.Context(), call, "run_command", `{"command":`+jsonQuote(pwdCmd)+`}`)
+	if outCmd.IsError {
+		t.Fatalf("run_command default cwd: %+v", outCmd)
+	}
+	var started struct {
+		CommandID string `json:"command_id"`
+	}
+	_ = json.Unmarshal([]byte(outCmd.Content), &started)
+	outWait, _ := reg.Execute(t.Context(), call, "wait", `{"command_id":`+jsonQuote(started.CommandID)+`,"seconds":10}`)
+	if outWait.IsError || !strings.Contains(strings.ToLower(outWait.Content), strings.ToLower(filepath.Base(roomDir))) {
+		t.Fatalf("expected run_command output in roomDir %q, got %+v", roomDir, outWait)
+	}
+
+	// Absolute path outside room.WorkDir still works when AllowedRoots is empty.
+	extFile := filepath.Join(elsewhere, "global.txt")
+	out, _ = reg.Execute(t.Context(), call, "write_file", `{"path":`+jsonQuote(extFile)+`,"content":"anywhere ok"}`)
+	if out.IsError {
+		t.Fatalf("expected system-wide write_file outside roomDir to succeed: %+v", out)
 	}
 }

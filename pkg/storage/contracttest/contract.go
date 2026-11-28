@@ -64,6 +64,7 @@ func RunRDBContractTests(t *testing.T, newStore func(t *testing.T) storage.RDBSt
 			Mode:            domain.RoomModeDirect,
 			PersonaID:       p.ID,
 			PersonaSnapshot: p,
+			WorkDir:         "/tmp/work-a",
 		}, []domain.RoomMember{{
 			CharacterID:       c.ID,
 			CharacterSnapshot: c,
@@ -71,6 +72,18 @@ func RunRDBContractTests(t *testing.T, newStore func(t *testing.T) storage.RDBSt
 		}})
 		if err != nil {
 			t.Fatalf("Create room: %v", err)
+		}
+		if rm.WorkDir != "/tmp/work-a" {
+			t.Fatalf("expected created WorkDir=/tmp/work-a, got %q", rm.WorkDir)
+		}
+		rm.WorkDir = "/tmp/work-b"
+		rm, err = st.Rooms().Update(ctx, rm)
+		if err != nil {
+			t.Fatalf("Update room work_dir: %v", err)
+		}
+		gotRoom, err := st.Rooms().Get(ctx, rm.ID)
+		if err != nil || gotRoom.WorkDir != "/tmp/work-b" {
+			t.Fatalf("Get room after WorkDir update: %+v err=%v", gotRoom, err)
 		}
 
 		req := domain.Turn{

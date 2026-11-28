@@ -212,6 +212,7 @@ type Room struct {
 	ApprovalModeOverride *ApprovalMode `json:"approval_mode_override,omitempty"`
 	ModelOverrides       *ModelPrefs   `json:"model_overrides,omitempty"`
 	MaxTurnsPerInput     int           `json:"max_turns_per_input"`
+	WorkDir              string        `json:"work_dir,omitempty"`
 	ContextVersion       int64         `json:"context_version"`
 	Version              int64         `json:"version"`
 	CreatedAt            int64         `json:"created_at"`

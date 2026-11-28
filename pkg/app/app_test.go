@@ -703,3 +703,76 @@ func TestLoomStatsGCAndConfigHotReloadEndpoints(t *testing.T) {
 		t.Fatalf("expected hot-reloaded MaxStoreBytes=128MiB, got %d", statsBefore.MaxStoreBytes)
 	}
 }
+
+func TestRoomWorkDirCreatePatchAndClear(t *testing.T) {
+	ctx := t.Context()
+	a, err := app.Open(ctx, app.Options{DataDir: t.TempDir(), ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close(context.Background()) }()
+
+	h := a.Handler()
+	doJSON := func(method, path string, body any, out any) int {
+		var rBody io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			rBody = bytes.NewReader(b)
+		}
+		req := httptest.NewRequest(method, path, rBody)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if out != nil && rec.Body.Len() > 0 {
+			_ = json.Unmarshal(rec.Body.Bytes(), out)
+		}
+		return rec.Code
+	}
+
+	var persona struct {
+		ID string `json:"id"`
+	}
+	if code := doJSON(http.MethodPost, "/api/v1/personas", map[string]any{"name": "User"}, &persona); code != http.StatusCreated {
+		t.Fatalf("create persona = %d", code)
+	}
+	var char struct {
+		ID string `json:"id"`
+	}
+	if code := doJSON(http.MethodPost, "/api/v1/characters", map[string]any{"name": "Kai"}, &char); code != http.StatusCreated {
+		t.Fatalf("create char = %d", code)
+	}
+
+	type roomDetailDTO struct {
+		Room struct {
+			ID      string `json:"id"`
+			Version int64  `json:"version"`
+			WorkDir string `json:"work_dir"`
+		} `json:"room"`
+	}
+	var detail roomDetailDTO
+	if code := doJSON(http.MethodPost, "/api/v1/rooms", map[string]any{
+		"title":         "Project Room",
+		"mode":          "direct",
+		"persona_id":    persona.ID,
+		"character_ids": []string{char.ID},
+		"work_dir":      "  C:\\work\\alpha  ",
+	}, &detail); code != http.StatusCreated || detail.Room.WorkDir != `C:\work\alpha` {
+		t.Fatalf("create room work_dir = %d %+v", code, detail)
+	}
+
+	var patched roomDetailDTO
+	if code := doJSON(http.MethodPatch, "/api/v1/rooms/"+detail.Room.ID, map[string]any{
+		"expected_version": detail.Room.Version,
+		"work_dir":         "/tmp/beta",
+	}, &patched); code != http.StatusOK || patched.Room.WorkDir != "/tmp/beta" {
+		t.Fatalf("patch room work_dir = %d %+v", code, patched)
+	}
+
+	var cleared roomDetailDTO
+	if code := doJSON(http.MethodPatch, "/api/v1/rooms/"+detail.Room.ID, map[string]any{
+		"expected_version": patched.Room.Version,
+		"work_dir":         "",
+	}, &cleared); code != http.StatusOK || cleared.Room.WorkDir != "" {
+		t.Fatalf("clear room work_dir = %d %+v", code, cleared)
+	}
+}

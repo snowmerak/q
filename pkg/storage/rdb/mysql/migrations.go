@@ -230,6 +230,12 @@ var migrations = []migration{
 			) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 		},
 	},
+	{
+		version: 2,
+		stmts: []string{
+			`ALTER TABLE rooms ADD COLUMN work_dir VARCHAR(1024) NOT NULL DEFAULT ''`,
+		},
+	},
 }
 
 func migrate(ctx context.Context, db *sql.DB) error {

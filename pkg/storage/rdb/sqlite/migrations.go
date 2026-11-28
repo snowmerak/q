@@ -216,6 +216,12 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		version: 2,
+		stmts: []string{
+			`ALTER TABLE rooms ADD COLUMN work_dir TEXT NOT NULL DEFAULT ''`,
+		},
+	},
 }
 
 func applyMigrations(ctx context.Context, db *sql.DB) error {

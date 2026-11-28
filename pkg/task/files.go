@@ -44,16 +44,29 @@ func formatLineAnchors(lines []string, startLine int) string {
 type pathGuard struct {
 	allowedRoots []string
 	dataDir      string
+	workDir      string
 }
 
-func newPathGuard(allowedRoots []string, dataDir string) (*pathGuard, error) {
+func expandUserPath(raw string) string {
+	if raw == "~" || strings.HasPrefix(raw, "~/") || strings.HasPrefix(raw, `~\`) {
+		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+			if raw == "~" {
+				return home
+			}
+			return filepath.Join(home, raw[2:])
+		}
+	}
+	return raw
+}
+
+func newPathGuard(allowedRoots []string, dataDir, workDir string) (*pathGuard, error) {
 	roots := make([]string, 0, len(allowedRoots))
 	for _, r := range allowedRoots {
 		r = strings.TrimSpace(r)
 		if r == "" {
 			continue
 		}
-		abs, err := filepath.Abs(r)
+		abs, err := filepath.Abs(expandUserPath(r))
 		if err != nil {
 			continue
 		}
@@ -71,10 +84,22 @@ func newPathGuard(allowedRoots []string, dataDir string) (*pathGuard, error) {
 			cleanDataDir = filepath.Clean(abs)
 		}
 	}
-	return &pathGuard{allowedRoots: roots, dataDir: cleanDataDir}, nil
+	var cleanWorkDir string
+	if trimmed := strings.TrimSpace(workDir); trimmed != "" {
+		if abs, err := filepath.Abs(expandUserPath(trimmed)); err == nil {
+			if resolved, err := evalSymlinksWithMissingTail(abs); err == nil {
+				abs = resolved
+			}
+			cleanWorkDir = filepath.Clean(abs)
+		}
+	}
+	return &pathGuard{allowedRoots: roots, dataDir: cleanDataDir, workDir: cleanWorkDir}, nil
 }
 
 func (g *pathGuard) defaultBaseDir() string {
+	if g.workDir != "" {
+		return g.workDir
+	}
 	if len(g.allowedRoots) > 0 {
 		return g.allowedRoots[0]
 	}
@@ -94,16 +119,7 @@ func (g *pathGuard) resolve(rawPath string) (string, error) {
 	if rawPath == "" {
 		return "", errors.New("path is required")
 	}
-	candidate := rawPath
-	if candidate == "~" || strings.HasPrefix(candidate, "~/") || strings.HasPrefix(candidate, `~\`) {
-		if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
-			if candidate == "~" {
-				candidate = home
-			} else {
-				candidate = filepath.Join(home, candidate[2:])
-			}
-		}
-	}
+	candidate := expandUserPath(rawPath)
 	if !filepath.IsAbs(candidate) {
 		if base := g.defaultBaseDir(); base != "" {
 			candidate = filepath.Join(base, candidate)
@@ -189,7 +205,7 @@ func evalSymlinksWithMissingTail(abs string) (string, error) {
 
 func registerFileTools(r *Registry) {
 	guardFor := func(call CallContext) (*pathGuard, error) {
-		return newPathGuard(call.AllowedRoots, call.DataDir)
+		return newPathGuard(call.AllowedRoots, call.DataDir, call.WorkDir)
 	}
 
 	r.register(ToolSpec{

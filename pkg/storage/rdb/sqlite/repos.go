@@ -340,6 +340,7 @@ func (r *roomRepo) Create(ctx context.Context, rm domain.Room, members []domain.
 	if rm.MaxTurnsPerInput == 0 {
 		rm.MaxTurnsPerInput = 6
 	}
+	rm.WorkDir = strings.TrimSpace(rm.WorkDir)
 	now := domain.NowMS()
 	if rm.CreatedAt == 0 {
 		rm.CreatedAt = now
@@ -360,9 +361,9 @@ func (r *roomRepo) Create(ctx context.Context, rm domain.Room, members []domain.
 		approvalOv = string(*rm.ApprovalModeOverride)
 	}
 	_, err = r.db.ExecContext(ctx,
-		`INSERT INTO rooms (id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, context_version, version, created_at, updated_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rm.ID, rm.Title, string(rm.Mode), rm.PersonaID, personaSnap, approvalOv, modelOv, rm.MaxTurnsPerInput, rm.ContextVersion, rm.Version, rm.CreatedAt, rm.UpdatedAt, rm.DeletedAt,
+		`INSERT INTO rooms (id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, work_dir, context_version, version, created_at, updated_at, deleted_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rm.ID, rm.Title, string(rm.Mode), rm.PersonaID, personaSnap, approvalOv, modelOv, rm.MaxTurnsPerInput, rm.WorkDir, rm.ContextVersion, rm.Version, rm.CreatedAt, rm.UpdatedAt, rm.DeletedAt,
 	)
 	if err != nil {
 		return domain.Room{}, mapSQLiteErr(err)
@@ -383,7 +384,7 @@ func scanRoom(scan func(dest ...any) error) (domain.Room, error) {
 	var rm domain.Room
 	var mode, personaSnap, approvalOv, modelOv string
 	var deletedAt sql.NullInt64
-	if err := scan(&rm.ID, &rm.Title, &mode, &rm.PersonaID, &personaSnap, &approvalOv, &modelOv, &rm.MaxTurnsPerInput, &rm.ContextVersion, &rm.Version, &rm.CreatedAt, &rm.UpdatedAt, &deletedAt); err != nil {
+	if err := scan(&rm.ID, &rm.Title, &mode, &rm.PersonaID, &personaSnap, &approvalOv, &modelOv, &rm.MaxTurnsPerInput, &rm.WorkDir, &rm.ContextVersion, &rm.Version, &rm.CreatedAt, &rm.UpdatedAt, &deletedAt); err != nil {
 		return domain.Room{}, mapSQLiteErr(err)
 	}
 	rm.Mode = domain.RoomMode(mode)
@@ -407,7 +408,7 @@ func scanRoom(scan func(dest ...any) error) (domain.Room, error) {
 
 func (r *roomRepo) Get(ctx context.Context, id string) (domain.Room, error) {
 	row := r.db.QueryRowContext(ctx,
-		`SELECT id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, context_version, version, created_at, updated_at, deleted_at
+		`SELECT id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, work_dir, context_version, version, created_at, updated_at, deleted_at
 		 FROM rooms WHERE id = ? AND deleted_at IS NULL`, id,
 	)
 	return scanRoom(row.Scan)
@@ -415,7 +416,7 @@ func (r *roomRepo) Get(ctx context.Context, id string) (domain.Room, error) {
 
 func (r *roomRepo) List(ctx context.Context) ([]domain.Room, error) {
 	rows, err := r.db.QueryContext(ctx,
-		`SELECT id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, context_version, version, created_at, updated_at, deleted_at
+		`SELECT id, title, mode, persona_id, persona_snapshot_json, approval_mode_override, model_overrides_json, max_turns_per_input, work_dir, context_version, version, created_at, updated_at, deleted_at
 		 FROM rooms WHERE deleted_at IS NULL ORDER BY updated_at DESC, id ASC`,
 	)
 	if err != nil {
@@ -437,6 +438,7 @@ func (r *roomRepo) Update(ctx context.Context, rm domain.Room) (domain.Room, err
 	expected := rm.Version
 	rm.Version++
 	rm.UpdatedAt = domain.NowMS()
+	rm.WorkDir = strings.TrimSpace(rm.WorkDir)
 	personaSnap, err := marshalJSONString(rm.PersonaSnapshot, "{}")
 	if err != nil {
 		return domain.Room{}, err
@@ -450,9 +452,9 @@ func (r *roomRepo) Update(ctx context.Context, rm domain.Room) (domain.Room, err
 		approvalOv = string(*rm.ApprovalModeOverride)
 	}
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE rooms SET title = ?, persona_snapshot_json = ?, approval_mode_override = ?, model_overrides_json = ?, max_turns_per_input = ?, context_version = ?, version = ?, updated_at = ?
+		`UPDATE rooms SET title = ?, persona_snapshot_json = ?, approval_mode_override = ?, model_overrides_json = ?, max_turns_per_input = ?, work_dir = ?, context_version = ?, version = ?, updated_at = ?
 		 WHERE id = ? AND version = ? AND deleted_at IS NULL`,
-		rm.Title, personaSnap, approvalOv, modelOv, rm.MaxTurnsPerInput, rm.ContextVersion, rm.Version, rm.UpdatedAt, rm.ID, expected,
+		rm.Title, personaSnap, approvalOv, modelOv, rm.MaxTurnsPerInput, rm.WorkDir, rm.ContextVersion, rm.Version, rm.UpdatedAt, rm.ID, expected,
 	)
 	if err != nil {
 		return domain.Room{}, mapSQLiteErr(err)

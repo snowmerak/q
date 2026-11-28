@@ -90,10 +90,12 @@ export function RoomsView({ client }: { client: QClient }) {
   const [newCharacterId, setNewCharacterId] = useState<string>("");
   const [newCharacterIds, setNewCharacterIds] = useState<string[]>([]);
   const [newMaxTurns, setNewMaxTurns] = useState<number>(3);
+  const [newWorkDir, setNewWorkDir] = useState<string>("");
   const [inspectedMemberId, setInspectedMemberId] = useState<string>("");
 
   const [editOpen, setEditOpen] = useState<boolean>(false);
   const [editTitle, setEditTitle] = useState<string>("");
+  const [editWorkDir, setEditWorkDir] = useState<string>("");
   const [editApprovalOverride, setEditApprovalOverride] = useState<"" | ApprovalMode>("");
   const [editCharacterIds, setEditCharacterIds] = useState<string[]>([]);
   const [editMaxTurns, setEditMaxTurns] = useState<number>(3);
@@ -322,6 +324,7 @@ export function RoomsView({ client }: { client: QClient }) {
       setNewCharacterId(cRes.items[0]?.id ?? "");
       setNewCharacterIds(cRes.items.slice(0, 2).map((c) => c.id));
       setNewMaxTurns(3);
+      setNewWorkDir("");
       setNewTitle(cRes.items[0] ? `${cRes.items[0].name}` : "New Chat");
       setCreateOpen(true);
     } catch (err) {
@@ -348,6 +351,7 @@ export function RoomsView({ client }: { client: QClient }) {
         persona_id: newPersonaId,
         character_ids: selectedIds,
         max_turns_per_input: newMode === "group" ? Math.max(1, Math.min(20, newMaxTurns || 3)) : undefined,
+        work_dir: newWorkDir.trim() || undefined,
       });
       setCreateOpen(false);
       await loadRooms();
@@ -371,6 +375,7 @@ export function RoomsView({ client }: { client: QClient }) {
       setDefaultRoles(mRes.default_roles ?? {});
       setDecisionModels(dRes.models);
       setEditTitle(detail.room.title);
+      setEditWorkDir(detail.room.work_dir ?? "");
       setEditApprovalOverride(detail.room.approval_mode_override ?? "");
       setEditCharacterIds(detail.members.filter((m) => m.active).map((m) => m.character_id));
       setEditMaxTurns(detail.room.max_turns_per_input || 3);
@@ -416,6 +421,7 @@ export function RoomsView({ client }: { client: QClient }) {
       await client.patchRoom(detail.room.id, {
         expected_version: detail.room.version,
         title: editTitle.trim(),
+        work_dir: editWorkDir.trim(),
         ...(editApprovalOverride ? { approval_mode_override: editApprovalOverride } : {}),
         model_overrides: modelOverrides,
         ...(detail.room.mode === "group"
@@ -640,6 +646,11 @@ export function RoomsView({ client }: { client: QClient }) {
                       ? activeMembers.map((m) => m.character_snapshot.name).join(", ")
                       : (primaryMember?.character_snapshot.name ?? "—")}
                   </Badge>
+                  {detail.room.work_dir && (
+                    <Badge variant="outline" className="font-mono text-[11px] max-w-xs truncate" title={detail.room.work_dir}>
+                      {detail.room.work_dir}
+                    </Badge>
+                  )}
                   {(activeTurn || actorPhase) && (
                     <Badge variant="default" className="animate-pulse">
                       {actorPhase || "thinking"}
@@ -1009,6 +1020,16 @@ export function RoomsView({ client }: { client: QClient }) {
               />
             </div>
             <div className="space-y-1.5">
+              <Label htmlFor="room-workdir">Working Directory (optional)</Label>
+              <Input
+                id="room-workdir"
+                className="font-mono text-xs"
+                value={newWorkDir}
+                onChange={(e) => setNewWorkDir(e.target.value)}
+                placeholder="Optional default folder, e.g. C:\Users\...\project or ~/notes"
+              />
+            </div>
+            <div className="space-y-1.5">
               <Label htmlFor="room-persona">User Persona</Label>
               <select
                 id="room-persona"
@@ -1100,7 +1121,7 @@ export function RoomsView({ client }: { client: QClient }) {
           <DialogHeader>
             <DialogTitle>Room Settings</DialogTitle>
             <DialogDescription>
-              Update title, approval policy, model &amp; reasoning effort overrides{detail?.room.mode === "group" ? ", and active group participants" : ""}.
+              Update title, working directory, approval policy, model &amp; reasoning effort overrides{detail?.room.mode === "group" ? ", and active group participants" : ""}.
             </DialogDescription>
           </DialogHeader>
           {(() => {
@@ -1127,6 +1148,16 @@ export function RoomsView({ client }: { client: QClient }) {
                     id="edit-room-title"
                     value={editTitle}
                     onChange={(e) => setEditTitle(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-room-workdir">Working Directory (optional)</Label>
+                  <Input
+                    id="edit-room-workdir"
+                    className="font-mono text-xs"
+                    value={editWorkDir}
+                    onChange={(e) => setEditWorkDir(e.target.value)}
+                    placeholder="Optional default folder, e.g. C:\Users\...\project or ~/notes"
                   />
                 </div>
                 <div className="space-y-1.5">

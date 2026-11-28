@@ -62,7 +62,23 @@ type RecalledItem struct {
 	Truncated   bool    `json:"truncated,omitempty"`
 }
 
-// Recall executes the gated, observer-isolated memory/speech recall pipeline:
+// KnowledgeScopeVisible reports whether a KnowledgeDoc with scope should be visible
+// inside (roomID, actorID). Scopes prefixed with "room:" or "character:" are
+// isolated to that specific room or character; all other scopes (including
+// "global" and custom shared tags) are visible across rooms and actors.
+func KnowledgeScopeVisible(scope, roomID, actorID string) bool {
+	sc := strings.TrimSpace(scope)
+	if strings.HasPrefix(sc, "room:") {
+		return roomID != "" && sc == "room:"+roomID
+	}
+	if strings.HasPrefix(sc, "character:") {
+		return actorID != "" && sc == "character:"+actorID
+	}
+	return true
+}
+
+// Recall executes the gated, observer-isolated memory/speech recall pipeline
+// plus scoped reference knowledge retrieval:
 // existence check -> memory_recall_gate -> lightweight query planner -> hybrid search -> memory_recall_select -> 10% budget fit.
 func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchIndex, deps Deps, input RecallInput) ([]RecalledItem, error) {
 	if rdb == nil || search == nil || input.OwnBudget <= 0 || strings.TrimSpace(input.CurrentText) == "" {
@@ -82,7 +98,7 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 			},
 		}, sdk.Questions{
 			"needs_recall": sdk.NoulQuestion{
-				Instructions: "Does `current` require looking up past memories, prior events, or earlier quotes not already answered in `recent`? Treat `recent` as context only. Return true if `current` asks about or refers to past times, earlier promises, items, places, or missing facts. Return false for greetings, acknowledgments, casual small talk, or purely present-moment replies.",
+				Instructions: "Does `current` require looking up past memories, prior events, earlier quotes, or reference knowledge documents not already answered in `recent`? Treat `recent` as context only. Return true if `current` asks about or refers to past times, earlier promises, items, places, domain facts, or missing details. Return false for greetings, acknowledgments, casual small talk, or purely present-moment replies.",
 			},
 		})
 		if err == nil {
@@ -101,7 +117,8 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 		return nil, nil
 	}
 
-	// Step 3: SearchIndex queries with strict ObserverID filtering & RDB hydration.
+	// Step 3: SearchIndex queries with strict ObserverID filtering for memories/messages
+	// and scope visibility filtering for knowledge_chunk.
 	type candidate struct {
 		item  RecalledItem
 		score float64
@@ -109,45 +126,59 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 	merged := make(map[string]candidate)
 
 	for _, q := range queries {
-		entityTypes := []string{"memory", "message"}
-		switch q.Kind {
-		case "memory":
-			entityTypes = []string{"memory"}
-		case "speech":
-			entityTypes = []string{"message"}
-		}
-
 		fromMS, hasFrom := parseOptionalISO(q.From)
 		toMS, hasTo := parseOptionalISO(q.To)
 		if hasFrom && hasTo && fromMS >= toMS {
 			hasFrom, hasTo = false, false
 		}
 
-		sq := storage.SearchQuery{
-			Text:        q.Query,
-			Mode:        "lexical",
-			EntityTypes: entityTypes,
-			Scopes:      []string{"room:" + input.RoomID},
-			ObserverID:  input.ActorID,
-			Limit:       maxRecallCandidates,
-		}
+		mode := "lexical"
+		var vec []float32
 		if deps.Embedder != nil && strings.TrimSpace(q.Query) != "" {
-			if vec, embErr := deps.Embedder.EmbedQuery(ctx, q.Query); embErr == nil && len(vec) > 0 {
-				sq.Vector = vec
-				sq.Mode = "hybrid"
+			if v, embErr := deps.Embedder.EmbedQuery(ctx, q.Query); embErr == nil && len(v) > 0 {
+				vec = v
+				mode = "hybrid"
 			}
 		}
 
-		hits, err := search.Search(ctx, sq)
-		if err != nil {
-			continue
+		var allHits []storage.SearchHit
+		if q.Kind != "knowledge" {
+			entityTypes := []string{"memory", "message"}
+			switch q.Kind {
+			case "memory":
+				entityTypes = []string{"memory"}
+			case "speech":
+				entityTypes = []string{"message"}
+			}
+			if hits, err := search.Search(ctx, storage.SearchQuery{
+				Text:        q.Query,
+				Vector:      vec,
+				Mode:        mode,
+				EntityTypes: entityTypes,
+				Scopes:      []string{"room:" + input.RoomID},
+				ObserverID:  input.ActorID,
+				Limit:       maxRecallCandidates,
+			}); err == nil {
+				allHits = append(allHits, hits...)
+			}
+		}
+		if (q.Kind == "" || q.Kind == "knowledge") && q.Speaker == "" {
+			if kHits, err := search.Search(ctx, storage.SearchQuery{
+				Text:        q.Query,
+				Vector:      vec,
+				Mode:        mode,
+				EntityTypes: []string{"knowledge_chunk"},
+				Limit:       maxRecallCandidates,
+			}); err == nil {
+				allHits = append(allHits, kHits...)
+			}
 		}
 
-		for _, hit := range hits {
+		for _, hit := range allHits {
 			key := hit.EntityType + ":" + hit.ID
 			switch hit.EntityType {
 			case "memory":
-				if q.Kind == "speech" {
+				if q.Kind == "speech" || q.Kind == "knowledge" {
 					continue
 				}
 				mem, err := rdb.Memories().GetMemory(ctx, hit.ID)
@@ -182,7 +213,7 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 					}
 				}
 			case "message":
-				if q.Kind == "memory" {
+				if q.Kind == "memory" || q.Kind == "knowledge" {
 					continue
 				}
 				if _, excluded := input.ExcludeIDs[hit.ID]; excluded {
@@ -218,6 +249,43 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 							OwnerID:    msg.AuthorID,
 							AuthorName: msg.AuthorName,
 							OccurredAt: msg.CreatedAt,
+							Text:       txt,
+							Truncated:  truncated,
+						},
+					}
+				}
+			case "knowledge_chunk":
+				if q.Kind == "memory" || q.Kind == "speech" || q.Speaker != "" {
+					continue
+				}
+				ch, err := rdb.Knowledge().GetChunk(ctx, hit.ID)
+				if err != nil {
+					continue
+				}
+				doc, err := rdb.Knowledge().GetDoc(ctx, ch.DocID)
+				if err != nil || doc.Status != domain.KnowledgeStatusActive || ch.DocRevision != doc.Revision {
+					continue
+				}
+				if !KnowledgeScopeVisible(doc.Scope, input.RoomID, input.ActorID) {
+					continue
+				}
+				if input.NowMS > 0 && doc.UpdatedAt > input.NowMS {
+					continue
+				}
+				if (hasFrom && doc.UpdatedAt < fromMS) || (hasTo && doc.UpdatedAt >= toMS) {
+					continue
+				}
+				txt, truncated := TruncateRunes(ch.Text, maxRecallItemRunes)
+				prev, exists := merged[key]
+				if !exists || hit.Score > prev.score {
+					merged[key] = candidate{
+						score: hit.Score,
+						item: RecalledItem{
+							ID:         ch.ID,
+							Kind:       "knowledge",
+							OwnerID:    doc.ID,
+							AuthorName: doc.Title,
+							OccurredAt: doc.UpdatedAt,
 							Text:       txt,
 							Truncated:  truncated,
 						},
@@ -261,7 +329,7 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 		for i, item := range candidates {
 			key := candidateKey(i)
 			questions[key] = sdk.NoulQuestion{
-				Instructions: "Is this past memory or speech directly needed to answer or respond naturally to `current`? Select multiple if needed or reject all if irrelevant.",
+				Instructions: "Is this past memory, speech, or reference knowledge directly needed to answer or respond naturally to `current`? Select multiple if needed or reject all if irrelevant.",
 			}
 			evidenceCandidates[i] = map[string]any{
 				"key":         key,
@@ -305,6 +373,13 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 func hasRecallableData(ctx context.Context, rdb storage.RDBStore, roomID, actorID string, excludeIDs map[string]struct{}) bool {
 	if mems, err := rdb.Memories().ListMemories(ctx, roomID, actorID, actorID, 1); err == nil && len(mems) > 0 {
 		return true
+	}
+	if docs, err := rdb.Knowledge().ListDocs(ctx, ""); err == nil {
+		for _, doc := range docs {
+			if doc.Status == domain.KnowledgeStatusActive && KnowledgeScopeVisible(doc.Scope, roomID, actorID) {
+				return true
+			}
+		}
 	}
 	msgs, err := rdb.Messages().List(ctx, roomID, 0, len(excludeIDs)+12)
 	if err != nil {
@@ -357,8 +432,8 @@ func planRecallQueries(ctx context.Context, deps Deps, input RecallInput) ([]Rec
 		Messages: []llmprovider.Message{
 			{
 				Role: llmprovider.RoleSystem,
-				Content: "Produce JSON only: {\"queries\":[{\"query\":\"short keywords\",\"from\":\"optional RFC3339\",\"to\":\"optional RFC3339\",\"kind\":\"memory|speech\",\"speaker\":\"user|self\"}]}. " +
-					"Return at most 3 focused search queries for past memories or dialogue, or {\"queries\":[]} if no lookup is needed.",
+				Content: "Produce JSON only: {\"queries\":[{\"query\":\"short keywords\",\"from\":\"optional RFC3339\",\"to\":\"optional RFC3339\",\"kind\":\"memory|speech|knowledge\",\"speaker\":\"user|self\"}]}. " +
+					"Return at most 3 focused search queries for past memories, dialogue, or reference knowledge, or {\"queries\":[]} if no lookup is needed.",
 			},
 			{
 				Role:    llmprovider.RoleUser,
@@ -381,7 +456,7 @@ func planRecallQueries(ctx context.Context, deps Deps, input RecallInput) ([]Rec
 	for _, q := range decoded.Queries {
 		q.Query = strings.TrimSpace(q.Query)
 		q.Kind = strings.ToLower(strings.TrimSpace(q.Kind))
-		if q.Kind != "memory" && q.Kind != "speech" {
+		if q.Kind != "memory" && q.Kind != "speech" && q.Kind != "knowledge" {
 			q.Kind = ""
 		}
 		q.Speaker = strings.ToLower(strings.TrimSpace(q.Speaker))

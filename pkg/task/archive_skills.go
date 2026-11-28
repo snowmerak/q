@@ -155,14 +155,22 @@ func registerArchiveAndSkillTools(
 			if len(args.EntityTypes) == 0 {
 				args.EntityTypes = []string{"memory", "message", "knowledge_chunk"}
 			}
-			if len(args.Scopes) == 0 && call.RoomID != "" {
-				args.Scopes = []string{"room:" + call.RoomID, "global"}
+
+			var observerTypes []string
+			includeKnowledge := false
+			for _, et := range args.EntityTypes {
+				switch et {
+				case "memory", "message":
+					observerTypes = append(observerTypes, et)
+				case "knowledge_chunk":
+					includeKnowledge = true
+				}
 			}
 
 			mode := "lexical"
 			var vec []float32
-			if embedderFn != nil {
-				if emb := embedderFn(); emb != nil && strings.TrimSpace(args.Query) != "" {
+			if embedderFn != nil && strings.TrimSpace(args.Query) != "" {
+				if emb := embedderFn(); emb != nil {
 					if v, err := emb.EmbedQuery(ctx, args.Query); err == nil && len(v) > 0 {
 						vec = v
 						mode = "hybrid"
@@ -170,18 +178,45 @@ func registerArchiveAndSkillTools(
 				}
 			}
 
-			hits, err := search.Search(ctx, storage.SearchQuery{
-				Text:        args.Query,
-				Vector:      vec,
-				Mode:        mode,
-				EntityTypes: args.EntityTypes,
-				Scopes:      args.Scopes,
-				ObserverID:  call.ActorID,
-				Limit:       args.Limit,
-			})
-			if err != nil {
-				return ToolOutput{Content: err.Error(), IsError: true}, nil
+			var hits []storage.SearchHit
+			if len(observerTypes) > 0 {
+				obsScopes := args.Scopes
+				if len(obsScopes) == 0 && call.RoomID != "" {
+					obsScopes = []string{"room:" + call.RoomID}
+				}
+				obsHits, err := search.Search(ctx, storage.SearchQuery{
+					Text:        args.Query,
+					Vector:      vec,
+					Mode:        mode,
+					EntityTypes: observerTypes,
+					Scopes:      obsScopes,
+					ObserverID:  call.ActorID,
+					Limit:       args.Limit,
+				})
+				if err != nil {
+					return ToolOutput{Content: err.Error(), IsError: true}, nil
+				}
+				hits = append(hits, obsHits...)
 			}
+			if includeKnowledge {
+				kLimit := args.Limit
+				if len(args.Scopes) == 0 && kLimit < 24 {
+					kLimit = max(args.Limit*3, 16)
+				}
+				kHits, err := search.Search(ctx, storage.SearchQuery{
+					Text:        args.Query,
+					Vector:      vec,
+					Mode:        mode,
+					EntityTypes: []string{"knowledge_chunk"},
+					Scopes:      args.Scopes,
+					Limit:       kLimit,
+				})
+				if err != nil {
+					return ToolOutput{Content: err.Error(), IsError: true}, nil
+				}
+				hits = append(hits, kHits...)
+			}
+
 			type viewHit struct {
 				ID         string  `json:"id"`
 				EntityType string  `json:"entity_type"`
@@ -210,7 +245,10 @@ func registerArchiveAndSkillTools(
 						continue
 					}
 					doc, err := rdb.Knowledge().GetDoc(ctx, ch.DocID)
-					if err != nil || doc.Status != domain.KnowledgeStatusActive {
+					if err != nil || doc.Status != domain.KnowledgeStatusActive || ch.DocRevision != doc.Revision {
+						continue
+					}
+					if !memory.KnowledgeScopeVisible(doc.Scope, call.RoomID, call.ActorID) {
 						continue
 					}
 					preview = fmt.Sprintf("[%s] %s", doc.Title, ch.Text)
@@ -221,6 +259,15 @@ func registerArchiveAndSkillTools(
 					Score:      h.Score,
 					Preview:    preview,
 				})
+			}
+			sort.Slice(results, func(i, j int) bool {
+				if results[i].Score == results[j].Score {
+					return results[i].ID < results[j].ID
+				}
+				return results[i].Score > results[j].Score
+			})
+			if len(results) > args.Limit {
+				results = results[:args.Limit]
 			}
 			out, _ := json.MarshalIndent(results, "", "  ")
 			return ToolOutput{Content: string(out)}, nil
@@ -278,8 +325,11 @@ func registerArchiveAndSkillTools(
 					return ToolOutput{Content: err.Error(), IsError: true}, nil
 				}
 				doc, err := rdb.Knowledge().GetDoc(ctx, ch.DocID)
-				if err != nil || doc.Status != domain.KnowledgeStatusActive {
+				if err != nil || doc.Status != domain.KnowledgeStatusActive || ch.DocRevision != doc.Revision {
 					return ToolOutput{Content: "knowledge doc inactive or not found", IsError: true}, nil
+				}
+				if !memory.KnowledgeScopeVisible(doc.Scope, call.RoomID, call.ActorID) {
+					return ToolOutput{Content: "knowledge doc not visible in current scope", IsError: true}, nil
 				}
 				out, _ := json.MarshalIndent(map[string]any{"doc": doc, "chunk": ch}, "", "  ")
 				return ToolOutput{Content: string(out)}, nil
