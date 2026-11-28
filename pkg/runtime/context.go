@@ -199,9 +199,14 @@ func BuildActorPrompt(
 				continue
 			}
 			ts := time.UnixMilli(item.OccurredAt).UTC().Format("2006-01-02 15:04")
-			if item.Kind == "speech" && item.AuthorName != "" {
+			switch {
+			case item.RoomTitle != "" && item.Kind == "speech" && item.AuthorName != "":
+				dynamicCtx.WriteString(fmt.Sprintf("- [%s | Room: %s | %s] %s\n", ts, item.RoomTitle, item.AuthorName, item.Text))
+			case item.RoomTitle != "":
+				dynamicCtx.WriteString(fmt.Sprintf("- [%s | Room: %s] %s\n", ts, item.RoomTitle, item.Text))
+			case item.Kind == "speech" && item.AuthorName != "":
 				dynamicCtx.WriteString(fmt.Sprintf("- [%s | %s] %s\n", ts, item.AuthorName, item.Text))
-			} else {
+			default:
 				dynamicCtx.WriteString(fmt.Sprintf("- [%s] %s\n", ts, item.Text))
 			}
 		}

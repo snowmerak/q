@@ -969,8 +969,12 @@ func (r *memoryRepo) ListMemories(ctx context.Context, roomID, ownerID, observer
 		limit = 100
 	}
 	query := `SELECT id, room_id, owner_id, source_turn_id, kind, content, observed_by_json, occurred_at, pinned, status, revision, embedding_model, embedding_dim, embedding_blob, created_at
-	          FROM memories WHERE room_id = ? AND status = 'active'`
-	args := []any{roomID}
+	          FROM memories WHERE status = 'active'`
+	var args []any
+	if roomID != "" {
+		query += ` AND room_id = ?`
+		args = append(args, roomID)
+	}
 	if ownerID != "" {
 		query += ` AND owner_id = ?`
 		args = append(args, ownerID)

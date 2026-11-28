@@ -53,13 +53,30 @@ type RecallQuery struct {
 
 type RecalledItem struct {
 	ID          string  `json:"id"`
-	Kind        string  `json:"kind"` // "memory" | "speech"
+	Kind        string  `json:"kind"` // "memory" | "speech" | "knowledge"
 	OwnerID     string  `json:"owner_id"`
+	RoomID      string  `json:"room_id,omitempty"`
+	RoomTitle   string  `json:"room_title,omitempty"`
 	AuthorName  string  `json:"author_name,omitempty"`
 	OccurredAt  int64   `json:"occurred_at"`
 	Text        string  `json:"text"`
 	Probability float64 `json:"probability,omitempty"`
 	Truncated   bool    `json:"truncated,omitempty"`
+}
+
+func resolveRoomTitle(ctx context.Context, rdb storage.RDBStore, cache map[string]string, roomID string) string {
+	if roomID == "" {
+		return ""
+	}
+	if title, ok := cache[roomID]; ok {
+		return title
+	}
+	title := "Another Room"
+	if rm, err := rdb.Rooms().Get(ctx, roomID); err == nil && strings.TrimSpace(rm.Title) != "" {
+		title = strings.TrimSpace(rm.Title)
+	}
+	cache[roomID] = title
+	return title
 }
 
 // KnowledgeScopeVisible reports whether a KnowledgeDoc with scope should be visible
@@ -118,12 +135,13 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 	}
 
 	// Step 3: SearchIndex queries with strict ObserverID filtering for memories/messages
-	// and scope visibility filtering for knowledge_chunk.
+	// (including cross-room memories/dialogue observed by ActorID) and scope visibility filtering for knowledge_chunk.
 	type candidate struct {
 		item  RecalledItem
 		score float64
 	}
 	merged := make(map[string]candidate)
+	roomTitles := make(map[string]string)
 
 	for _, q := range queries {
 		fromMS, hasFrom := parseOptionalISO(q.From)
@@ -155,7 +173,6 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 				Vector:      vec,
 				Mode:        mode,
 				EntityTypes: entityTypes,
-				Scopes:      []string{"room:" + input.RoomID},
 				ObserverID:  input.ActorID,
 				Limit:       maxRecallCandidates,
 			}); err == nil {
@@ -185,7 +202,7 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 				if err != nil {
 					continue
 				}
-				if mem.Status != domain.MemoryStatusActive || mem.RoomID != input.RoomID || mem.OwnerID != input.ActorID {
+				if mem.Status != domain.MemoryStatusActive || mem.OwnerID != input.ActorID {
 					continue
 				}
 				if !slices.Contains(mem.ObservedBy, input.ActorID) {
@@ -197,6 +214,10 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 				if (hasFrom && mem.OccurredAt < fromMS) || (hasTo && mem.OccurredAt >= toMS) {
 					continue
 				}
+				roomTitle := ""
+				if mem.RoomID != "" && mem.RoomID != input.RoomID {
+					roomTitle = resolveRoomTitle(ctx, rdb, roomTitles, mem.RoomID)
+				}
 				txt, truncated := TruncateRunes(mem.Content, maxRecallItemRunes)
 				prev, exists := merged[key]
 				if !exists || hit.Score > prev.score {
@@ -206,6 +227,8 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 							ID:         mem.ID,
 							Kind:       "memory",
 							OwnerID:    mem.OwnerID,
+							RoomID:     mem.RoomID,
+							RoomTitle:  roomTitle,
 							OccurredAt: mem.OccurredAt,
 							Text:       txt,
 							Truncated:  truncated,
@@ -223,7 +246,7 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 				if err != nil {
 					continue
 				}
-				if msg.RoomID != input.RoomID || msg.Role == domain.MessageRoleSystem || !msg.ObservedByActor(input.ActorID) {
+				if msg.Role == domain.MessageRoleSystem || !msg.ObservedByActor(input.ActorID) {
 					continue
 				}
 				if q.Speaker == "self" && msg.AuthorID != input.ActorID {
@@ -238,6 +261,10 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 				if (hasFrom && msg.CreatedAt < fromMS) || (hasTo && msg.CreatedAt >= toMS) {
 					continue
 				}
+				roomTitle := ""
+				if msg.RoomID != "" && msg.RoomID != input.RoomID {
+					roomTitle = resolveRoomTitle(ctx, rdb, roomTitles, msg.RoomID)
+				}
 				txt, truncated := TruncateRunes(msg.Content, maxRecallItemRunes)
 				prev, exists := merged[key]
 				if !exists || hit.Score > prev.score {
@@ -247,6 +274,8 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 							ID:         msg.ID,
 							Kind:       "speech",
 							OwnerID:    msg.AuthorID,
+							RoomID:     msg.RoomID,
+							RoomTitle:  roomTitle,
 							AuthorName: msg.AuthorName,
 							OccurredAt: msg.CreatedAt,
 							Text:       txt,
@@ -338,6 +367,9 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 				"occurred_at": time.UnixMilli(item.OccurredAt).UTC().Format(time.RFC3339),
 				"text":        item.Text,
 			}
+			if item.RoomTitle != "" {
+				evidenceCandidates[i]["room_title"] = item.RoomTitle
+			}
 		}
 		selResp, err := deps.Decisions.Evaluate(ctx, input.DecisionModel, sdk.Input{
 			State: map[string]any{
@@ -371,7 +403,7 @@ func Recall(ctx context.Context, rdb storage.RDBStore, search storage.SearchInde
 }
 
 func hasRecallableData(ctx context.Context, rdb storage.RDBStore, roomID, actorID string, excludeIDs map[string]struct{}) bool {
-	if mems, err := rdb.Memories().ListMemories(ctx, roomID, actorID, actorID, 1); err == nil && len(mems) > 0 {
+	if mems, err := rdb.Memories().ListMemories(ctx, "", actorID, actorID, 1); err == nil && len(mems) > 0 {
 		return true
 	}
 	if docs, err := rdb.Knowledge().ListDocs(ctx, ""); err == nil {
@@ -381,16 +413,45 @@ func hasRecallableData(ctx context.Context, rdb storage.RDBStore, roomID, actorI
 			}
 		}
 	}
-	msgs, err := rdb.Messages().List(ctx, roomID, 0, len(excludeIDs)+12)
-	if err != nil {
-		return false
-	}
-	for _, msg := range msgs {
-		if msg.Role == domain.MessageRoleSystem || !msg.ObservedByActor(actorID) {
-			continue
+	if msgs, err := rdb.Messages().List(ctx, roomID, 0, len(excludeIDs)+12); err == nil {
+		for _, msg := range msgs {
+			if msg.Role == domain.MessageRoleSystem || !msg.ObservedByActor(actorID) {
+				continue
+			}
+			if _, excluded := excludeIDs[msg.ID]; !excluded {
+				return true
+			}
 		}
-		if _, excluded := excludeIDs[msg.ID]; !excluded {
-			return true
+	}
+	if rooms, err := rdb.Rooms().List(ctx); err == nil {
+		for _, rm := range rooms {
+			if rm.ID == roomID {
+				continue
+			}
+			members, mErr := rdb.Rooms().ListMembers(ctx, rm.ID)
+			if mErr != nil {
+				continue
+			}
+			participates := false
+			for _, m := range members {
+				if m.CharacterID == actorID {
+					participates = true
+					break
+				}
+			}
+			if !participates {
+				continue
+			}
+			msgs, msgErr := rdb.Messages().List(ctx, rm.ID, 0, 20)
+			if msgErr != nil {
+				continue
+			}
+			for _, msg := range msgs {
+				if msg.Role == domain.MessageRoleSystem || !msg.ObservedByActor(actorID) {
+					continue
+				}
+				return true
+			}
 		}
 	}
 	return false

@@ -106,6 +106,7 @@ type ToolInvocationRepo interface {
 type MemoryRepo interface {
 	CreateMemory(ctx context.Context, m domain.Memory) error
 	GetMemory(ctx context.Context, id string) (domain.Memory, error)
+	// ListMemories lists active memories, optionally filtered by roomID (empty lists across all rooms), ownerID, and observerID.
 	ListMemories(ctx context.Context, roomID, ownerID, observerID string, limit int) ([]domain.Memory, error)
 	UpdateMemory(ctx context.Context, m domain.Memory) error
 

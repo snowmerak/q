@@ -1037,15 +1037,18 @@ func (r memoryRepo) GetMemory(ctx context.Context, id string) (domain.Memory, er
 }
 
 func (r memoryRepo) ListMemories(ctx context.Context, roomID, ownerID, observerID string, limit int) ([]domain.Memory, error) {
-	var rows *sql.Rows
-	var err error
-	if ownerID != "" {
-		q := r.d.Rebind(`SELECT id, room_id, owner_id, source_turn_id, kind, content, observed_by_json, occurred_at, pinned, status, revision, embedding_model, embedding_dim, embedding_blob, created_at FROM memories WHERE room_id = ? AND owner_id = ? AND status = 'active' ORDER BY occurred_at DESC, created_at DESC`)
-		rows, err = r.q.QueryContext(ctx, q, roomID, ownerID)
-	} else {
-		q := r.d.Rebind(`SELECT id, room_id, owner_id, source_turn_id, kind, content, observed_by_json, occurred_at, pinned, status, revision, embedding_model, embedding_dim, embedding_blob, created_at FROM memories WHERE room_id = ? AND status = 'active' ORDER BY occurred_at DESC, created_at DESC`)
-		rows, err = r.q.QueryContext(ctx, q, roomID)
+	query := `SELECT id, room_id, owner_id, source_turn_id, kind, content, observed_by_json, occurred_at, pinned, status, revision, embedding_model, embedding_dim, embedding_blob, created_at FROM memories WHERE status = 'active'`
+	var args []any
+	if roomID != "" {
+		query += ` AND room_id = ?`
+		args = append(args, roomID)
 	}
+	if ownerID != "" {
+		query += ` AND owner_id = ?`
+		args = append(args, ownerID)
+	}
+	query += ` ORDER BY occurred_at DESC, created_at DESC`
+	rows, err := r.q.QueryContext(ctx, r.d.Rebind(query), args...)
 	if err != nil {
 		return nil, r.mapErr(err)
 	}

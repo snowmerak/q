@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -576,5 +577,88 @@ func TestRoomWorkDirDefaultsAndSystemWideAccess(t *testing.T) {
 	out, _ = reg.Execute(t.Context(), call, "write_file", `{"path":`+jsonQuote(extFile)+`,"content":"anywhere ok"}`)
 	if out.IsError {
 		t.Fatalf("expected system-wide write_file outside roomDir to succeed: %+v", out)
+	}
+}
+
+func TestCrossRoomArchiveSearchAndIsolation(t *testing.T) {
+	dir := t.TempDir()
+	rdb, err := sqlite.Open(t.Context(), filepath.Join(dir, "q.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdb.Close()
+	idx, err := blevehnsw.Open(filepath.Join(dir, "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	ctx := t.Context()
+	persona, _ := rdb.Personas().Create(ctx, domain.Persona{Name: "Player"})
+	charA, _ := rdb.Characters().Create(ctx, domain.Character{Name: "Seoyeon"})
+	charB, _ := rdb.Characters().Create(ctx, domain.Character{Name: "Doyun"})
+
+	room1, _ := rdb.Rooms().Create(ctx, domain.Room{
+		Title: "Seoul Espresso", Mode: domain.RoomModeGroup, PersonaID: persona.ID,
+	}, []domain.RoomMember{
+		{CharacterID: charA.ID, CharacterSnapshot: charA, Active: true},
+		{CharacterID: charB.ID, CharacterSnapshot: charB, Active: true},
+	})
+	room2, _ := rdb.Rooms().Create(ctx, domain.Room{
+		Title: "Project Room", Mode: domain.RoomModeDirect, PersonaID: persona.ID,
+	}, []domain.RoomMember{
+		{CharacterID: charA.ID, CharacterSnapshot: charA, Active: true},
+	})
+
+	turn1, _, _ := rdb.Turns().CreateOrGetIdempotent(ctx, domain.Turn{
+		RoomID: room1.ID, RequestID: "r1", InputHash: "h1", Status: domain.TurnStatusCompleted,
+	})
+	_ = rdb.Memories().CreateMemory(ctx, domain.Memory{
+		ID: "m-r1-vis", RoomID: room1.ID, OwnerID: charA.ID, SourceTurnID: turn1.ID,
+		Kind: domain.MemoryKindEpisodic, Content: "espresso machine pin is 7712",
+		ObservedBy: []string{charA.ID}, OccurredAt: 1000, Status: domain.MemoryStatusActive, Revision: 1,
+	})
+	_ = idx.Upsert(ctx, storage.SearchDocument{
+		ID: "m-r1-vis", EntityType: "memory", Scope: "room:" + room1.ID, OwnerID: charA.ID,
+		ObservedBy: []string{charA.ID}, Text: "espresso machine pin is 7712", OccurredAt: 1000, Revision: 1,
+	})
+	_ = rdb.Memories().CreateMemory(ctx, domain.Memory{
+		ID: "m-r1-hid", RoomID: room1.ID, OwnerID: charB.ID, SourceTurnID: turn1.ID,
+		Kind: domain.MemoryKindEpisodic, Content: "espresso machine admin pin is 9988",
+		ObservedBy: []string{charB.ID}, OccurredAt: 1000, Status: domain.MemoryStatusActive, Revision: 1,
+	})
+	_ = idx.Upsert(ctx, storage.SearchDocument{
+		ID: "m-r1-hid", EntityType: "memory", Scope: "room:" + room1.ID, OwnerID: charB.ID,
+		ObservedBy: []string{charB.ID}, Text: "espresso machine admin pin is 9988", OccurredAt: 1000, Revision: 1,
+	})
+
+	msgVis, _ := rdb.Messages().Append(ctx, domain.Message{
+		RoomID: room1.ID, TurnID: turn1.ID, Role: domain.MessageRoleUser, AuthorID: persona.ID, AuthorName: "Player",
+		Content: "Check the espresso machine gasket tomorrow.", ObservedBy: []string{persona.ID, charA.ID}, CreatedAt: 1100,
+	})
+	_ = idx.Upsert(ctx, storage.SearchDocument{
+		ID: msgVis.ID, EntityType: "message", Scope: "room:" + room1.ID, OwnerID: persona.ID,
+		ObservedBy: []string{persona.ID, charA.ID}, Text: msgVis.Content, OccurredAt: 1100, Revision: 1,
+	})
+
+	reg := task.NewRegistry(task.RegistryDeps{RDB: rdb, Search: idx})
+	callFromRoom2 := task.CallContext{RoomID: room2.ID, TurnID: "t2", ActorID: charA.ID, ActorName: charA.Name}
+
+	out, _ := reg.Execute(ctx, callFromRoom2, "search_archive", `{"query":"espresso machine"}`)
+	if out.IsError || !strings.Contains(out.Content, "m-r1-vis") || !strings.Contains(out.Content, msgVis.ID) || !strings.Contains(out.Content, "[Room: Seoul Espresso") || strings.Contains(out.Content, "m-r1-hid") {
+		t.Fatalf("unexpected cross-room search_archive result: %+v", out)
+	}
+
+	recVis, _ := reg.Execute(ctx, callFromRoom2, "get_archive_record", `{"entity_type":"memory","id":"m-r1-vis"}`)
+	if recVis.IsError || !strings.Contains(recVis.Content, "7712") {
+		t.Fatalf("expected cross-room get_archive_record to succeed for observed memory, got %+v", recVis)
+	}
+	recMsg, _ := reg.Execute(ctx, callFromRoom2, "get_archive_record", fmt.Sprintf(`{"entity_type":"message","id":%q}`, msgVis.ID))
+	if recMsg.IsError || !strings.Contains(recMsg.Content, "gasket") {
+		t.Fatalf("expected cross-room get_archive_record to succeed for observed message, got %+v", recMsg)
+	}
+	recHid, _ := reg.Execute(ctx, callFromRoom2, "get_archive_record", `{"entity_type":"memory","id":"m-r1-hid"}`)
+	if !recHid.IsError {
+		t.Fatalf("expected unobserved cross-room record blocked, got %+v", recHid)
 	}
 }

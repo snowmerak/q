@@ -16,6 +16,7 @@ import (
 	"github.com/snowmerak/q/v2/pkg/app/config"
 	"github.com/snowmerak/q/v2/pkg/domain"
 	"github.com/snowmerak/q/v2/pkg/llm/gateway"
+	"github.com/snowmerak/q/v2/pkg/memory"
 	"github.com/snowmerak/q/v2/pkg/runtime"
 	"github.com/snowmerak/q/v2/pkg/storage"
 	"github.com/snowmerak/q/v2/pkg/storage/rdb/sqlite"
@@ -520,5 +521,54 @@ func TestThinkingStreamingPersistenceAndCompactionEvent(t *testing.T) {
 	}
 	if meta["thinking"] != "checking notes; silent step" {
 		t.Fatalf("expected metadata thinking persisted, got %#v", meta)
+	}
+}
+
+func TestBuildActorPromptFormatsCrossRoomRecalledItems(t *testing.T) {
+	room := domain.Room{
+		ID:              "r2",
+		Title:           "Studio",
+		PersonaID:       "p1",
+		PersonaSnapshot: domain.Persona{ID: "p1", Name: "Player"},
+	}
+	member := domain.RoomMember{
+		RoomID:            "r2",
+		CharacterID:       "c1",
+		CharacterSnapshot: domain.Character{ID: "c1", Name: "Hana"},
+		Active:            true,
+	}
+	recalled := []memory.RecalledItem{
+		{
+			ID:         "m1",
+			Kind:       "memory",
+			RoomID:     "r1",
+			RoomTitle:  "Harbor Cafe",
+			OccurredAt: 1700000000000,
+			Text:       "Remembered harbor note",
+		},
+		{
+			ID:         "msg1",
+			Kind:       "speech",
+			RoomID:     "r1",
+			RoomTitle:  "Harbor Cafe",
+			AuthorName: "Player",
+			OccurredAt: 1700000060000,
+			Text:       "Check the espresso machine",
+		},
+	}
+
+	prompt, err := runtime.BuildActorPrompt(room, member, recalled, nil, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompt.Messages) < 2 {
+		t.Fatalf("expected system messages, got %+v", prompt.Messages)
+	}
+	dyn := prompt.Messages[1].Content
+	if !strings.Contains(dyn, "Room: Harbor Cafe] Remembered harbor note") {
+		t.Fatalf("missing cross-room memory label in dynamic context: %s", dyn)
+	}
+	if !strings.Contains(dyn, "Room: Harbor Cafe | Player] Check the espresso machine") {
+		t.Fatalf("missing cross-room speech label in dynamic context: %s", dyn)
 	}
 }

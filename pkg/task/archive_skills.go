@@ -114,6 +114,21 @@ func parseSkillFrontmatter(raw, fallbackName string) (name, desc string) {
 	return name, desc
 }
 
+func resolveArchiveRoomTitle(ctx context.Context, rdb storage.RDBStore, cache map[string]string, roomID string) string {
+	if roomID == "" {
+		return ""
+	}
+	if title, ok := cache[roomID]; ok {
+		return title
+	}
+	title := "Another Room"
+	if rm, err := rdb.Rooms().Get(ctx, roomID); err == nil && strings.TrimSpace(rm.Title) != "" {
+		title = strings.TrimSpace(rm.Title)
+	}
+	cache[roomID] = title
+	return title
+}
+
 func registerArchiveAndSkillTools(
 	r *Registry,
 	rdb storage.RDBStore,
@@ -123,7 +138,7 @@ func registerArchiveAndSkillTools(
 ) {
 	r.register(ToolSpec{
 		Name:        "search_archive",
-		Description: "Search past room dialogue/memories (strictly observer-isolated) and indexed knowledge documents.",
+		Description: "Search past dialogue/memories across rooms this character observed (strictly observer-isolated) and indexed knowledge documents.",
 		Source:      domain.ToolSourceBuiltin,
 		Risk:        RiskRead,
 		Parameters: map[string]any{
@@ -180,16 +195,12 @@ func registerArchiveAndSkillTools(
 
 			var hits []storage.SearchHit
 			if len(observerTypes) > 0 {
-				obsScopes := args.Scopes
-				if len(obsScopes) == 0 && call.RoomID != "" {
-					obsScopes = []string{"room:" + call.RoomID}
-				}
 				obsHits, err := search.Search(ctx, storage.SearchQuery{
 					Text:        args.Query,
 					Vector:      vec,
 					Mode:        mode,
 					EntityTypes: observerTypes,
-					Scopes:      obsScopes,
+					Scopes:      args.Scopes,
 					ObserverID:  call.ActorID,
 					Limit:       args.Limit,
 				})
@@ -220,25 +231,40 @@ func registerArchiveAndSkillTools(
 			type viewHit struct {
 				ID         string  `json:"id"`
 				EntityType string  `json:"entity_type"`
+				RoomID     string  `json:"room_id,omitempty"`
+				RoomTitle  string  `json:"room_title,omitempty"`
 				Score      float64 `json:"score"`
 				Preview    string  `json:"preview"`
 			}
+			roomTitles := make(map[string]string)
 			results := make([]viewHit, 0, len(hits))
 			for _, h := range hits {
-				var preview string
+				var preview, roomID, roomTitle string
 				switch h.EntityType {
 				case "memory":
 					m, err := rdb.Memories().GetMemory(ctx, h.ID)
-					if err != nil || m.RoomID != call.RoomID || m.Status != domain.MemoryStatusActive || !slices.Contains(m.ObservedBy, call.ActorID) {
+					if err != nil || m.Status != domain.MemoryStatusActive || (m.OwnerID != "" && m.OwnerID != call.ActorID) || !slices.Contains(m.ObservedBy, call.ActorID) {
 						continue
 					}
-					preview = m.Content
+					roomID = m.RoomID
+					if m.RoomID != "" && m.RoomID != call.RoomID {
+						roomTitle = resolveArchiveRoomTitle(ctx, rdb, roomTitles, m.RoomID)
+						preview = fmt.Sprintf("[Room: %s] %s", roomTitle, m.Content)
+					} else {
+						preview = m.Content
+					}
 				case "message":
 					m, err := rdb.Messages().Get(ctx, h.ID)
-					if err != nil || m.RoomID != call.RoomID || !m.ObservedByActor(call.ActorID) {
+					if err != nil || m.Role == domain.MessageRoleSystem || !m.ObservedByActor(call.ActorID) {
 						continue
 					}
-					preview = fmt.Sprintf("[%s] %s", m.AuthorName, m.Content)
+					roomID = m.RoomID
+					if m.RoomID != "" && m.RoomID != call.RoomID {
+						roomTitle = resolveArchiveRoomTitle(ctx, rdb, roomTitles, m.RoomID)
+						preview = fmt.Sprintf("[Room: %s | %s] %s", roomTitle, m.AuthorName, m.Content)
+					} else {
+						preview = fmt.Sprintf("[%s] %s", m.AuthorName, m.Content)
+					}
 				case "knowledge_chunk":
 					ch, err := rdb.Knowledge().GetChunk(ctx, h.ID)
 					if err != nil {
@@ -256,6 +282,8 @@ func registerArchiveAndSkillTools(
 				results = append(results, viewHit{
 					ID:         h.ID,
 					EntityType: h.EntityType,
+					RoomID:     roomID,
+					RoomTitle:  roomTitle,
 					Score:      h.Score,
 					Preview:    preview,
 				})
@@ -304,7 +332,7 @@ func registerArchiveAndSkillTools(
 				if err != nil {
 					return ToolOutput{Content: err.Error(), IsError: true}, nil
 				}
-				if m.RoomID != call.RoomID || !slices.Contains(m.ObservedBy, call.ActorID) {
+				if m.Status != domain.MemoryStatusActive || (m.OwnerID != "" && m.OwnerID != call.ActorID) || !slices.Contains(m.ObservedBy, call.ActorID) {
 					return ToolOutput{Content: "record not visible to actor", IsError: true}, nil
 				}
 				out, _ := json.MarshalIndent(m, "", "  ")
@@ -314,7 +342,7 @@ func registerArchiveAndSkillTools(
 				if err != nil {
 					return ToolOutput{Content: err.Error(), IsError: true}, nil
 				}
-				if m.RoomID != call.RoomID || !m.ObservedByActor(call.ActorID) {
+				if m.Role == domain.MessageRoleSystem || !m.ObservedByActor(call.ActorID) {
 					return ToolOutput{Content: "record not visible to actor", IsError: true}, nil
 				}
 				out, _ := json.MarshalIndent(m, "", "  ")

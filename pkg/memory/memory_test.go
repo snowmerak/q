@@ -466,3 +466,117 @@ func TestRecallIncludesScopedKnowledgeAndIsolatesPrivateScopes(t *testing.T) {
 		}
 	}
 }
+
+func TestRecallCrossRoomMemoriesAndSpeechWithObserverIsolation(t *testing.T) {
+	rdb, idx := openTestStores(t)
+	ctx := t.Context()
+
+	persona, _ := rdb.Personas().Create(ctx, domain.Persona{Name: "Player"})
+	charA, _ := rdb.Characters().Create(ctx, domain.Character{Name: "Hana"})
+	charB, _ := rdb.Characters().Create(ctx, domain.Character{Name: "Doyun"})
+
+	room1, _ := rdb.Rooms().Create(ctx, domain.Room{
+		Title: "Harbor Cafe", Mode: domain.RoomModeGroup, PersonaID: persona.ID,
+	}, []domain.RoomMember{
+		{CharacterID: charA.ID, CharacterSnapshot: charA, Active: true},
+		{CharacterID: charB.ID, CharacterSnapshot: charB, Active: true},
+	})
+	room2, _ := rdb.Rooms().Create(ctx, domain.Room{
+		Title: "Studio Desk", Mode: domain.RoomModeDirect, PersonaID: persona.ID,
+	}, []domain.RoomMember{
+		{CharacterID: charA.ID, CharacterSnapshot: charA, Active: true},
+	})
+
+	turn1, _, err := rdb.Turns().CreateOrGetIdempotent(ctx, domain.Turn{
+		RoomID: room1.ID, RequestID: "r1-t1", InputHash: "h1", Status: domain.TurnStatusCompleted,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Visible memory & dialogue observed by charA in room1
+	if err := rdb.Memories().CreateMemory(ctx, domain.Memory{
+		ID: "mem-cross-vis", RoomID: room1.ID, OwnerID: charA.ID, SourceTurnID: turn1.ID,
+		Kind: domain.MemoryKindEpisodic, Content: "Harbor lighthouse key is taped under the espresso drawer.",
+		ObservedBy: []string{charA.ID}, OccurredAt: 1000, Status: domain.MemoryStatusActive, Revision: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(ctx, storage.SearchDocument{
+		ID: "mem-cross-vis", EntityType: "memory", Scope: "room:" + room1.ID, OwnerID: charA.ID,
+		ObservedBy: []string{charA.ID}, Text: "Harbor lighthouse key is taped under the espresso drawer.", OccurredAt: 1000, Revision: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	msgVis, err := rdb.Messages().Append(ctx, domain.Message{
+		RoomID: room1.ID, TurnID: turn1.ID, Role: domain.MessageRoleUser, AuthorID: persona.ID, AuthorName: "Player",
+		Content: "Don't forget the harbor lighthouse key code is 4419.", ObservedBy: []string{persona.ID, charA.ID}, CreatedAt: 1200,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(ctx, storage.SearchDocument{
+		ID: msgVis.ID, EntityType: "message", Scope: "room:" + room1.ID, OwnerID: persona.ID,
+		ObservedBy: []string{persona.ID, charA.ID}, Text: msgVis.Content, OccurredAt: 1200, Revision: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Private memory & message in room1 only observed by charB (must never leak to charA in room2)
+	if err := rdb.Memories().CreateMemory(ctx, domain.Memory{
+		ID: "mem-cross-priv", RoomID: room1.ID, OwnerID: charB.ID, SourceTurnID: turn1.ID,
+		Kind: domain.MemoryKindEpisodic, Content: "Secret harbor lighthouse vault bypass is 9999.",
+		ObservedBy: []string{charB.ID}, OccurredAt: 1100, Status: domain.MemoryStatusActive, Revision: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(ctx, storage.SearchDocument{
+		ID: "mem-cross-priv", EntityType: "memory", Scope: "room:" + room1.ID, OwnerID: charB.ID,
+		ObservedBy: []string{charB.ID}, Text: "Secret harbor lighthouse vault bypass is 9999.", OccurredAt: 1100, Revision: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	msgPriv, err := rdb.Messages().Append(ctx, domain.Message{
+		RoomID: room1.ID, TurnID: turn1.ID, Role: domain.MessageRoleCharacter, AuthorID: charB.ID, AuthorName: "Doyun",
+		Content: "Whispered harbor lighthouse vault secret 9999.", ObservedBy: []string{charB.ID}, CreatedAt: 1300,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Upsert(ctx, storage.SearchDocument{
+		ID: msgPriv.ID, EntityType: "message", Scope: "room:" + room1.ID, OwnerID: charB.ID,
+		ObservedBy: []string{charB.ID}, Text: msgPriv.Content, OccurredAt: 1300, Revision: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := memory.Recall(ctx, rdb, idx, memory.Deps{}, memory.RecallInput{
+		RoomID:      room2.ID,
+		ActorID:     charA.ID,
+		ActorName:   charA.Name,
+		CurrentText: "What was the harbor lighthouse key code?",
+		OwnBudget:   4000,
+		NowMS:       5000,
+	})
+	if err != nil {
+		t.Fatalf("Recall in room2: %v", err)
+	}
+
+	got := make(map[string]memory.RecalledItem, len(items))
+	for _, it := range items {
+		got[it.ID] = it
+	}
+	if it, ok := got["mem-cross-vis"]; !ok || it.RoomID != room1.ID || it.RoomTitle != "Harbor Cafe" {
+		t.Fatalf("expected cross-room memory mem-cross-vis with RoomTitle 'Harbor Cafe', got %+v", items)
+	}
+	if it, ok := got[msgVis.ID]; !ok || it.RoomID != room1.ID || it.RoomTitle != "Harbor Cafe" {
+		t.Fatalf("expected cross-room observed speech %s with RoomTitle 'Harbor Cafe', got %+v", msgVis.ID, items)
+	}
+	if _, leaked := got["mem-cross-priv"]; leaked {
+		t.Fatalf("unobserved memory leaked across rooms: %+v", items)
+	}
+	if _, leaked := got[msgPriv.ID]; leaked {
+		t.Fatalf("unobserved message leaked across rooms: %+v", items)
+	}
+}
