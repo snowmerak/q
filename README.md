@@ -22,4 +22,10 @@
 ## 문서
 
 - [제품 요구사항 정의서 (PRD)](./docs/prd.md) — 제품 목표, 확정 1차 범위(In-Scope / Out-of-Scope), `REQ-*` 요구사항 및 수용 기준
-- [프로젝트 청사진 (Blueprint)](./docs/blueprint.md) — 자산 재사용 맵, 공유 코어 및 단일 인스턴스 토폴로지, `pkg/` 공개 패키지 경계, 조합 가능한 저장소 구조, 실행 흐름, 확정 프로젝트 구성, 마일스톤 및 후속 ADR 목록
+- [프로젝트 청사진 (Blueprint)](./docs/blueprint.md) — 자산 재사용 맵, 공유 코어 및 단일 인스턴스 토폴로지, `pkg/` 공개 패키지 경계, 조합 가능한 저장소 구조, 실행 흐름, 확정 프로젝트 구성, 마일스톤 및 ADR 목록
+- [아키텍처 결정 기록 (ADR)](./docs/adr/README.md) — 저장소 권위(`0001`), 채팅 버블 룸(`0002`), 7대 도구/승인 게이트(`0003`), 모듈 경계(`0004`)
+- **구현 계약 스펙 (`docs/specs/`):**
+  - [설정(`config.json`) · RDB 스키마 · `pkg/storage` 계약](./docs/specs/config-and-storage.md)
+  - [HTTP API · SSE 이벤트 · 웹 UI 계약](./docs/specs/api-and-events.md)
+  - [런타임 상태 머신 · Decisions · 7대 도구 · 원본 매핑](./docs/specs/runtime-and-tools.md)
+  - [Codex 마일스톤 실행 가이드 및 완료 기준 (DoD)](./docs/specs/milestones.md)

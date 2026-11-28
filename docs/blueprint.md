@@ -2,7 +2,7 @@
 
 - **작성일:** 2026-11-28
 - **상태:** 1차 범위 확정 / 구현 전 설계 기준선 (확정 결정과 세부 구현 제안을 구분하여 표기)
-- **관련 문서:** [제품 요구사항 정의서 (PRD)](./prd.md)
+- **관련 문서:** [제품 요구사항 정의서 (PRD)](./prd.md) · [아키텍처 결정 기록 (ADR)](./adr/README.md) · [구현 스펙 (`docs/specs/`)](./specs/milestones.md)
 - **대상 독자:** q v2 백엔드, 저장소, 프런트엔드, 데스크톱 앱 설계 및 구현자
 - **갱신 조건:** 시스템 경계, 저장소 권위 및 복구 모델, 주요 실행 흐름, 모듈 구성, 마일스톤 방향이 바뀔 때 갱신한다.
 
@@ -271,7 +271,8 @@ q/                              # Go module: github.com/snowmerak/q/v2
 └── docs/
     ├── prd.md                  # 제품 요구사항 정의서
     ├── blueprint.md            # 본 프로젝트 청사진
-    └── adr/                    # 아키텍처 결정 기록 (README.md, 0001~0004)
+    ├── adr/                    # 아키텍처 결정 기록 (README.md, 0001~0004)
+    └── specs/                  # 구현 계약 스펙 (config-and-storage, api-and-events, runtime-and-tools, milestones)
 ```
 
 > [!NOTE]
@@ -303,9 +304,16 @@ q/                              # Go module: github.com/snowmerak/q/v2
 | **RDB 3종(`SQLite`/`PostgreSQL`/`MySQL`) 동시 지원 비용** | SQL 방언, JSON 연산, 마이그레이션 차이로 유지보수 비용 증가 | 단일 인스턴스 전제로 분산 락 SQL을 제거하고, 공통 저장소 계약 테스트(Contract Test Suite)와 단순한 쿼리 계층 유지 |
 | **멀티캐릭터 룸 및 서브에이전트 위임 비용·경합** | 캐릭터 수와 위임 도구가 늘어날수록 모델 호출이 증가하고 사용자 끼어들기 시 상태 오염 위험 | 룸당 활성 참여자·위임 깊이 상한, 경량 판단 모델 분리, 인프로세스 락 + 체크포인트 + `InterceptHub` 원자적 중단 |
 
-### 8.3 아키텍처 결정 기록 ([`docs/adr/`](./adr/README.md))
+### 8.3 아키텍처 결정 기록 ([`docs/adr/`](./adr/README.md)) 및 구현 스펙 (`docs/specs/`)
 
+**ADR:**
 1. **[`ADR-0001`](./adr/0001-storage-authority-and-hybrid-search.md):** RDB 단일 권위 + `Bleve + HNSW` / `OpenSearch` 파생 프로젝션 및 Outbox 재색인 계약 *(확정 · 세부 스키마 제안)*
 2. **[`ADR-0002`](./adr/0002-chat-bubble-room-and-decisions-protocol.md):** 채팅 버블 기반 멀티캐릭터 룸 + Decisions 조율 및 `observedBy` 격리 프로토콜 *(확정 · 세부 파라미터 제안)*
 3. **[`ADR-0003`](./adr/0003-tools-approval-gate-and-browser-control.md):** 1차 내장 도구 7개 영역, 3단계 승인 게이트 및 `browser_control` 계약 *(확정 · 세부 가드 제안)*
 4. **[`ADR-0004`](./adr/0004-module-layout-and-independent-distribution.md):** 공개 `pkg/` 계층, 공유 코어 및 `llm`/`cdp` 독립 배포 모듈 경계 *(확정 — 단일 루트 `go.mod` + `desktop/go.mod` 분리)*
+
+**구현 계약 스펙:**
+- [설정(`config.json`) · RDB 스키마 · `pkg/storage` 계약](./specs/config-and-storage.md)
+- [HTTP API · SSE 이벤트 · 웹 UI 계약](./specs/api-and-events.md)
+- [런타임 상태 머신 · Decisions · 7대 도구 · 원본 매핑](./specs/runtime-and-tools.md)
+- [Codex 마일스톤 실행 가이드 및 완료 기준 (DoD)](./specs/milestones.md)
