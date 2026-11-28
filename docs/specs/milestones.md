@@ -13,7 +13,7 @@
 | **M2-B** | **완료** | React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui(테마 전환), `web/dist` `//go:embed`, `Taskfile.yml` 통합 |
 | **M3** | **완료** | 7대 내장 도구, 3단계 `ApprovalGate`(`bypass`/`auto-detection`/`request`), Loom(goja `loom_eval`), `pkg/knowledge`, 도구/지식/스킬 UI 구현 및 검증 |
 | **M4** | **완료** | 멀티캐릭터 `group` 런타임·그룹 UI, `sqlcommon`/`postgres`/`mysql`/`opensearch`/`s3` 어댑터 및 Docker 기반 6종 조합 매트릭스(`TestStorageSixWayMatrix`)·실DB 계약 테스트 통과 |
-| **M5** | **완료** | `desktop/go.mod`(Wails `v3.1.0`), `App.StartAsync`, 트레이/숨김/로그인 자동 시작(`--register-autostart`, 트레이 체크박스), `desktop/packaging/` 매니페스트 및 `Taskfile.yml` 타깃 구성(Windows 환경 빌드·단위 테스트 통과; OS별 최종 인스톨러 파일 생성은 각 OS 패키징 도구 체인에서 실행) |
+| **M5** | **완료** | `desktop/go.mod`(Wails `v3.1.0`), `App.StartAsync`, 트레이/숨김/로그인 자동 시작(`--register-autostart`, 트레이 체크박스), Windows `.syso`·`.ico`/`.icns` 리소스 및 `desktop/packaging/` 매니페스트, `Taskfile.yml` 4종 바이너리 빌드(`task build:all`) 통과(최종 설치 패키지 생성은 각 OS 패키징 도구 체인에서 실행) |
 
 > [!IMPORTANT]
 > **Codex 작업 공통 규칙**

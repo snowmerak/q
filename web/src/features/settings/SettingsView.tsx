@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Database, RefreshCw, Save } from "lucide-react";
+import { Database, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import type { QClient } from "@/client/api";
 import { QAPIError } from "@/client/api";
 import type {
@@ -7,6 +7,7 @@ import type {
   ConfigView,
   DecisionModelInfo,
   HealthStatus,
+  MCPServerConfig,
   ModelInfo,
 } from "@/client/types";
 import { Badge } from "@/components/ui/badge";
@@ -225,6 +226,29 @@ export function SettingsView({ client }: { client: QClient }) {
                       <option key={m.id} value={m.id} />
                     ))}
                   </datalist>
+                  <datalist id="settings-decision-models">
+                    {decisionModels.map((dm) => (
+                      <option key={dm.id} value={dm.id} />
+                    ))}
+                  </datalist>
+
+                  <div className="grid gap-4 md:grid-cols-2 pt-2 border-t border-border">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="decisions-default-model">Decisions Default Model</Label>
+                      <Input
+                        id="decisions-default-model"
+                        list="settings-decision-models"
+                        placeholder="e.g. openai/gpt-decisions"
+                        value={cfg.decisions.default_model_id ?? ""}
+                        onChange={(e) =>
+                          setCfg({
+                            ...cfg,
+                            decisions: { ...cfg.decisions, default_model_id: e.target.value },
+                          })
+                        }
+                      />
+                    </div>
+                  </div>
 
                   <div className="grid gap-4 md:grid-cols-3 pt-2 border-t border-border">
                     <div className="space-y-1.5">
@@ -284,6 +308,146 @@ export function SettingsView({ client }: { client: QClient }) {
                       />
                       <Label htmlFor="browser-enabled">Browser Control Enabled</Label>
                     </div>
+                  </div>
+
+                  <div className="space-y-3 pt-2 border-t border-border">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium">MCP Servers</div>
+                        <p className="text-xs text-muted-foreground">
+                          Configure external Model Context Protocol stdio or HTTP tool servers.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const existing = cfg.tools.mcp_servers ?? [];
+                          const next: MCPServerConfig = {
+                            id: `mcp-${existing.length + 1}`,
+                            transport: "stdio",
+                            enabled: true,
+                            command: "",
+                          };
+                          setCfg({
+                            ...cfg,
+                            tools: { ...cfg.tools, mcp_servers: [...existing, next] },
+                          });
+                        }}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        Add Server
+                      </Button>
+                    </div>
+                    {(cfg.tools.mcp_servers ?? []).length === 0 ? (
+                      <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+                        No MCP servers configured.
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {(cfg.tools.mcp_servers ?? []).map((srv, idx) => {
+                          const updateSrv = (patch: Partial<MCPServerConfig>) => {
+                            const nextList = [...(cfg.tools.mcp_servers ?? [])];
+                            nextList[idx] = { ...srv, ...patch };
+                            setCfg({ ...cfg, tools: { ...cfg.tools, mcp_servers: nextList } });
+                          };
+                          return (
+                            <div
+                              key={`${srv.id}-${idx}`}
+                              className="rounded-md border border-border p-3 space-y-2.5 bg-background/50"
+                            >
+                              <div className="grid gap-2 md:grid-cols-4 items-end">
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Server ID</Label>
+                                  <Input
+                                    value={srv.id}
+                                    onChange={(e) => updateSrv({ id: e.target.value })}
+                                    placeholder="filesystem"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Transport</Label>
+                                  <select
+                                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                                    value={srv.transport}
+                                    onChange={(e) =>
+                                      updateSrv({
+                                        transport: e.target.value as "stdio" | "http",
+                                      })
+                                    }
+                                  >
+                                    <option value="stdio">stdio</option>
+                                    <option value="http">http</option>
+                                  </select>
+                                </div>
+                                <div className="flex items-center gap-2 pb-2">
+                                  <Switch
+                                    checked={srv.enabled}
+                                    onCheckedChange={(checked) => updateSrv({ enabled: checked })}
+                                  />
+                                  <span className="text-xs">Enabled</span>
+                                </div>
+                                <div className="flex justify-end pb-1">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      const nextList = (cfg.tools.mcp_servers ?? []).filter(
+                                        (_, i) => i !== idx,
+                                      );
+                                      setCfg({
+                                        ...cfg,
+                                        tools: { ...cfg.tools, mcp_servers: nextList },
+                                      });
+                                    }}
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                                  </Button>
+                                </div>
+                              </div>
+                              {srv.transport === "http" ? (
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Endpoint URL</Label>
+                                  <Input
+                                    value={srv.url ?? ""}
+                                    onChange={(e) => updateSrv({ url: e.target.value })}
+                                    placeholder="http://127.0.0.1:8090/mcp"
+                                  />
+                                </div>
+                              ) : (
+                                <div className="grid gap-2 md:grid-cols-2">
+                                  <div className="space-y-1">
+                                    <Label className="text-xs">Command</Label>
+                                    <Input
+                                      value={srv.command ?? ""}
+                                      onChange={(e) => updateSrv({ command: e.target.value })}
+                                      placeholder="npx"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Label className="text-xs">Args (comma-separated)</Label>
+                                    <Input
+                                      value={(srv.args ?? []).join(", ")}
+                                      onChange={(e) =>
+                                        updateSrv({
+                                          args: e.target.value
+                                            .split(",")
+                                            .map((s) => s.trim())
+                                            .filter(Boolean),
+                                        })
+                                      }
+                                      placeholder="-y, @modelcontextprotocol/server-everything"
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex justify-end">

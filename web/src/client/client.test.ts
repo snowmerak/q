@@ -36,6 +36,43 @@ describe("QClient", () => {
     await expect(client.deleteRoom("r1")).resolves.toBeUndefined();
     expect(QAPIError).toBeDefined();
   });
+
+  it("sends PATCH with expected_version on patchRoom", async () => {
+    let seenMethod = "";
+    let seenPath = "";
+    let seenBody = "";
+    const client = new QClient({
+      fetchFn: async (input, init) => {
+        seenPath = String(input);
+        seenMethod = init?.method ?? "";
+        seenBody = String(init?.body ?? "");
+        return new Response(
+          JSON.stringify({
+            room: { id: "r1", title: "Updated", version: 2 },
+            members: [],
+            turns: [],
+            pending_approvals: [],
+            pending_questions: [],
+            active_turn: false,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      },
+    });
+    const res = await client.patchRoom("r1", {
+      expected_version: 1,
+      title: "Updated",
+      max_turns_per_input: 5,
+    });
+    expect(seenMethod).toBe("PATCH");
+    expect(seenPath).toBe("/api/v1/rooms/r1");
+    expect(JSON.parse(seenBody)).toEqual({
+      expected_version: 1,
+      title: "Updated",
+      max_turns_per_input: 5,
+    });
+    expect(res.room.version).toBe(2);
+  });
 });
 
 describe("parseSSEChunk", () => {

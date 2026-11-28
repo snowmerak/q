@@ -269,7 +269,8 @@ q/                              # Go module: github.com/snowmerak/q/v2
 ├── web/                        # React + TypeScript + Vite + Tailwind + shadcn/ui (dist/는 미커밋)
 ├── desktop/                    # 별도 Go 모듈 (desktop/go.mod) — Wails v3 셸 (pkg/app 직접 import)
 │   ├── assets/                 # 데스크톱 아이콘 (icon.png)
-│   └── packaging/              # Windows NSIS / Linux nfpm(DEB/RPM) / macOS Info.plist 매니페스트
+│   ├── *.syso                  # Windows 아이콘/매니페스트/버전 리소스 (amd64, arm64)
+│   └── packaging/              # .ico/.icns, Windows NSIS / Linux nfpm(DEB/RPM) / macOS Info.plist 매니페스트
 └── docs/
     ├── prd.md                  # 제품 요구사항 정의서
     ├── blueprint.md            # 본 프로젝트 청사진

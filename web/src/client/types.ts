@@ -78,6 +78,16 @@ export interface ProviderConfig {
   [key: string]: unknown;
 }
 
+export interface MCPServerConfig {
+  id: string;
+  transport: "stdio" | "http";
+  enabled: boolean;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+}
+
 export interface ConfigView {
   version: number;
   server: {
@@ -128,7 +138,7 @@ export interface ConfigView {
       preferred: "cdp-q-driver" | "ego-browser";
       drivers?: Record<string, { command?: string; args?: string[] }>;
     };
-    mcp_servers?: Array<Record<string, unknown>>;
+    mcp_servers?: MCPServerConfig[];
   };
 }
 

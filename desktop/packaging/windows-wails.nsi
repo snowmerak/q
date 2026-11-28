@@ -12,8 +12,8 @@ VIAddVersionKey "FileDescription" "${INFO_PRODUCTNAME} Installer"
 VIAddVersionKey "ProductVersion" "${INFO_PRODUCTVERSION}"
 VIAddVersionKey "CompanyName" "${INFO_COMPANYNAME}"
 ManifestDPIAware true
-!define MUI_ICON "..\assets\icon.png"
-!define MUI_UNICON "..\assets\icon.png"
+!define MUI_ICON "icon.ico"
+!define MUI_UNICON "icon.ico"
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_DIRECTORY

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"image/png"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -89,5 +91,20 @@ func TestToggleAutostart(t *testing.T) {
 	state, err = toggleAutostart(failing, true)
 	if err == nil || state {
 		t.Fatalf("expected rollback on error: state=%v err=%v", state, err)
+	}
+}
+
+func TestPackagingIconsPresent(t *testing.T) {
+	for _, rel := range []string{
+		filepath.Join("packaging", "icon.ico"),
+		filepath.Join("packaging", "icons.icns"),
+	} {
+		info, err := os.Stat(rel)
+		if err != nil {
+			t.Fatalf("stat %s: %v", rel, err)
+		}
+		if info.Size() == 0 {
+			t.Fatalf("%s is empty", rel)
+		}
 	}
 }

@@ -44,7 +44,7 @@ tasks:
       - web:build
     dir: desktop
     cmds:
-      - go build -o ../bin/q-desktop{{exeExt}} .
+      - cmd: go build {{if eq OS "windows"}}-ldflags "-H windowsgui" {{end}}-o ../bin/q-desktop{{exeExt}} .
 
   package:windows:
     desc: Build and package Windows NSIS installer via desktop/packaging/wails.yaml
@@ -62,7 +62,7 @@ tasks:
       - mkdir -p bin/Q.app/Contents/MacOS bin/Q.app/Contents/Resources
       - cp bin/q-desktop bin/Q.app/Contents/MacOS/q-desktop
       - cp desktop/packaging/darwin-Info.plist bin/Q.app/Contents/Info.plist
-      - cp desktop/assets/icon.png bin/Q.app/Contents/Resources/icon.png
+      - cp desktop/packaging/icons.icns bin/Q.app/Contents/Resources/icons.icns
 
   package:linux:
     desc: Package Linux DEB and RPM bundles using desktop/packaging/nfpm.yaml

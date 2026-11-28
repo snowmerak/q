@@ -7,6 +7,7 @@ import {
   PanelRight,
   RotateCcw,
   Send,
+  SlidersHorizontal,
   Square,
   Trash2,
   User,
@@ -16,6 +17,7 @@ import type { QClient } from "@/client/api";
 import { QAPIError } from "@/client/api";
 import { subscribeRoomStream } from "@/client/sse";
 import type {
+  ApprovalMode,
   Character,
   MessageBubble,
   Persona,
@@ -84,6 +86,12 @@ export function RoomsView({ client }: { client: QClient }) {
   const [newCharacterIds, setNewCharacterIds] = useState<string[]>([]);
   const [newMaxTurns, setNewMaxTurns] = useState<number>(3);
   const [inspectedMemberId, setInspectedMemberId] = useState<string>("");
+
+  const [editOpen, setEditOpen] = useState<boolean>(false);
+  const [editTitle, setEditTitle] = useState<string>("");
+  const [editApprovalOverride, setEditApprovalOverride] = useState<"" | ApprovalMode>("");
+  const [editCharacterIds, setEditCharacterIds] = useState<string[]>([]);
+  const [editMaxTurns, setEditMaxTurns] = useState<number>(3);
 
   const timelineEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -336,6 +344,53 @@ export function RoomsView({ client }: { client: QClient }) {
     }
   };
 
+  const openEditDialog = async () => {
+    if (!detail) return;
+    setErrorMsg("");
+    try {
+      const cRes = await client.listCharacters();
+      setCharacters(cRes.items);
+      setEditTitle(detail.room.title);
+      setEditApprovalOverride(detail.room.approval_mode_override ?? "");
+      setEditCharacterIds(detail.members.filter((m) => m.active).map((m) => m.character_id));
+      setEditMaxTurns(detail.room.max_turns_per_input || 3);
+      setEditOpen(true);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to load characters");
+    }
+  };
+
+  const toggleEditCharacter = (charId: string) => {
+    setEditCharacterIds((prev) =>
+      prev.includes(charId) ? prev.filter((id) => id !== charId) : [...prev, charId],
+    );
+  };
+
+  const handleSaveRoomSettings = async () => {
+    if (!detail || !editTitle.trim()) return;
+    if (detail.room.mode === "group" && editCharacterIds.length === 0) {
+      setErrorMsg("Group rooms require at least one active character.");
+      return;
+    }
+    try {
+      await client.patchRoom(detail.room.id, {
+        expected_version: detail.room.version,
+        title: editTitle.trim(),
+        ...(editApprovalOverride ? { approval_mode_override: editApprovalOverride } : {}),
+        ...(detail.room.mode === "group"
+          ? {
+              character_ids: editCharacterIds,
+              max_turns_per_input: Math.max(1, Math.min(20, editMaxTurns || 3)),
+            }
+          : {}),
+      });
+      setEditOpen(false);
+      await Promise.all([loadRooms(), loadRoomState(detail.room.id)]);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to update room");
+    }
+  };
+
   const handleDeleteRoom = async (roomId: string) => {
     try {
       await client.deleteRoom(roomId);
@@ -554,14 +609,26 @@ export function RoomsView({ client }: { client: QClient }) {
                   Persona: {detail.room.persona_snapshot.name} · Mode: {detail.room.mode}
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowInspector((prev) => !prev)}
-              >
-                <PanelRight className="h-4 w-4" />
-                {showInspector ? "Hide State" : "Show State"}
-              </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={activeTurn}
+                  onClick={() => void openEditDialog()}
+                  title={activeTurn ? "Finish or stop the active turn before editing room settings" : "Edit room settings"}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                  Room Settings
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowInspector((prev) => !prev)}
+                >
+                  <PanelRight className="h-4 w-4" />
+                  {showInspector ? "Hide State" : "Show State"}
+                </Button>
+              </div>
             </header>
 
             {errorMsg && (
@@ -980,6 +1047,92 @@ export function RoomsView({ client }: { client: QClient }) {
                 onClick={() => void handleCreateRoom()}
               >
                 Create Room
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Room Settings Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Room Settings</DialogTitle>
+            <DialogDescription>
+              Update title, approval policy override{detail?.room.mode === "group" ? ", and active group participants" : ""}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-room-title">Room Title</Label>
+              <Input
+                id="edit-room-title"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-room-approval">Approval Mode Override</Label>
+              <select
+                id="edit-room-approval"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={editApprovalOverride}
+                onChange={(e) => setEditApprovalOverride(e.target.value as "" | ApprovalMode)}
+              >
+                <option value="">Inherit Global / Character Policy</option>
+                <option value="bypass">bypass</option>
+                <option value="auto-detection">auto-detection</option>
+                <option value="request">request</option>
+              </select>
+            </div>
+            {detail?.room.mode === "group" && (
+              <>
+                <div className="space-y-1.5">
+                  <Label>Active Characters ({editCharacterIds.length} selected)</Label>
+                  <div className="max-h-36 overflow-y-auto rounded-md border border-input bg-background p-2 space-y-1.5">
+                    {characters.map((c) => {
+                      const checked = editCharacterIds.includes(c.id);
+                      return (
+                        <label
+                          key={c.id}
+                          className="flex items-center gap-2 text-sm cursor-pointer select-none"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleEditCharacter(c.id)}
+                          />
+                          <span>{c.name}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-room-max-turns">Max Character Turns per Input</Label>
+                  <Input
+                    id="edit-room-max-turns"
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={editMaxTurns}
+                    onChange={(e) => setEditMaxTurns(Number(e.target.value) || 3)}
+                  />
+                </div>
+              </>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setEditOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                disabled={
+                  !editTitle.trim() ||
+                  (detail?.room.mode === "group" && editCharacterIds.length === 0)
+                }
+                onClick={() => void handleSaveRoomSettings()}
+              >
+                Save Changes
               </Button>
             </div>
           </div>

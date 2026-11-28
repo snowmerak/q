@@ -1,5 +1,6 @@
 import type {
   APIErrorPayload,
+  ApprovalMode,
   ArtifactReadResponse,
   Character,
   CharacterInput,
@@ -197,6 +198,21 @@ export class QClient {
   }
   getRoom(id: string) {
     return this.request<RoomDetail>(`/api/v1/rooms/${encodeURIComponent(id)}`);
+  }
+  patchRoom(
+    id: string,
+    patch: {
+      expected_version: number;
+      title?: string;
+      character_ids?: string[];
+      approval_mode_override?: ApprovalMode;
+      max_turns_per_input?: number;
+    },
+  ) {
+    return this.request<RoomDetail>(`/api/v1/rooms/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
   }
   deleteRoom(id: string) {
     return this.request<void>(`/api/v1/rooms/${encodeURIComponent(id)}`, {
