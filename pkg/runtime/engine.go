@@ -766,6 +766,7 @@ func (e *Engine) executeActorStep(
 			if lastUsage != nil {
 				donePayload["usage"] = lastUsage
 			}
+			e.hub.FinishTurn(roomID, turn.ID)
 			e.events.Publish(roomID, "turn.completed", donePayload)
 		}
 
@@ -982,6 +983,7 @@ func (e *Engine) finishCancelled(ctx context.Context, roomID string, turn *domai
 	turn.Status = domain.TurnStatusCancelled
 	turn.CompletedAt = &nowMS
 	_ = e.rdb.Turns().Update(ctx, *turn)
+	e.hub.FinishTurn(roomID, turn.ID)
 	e.events.Publish(roomID, "turn.completed", map[string]any{
 		"turn_id": turn.ID,
 		"status":  string(domain.TurnStatusCancelled),
@@ -995,6 +997,7 @@ func (e *Engine) finishFailed(ctx context.Context, roomID string, turn *domain.T
 	turn.ErrorMessage = msg
 	turn.CompletedAt = &nowMS
 	_ = e.rdb.Turns().Update(ctx, *turn)
+	e.hub.FinishTurn(roomID, turn.ID)
 	e.events.Publish(roomID, "turn.failed", map[string]any{
 		"turn_id": turn.ID,
 		"error": map[string]any{

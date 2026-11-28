@@ -333,6 +333,7 @@ func (e *Engine) processToolCalls(
 					e.finishFailed(baseCtx, roomID, turn, "internal", err.Error(), true)
 					return toolLoopFailed, nil
 				}
+				e.hub.FinishTurn(roomID, turn.ID)
 				e.events.Publish(roomID, "approval.required", map[string]any{
 					"turn_id":    turn.ID,
 					"invocation": inv,
@@ -412,6 +413,7 @@ func (e *Engine) processToolCalls(
 				e.finishFailed(baseCtx, roomID, turn, "internal", err.Error(), true)
 				return toolLoopFailed, nil
 			}
+			e.hub.FinishTurn(roomID, turn.ID)
 			e.events.Publish(roomID, "question.required", map[string]any{
 				"turn_id":  turn.ID,
 				"question": q,

@@ -269,6 +269,7 @@ func (e *Engine) finishCompleted(ctx context.Context, roomID string, turn *domai
 	if usage != nil {
 		donePayload["usage"] = usage
 	}
+	e.hub.FinishTurn(roomID, turn.ID)
 	e.events.Publish(roomID, "turn.completed", donePayload)
 	return nil
 }
