@@ -1,0 +1,722 @@
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  AlertTriangle,
+  Bot,
+  Brain,
+  MessageSquarePlus,
+  PanelRight,
+  RotateCcw,
+  Send,
+  Square,
+  Trash2,
+  User,
+  Zap,
+} from "lucide-react";
+import type { QClient } from "@/client/api";
+import { QAPIError } from "@/client/api";
+import { subscribeRoomStream } from "@/client/sse";
+import type {
+  Character,
+  MessageBubble,
+  Persona,
+  RoomDetail,
+  RoomMemoriesResponse,
+  RoomSummary,
+} from "@/client/types";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
+
+interface StreamingBubble {
+  messageId: string;
+  actorId: string;
+  actorName: string;
+  content: string;
+}
+
+export function RoomsView({ client }: { client: QClient }) {
+  const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [selectedRoomId, setSelectedRoomId] = useState<string>("");
+  const [detail, setDetail] = useState<RoomDetail | null>(null);
+  const [messages, setMessages] = useState<MessageBubble[]>([]);
+  const [nextBeforeSeq, setNextBeforeSeq] = useState<number | undefined>();
+  const [memories, setMemories] = useState<RoomMemoriesResponse | null>(null);
+  const [streaming, setStreaming] = useState<StreamingBubble | null>(null);
+  const [actorPhase, setActorPhase] = useState<string>("");
+  const [composerText, setComposerText] = useState<string>("");
+  const [showInspector, setShowInspector] = useState<boolean>(true);
+  const [errorMsg, setErrorMsg] = useState<string>("");
+  const [busySubmit, setBusySubmit] = useState<boolean>(false);
+
+  const [createOpen, setCreateOpen] = useState<boolean>(false);
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [characters, setCharacters] = useState<Character[]>([]);
+  const [newTitle, setNewTitle] = useState<string>("");
+  const [newPersonaId, setNewPersonaId] = useState<string>("");
+  const [newCharacterId, setNewCharacterId] = useState<string>("");
+
+  const timelineEndRef = useRef<HTMLDivElement | null>(null);
+
+  const loadRooms = useCallback(async () => {
+    try {
+      const res = await client.listRooms();
+      setRooms(res.items);
+      setSelectedRoomId((prev) => {
+        if (prev && res.items.some((r) => r.room.id === prev)) return prev;
+        return res.items[0]?.room.id ?? "";
+      });
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to load rooms");
+    }
+  }, [client]);
+
+  const loadRoomState = useCallback(
+    async (roomId: string) => {
+      if (!roomId) {
+        setDetail(null);
+        setMessages([]);
+        setMemories(null);
+        return;
+      }
+      try {
+        const [d, m, mem] = await Promise.all([
+          client.getRoom(roomId),
+          client.listMessages(roomId, { limit: 100 }),
+          client.getRoomMemories(roomId),
+        ]);
+        setDetail(d);
+        setMessages(m.items);
+        setNextBeforeSeq(m.next_before_seq);
+        setMemories(mem);
+      } catch (err) {
+        setErrorMsg(err instanceof Error ? err.message : "Failed to load room");
+      }
+    },
+    [client],
+  );
+
+  useEffect(() => {
+    void loadRooms();
+  }, [loadRooms]);
+
+  useEffect(() => {
+    setStreaming(null);
+    setActorPhase("");
+    void loadRoomState(selectedRoomId);
+  }, [selectedRoomId, loadRoomState]);
+
+  useEffect(() => {
+    if (!selectedRoomId) return;
+    const unsubscribe = subscribeRoomStream(selectedRoomId, {
+      onReconnect: () => {
+        void loadRoomState(selectedRoomId);
+      },
+      onEvent: (ev) => {
+        const payload = (ev.data ?? {}) as Record<string, unknown>;
+        switch (ev.event) {
+          case "turn.started": {
+            setActorPhase("starting");
+            setDetail((prev) => (prev ? { ...prev, active_turn: true } : prev));
+            void client.listMessages(selectedRoomId, { limit: 100 }).then((res) => {
+              setMessages(res.items);
+              setNextBeforeSeq(res.next_before_seq);
+            });
+            break;
+          }
+          case "actor.status": {
+            const phase = typeof payload.phase === "string" ? payload.phase : "";
+            setActorPhase(phase);
+            break;
+          }
+          case "bubble.delta": {
+            const messageId = String(payload.message_id ?? "");
+            const actorId = String(payload.actor_id ?? "");
+            const delta = String(payload.delta ?? "");
+            if (!messageId || !delta) break;
+            setStreaming((prev) => {
+              if (prev && prev.messageId === messageId) {
+                return { ...prev, content: prev.content + delta };
+              }
+              return {
+                messageId,
+                actorId,
+                actorName:
+                  detail?.members.find((m) => m.character_id === actorId)?.character_snapshot.name ??
+                  "Character",
+                content: delta,
+              };
+            });
+            break;
+          }
+          case "bubble.completed": {
+            const msg = payload.message as MessageBubble | undefined;
+            if (!msg?.id) break;
+            setStreaming((prev) => (prev?.messageId === msg.id ? null : prev));
+            setMessages((prev) =>
+              prev.some((existing) => existing.id === msg.id) ? prev : [...prev, msg],
+            );
+            break;
+          }
+          case "turn.intercepted": {
+            setStreaming(null);
+            break;
+          }
+          case "turn.completed":
+          case "turn.failed": {
+            setStreaming(null);
+            setActorPhase("");
+            void loadRoomState(selectedRoomId);
+            break;
+          }
+        }
+      },
+    });
+    return unsubscribe;
+  }, [selectedRoomId, client, loadRoomState, detail?.members]);
+
+  useEffect(() => {
+    timelineEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length, streaming?.content]);
+
+  const openCreateDialog = async () => {
+    setErrorMsg("");
+    try {
+      const [pRes, cRes] = await Promise.all([client.listPersonas(), client.listCharacters()]);
+      setPersonas(pRes.items);
+      setCharacters(cRes.items);
+      const defPersona = pRes.items.find((p) => p.is_default) ?? pRes.items[0];
+      setNewPersonaId(defPersona?.id ?? "");
+      setNewCharacterId(cRes.items[0]?.id ?? "");
+      setNewTitle(cRes.items[0] ? `${cRes.items[0].name}` : "New Chat");
+      setCreateOpen(true);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to load personas/characters");
+    }
+  };
+
+  const handleCreateRoom = async () => {
+    if (!newTitle.trim() || !newPersonaId || !newCharacterId) {
+      setErrorMsg("Room title, persona, and character are required.");
+      return;
+    }
+    try {
+      const created = await client.createRoom({
+        title: newTitle.trim(),
+        mode: "direct",
+        persona_id: newPersonaId,
+        character_ids: [newCharacterId],
+      });
+      setCreateOpen(false);
+      await loadRooms();
+      setSelectedRoomId(created.room.id);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to create room");
+    }
+  };
+
+  const handleDeleteRoom = async (roomId: string) => {
+    try {
+      await client.deleteRoom(roomId);
+      if (selectedRoomId === roomId) {
+        setSelectedRoomId("");
+      }
+      await loadRooms();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to delete room");
+    }
+  };
+
+  const handleLoadOlder = async () => {
+    if (!selectedRoomId || !nextBeforeSeq) return;
+    try {
+      const older = await client.listMessages(selectedRoomId, {
+        before_seq: nextBeforeSeq,
+        limit: 50,
+      });
+      setMessages((prev) => {
+        const seen = new Set(prev.map((m) => m.id));
+        return [...older.items.filter((m) => !seen.has(m.id)), ...prev];
+      });
+      setNextBeforeSeq(older.next_before_seq);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to load older messages");
+    }
+  };
+
+  const handleSendOrCutIn = async () => {
+    const trimmed = composerText.trim();
+    if (!selectedRoomId || !trimmed || busySubmit) return;
+    setErrorMsg("");
+    setBusySubmit(true);
+    try {
+      if (detail?.active_turn) {
+        await client.interceptTurn(selectedRoomId, trimmed);
+      } else {
+        await client.submitTurn(selectedRoomId, {
+          request_id: crypto.randomUUID(),
+          text: trimmed,
+        });
+      }
+      setComposerText("");
+    } catch (err) {
+      if (err instanceof QAPIError) {
+        setErrorMsg(`${err.code}: ${err.message}`);
+      } else {
+        setErrorMsg(err instanceof Error ? err.message : "Failed to submit");
+      }
+    } finally {
+      setBusySubmit(false);
+    }
+  };
+
+  const handleStop = async () => {
+    if (!selectedRoomId) return;
+    try {
+      await client.interceptTurn(selectedRoomId, "");
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to stop turn");
+    }
+  };
+
+  const handleRetry = async (turnId: string) => {
+    if (!selectedRoomId) return;
+    setErrorMsg("");
+    try {
+      await client.retryTurn(selectedRoomId, turnId);
+      setDetail((prev) => (prev ? { ...prev, active_turn: true } : prev));
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to retry turn");
+    }
+  };
+
+  const onComposerKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void handleSendOrCutIn();
+    }
+  };
+
+  const activeTurn = detail?.active_turn ?? false;
+  const latestTurn = detail?.turns[0];
+  const failedTurn =
+    !activeTurn && latestTurn && (latestTurn.status === "failed" || latestTurn.status === "cancelled")
+      ? latestTurn
+      : null;
+  const primaryMember = detail?.members.find((m) => m.active) ?? detail?.members[0];
+
+  return (
+    <div className="flex h-full min-h-0 flex-1 overflow-hidden">
+      {/* Room Sidebar */}
+      <aside className="flex w-68 shrink-0 flex-col border-r border-border bg-card/50">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <span className="text-sm font-semibold tracking-tight">Rooms</span>
+          <Button size="sm" onClick={() => void openCreateDialog()}>
+            <MessageSquarePlus className="h-4 w-4" />
+            New
+          </Button>
+        </div>
+        <ScrollArea className="flex-1 p-2">
+          {rooms.length === 0 ? (
+            <div className="px-3 py-8 text-center text-xs text-muted-foreground">
+              No rooms yet. Create a character &amp; persona first, then start a 1:1 room.
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {rooms.map((item) => {
+                const selected = item.room.id === selectedRoomId;
+                const charName = item.members[0]?.character_snapshot.name ?? "No character";
+                return (
+                  <div
+                    key={item.room.id}
+                    className={cn(
+                      "group flex items-center justify-between rounded-lg px-3 py-2.5 text-sm transition-colors cursor-pointer",
+                      selected
+                        ? "bg-primary/12 text-foreground font-medium"
+                        : "hover:bg-accent/70 text-muted-foreground hover:text-foreground",
+                    )}
+                    onClick={() => setSelectedRoomId(item.room.id)}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate">{item.room.title}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {charName} · {item.room.persona_snapshot.name}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      title="Delete room"
+                      className="opacity-0 group-hover:opacity-100 rounded p-1 text-muted-foreground hover:text-destructive cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleDeleteRoom(item.room.id);
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </ScrollArea>
+      </aside>
+
+      {/* Main Conversation */}
+      <main className="flex min-w-0 flex-1 flex-col bg-background">
+        {!detail ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+            <Bot className="h-10 w-10 text-muted-foreground/60" />
+            <div className="text-base font-medium">Select or create a chat room</div>
+            <p className="max-w-md text-sm text-muted-foreground">
+              Characters converse through chat bubbles, remember observed experiences, and evolve
+              their affect and values across turns.
+            </p>
+            <Button onClick={() => void openCreateDialog()}>Create 1:1 Room</Button>
+          </div>
+        ) : (
+          <>
+            <header className="flex items-center justify-between border-b border-border px-5 py-3 bg-card/40">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2.5">
+                  <h2 className="truncate text-base font-semibold">{detail.room.title}</h2>
+                  <Badge variant="secondary">{primaryMember?.character_snapshot.name ?? "—"}</Badge>
+                  {activeTurn && (
+                    <Badge variant="default" className="animate-pulse">
+                      {actorPhase || "thinking"}
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Persona: {detail.room.persona_snapshot.name} · Mode: {detail.room.mode}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowInspector((prev) => !prev)}
+              >
+                <PanelRight className="h-4 w-4" />
+                {showInspector ? "Hide State" : "Show State"}
+              </Button>
+            </header>
+
+            {errorMsg && (
+              <div className="mx-5 mt-3 flex items-center justify-between rounded-lg border border-destructive/40 bg-destructive/10 px-3.5 py-2 text-xs text-destructive">
+                <span>{errorMsg}</span>
+                <button
+                  type="button"
+                  className="underline cursor-pointer"
+                  onClick={() => setErrorMsg("")}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            <ScrollArea className="flex-1 px-5 py-4">
+              <div className="mx-auto flex max-w-3xl flex-col gap-3">
+                {nextBeforeSeq && (
+                  <div className="flex justify-center pb-2">
+                    <Button variant="outline" size="sm" onClick={() => void handleLoadOlder()}>
+                      Load earlier messages
+                    </Button>
+                  </div>
+                )}
+
+                {messages.map((msg) => {
+                  const isUser = msg.role === "user";
+                  return (
+                    <div
+                      key={msg.id}
+                      className={cn("flex w-full gap-2.5", isUser ? "justify-end" : "justify-start")}
+                    >
+                      {!isUser && (
+                        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
+                          <Bot className="h-4 w-4" />
+                        </div>
+                      )}
+                      <div
+                        className={cn(
+                          "max-w-[78%] rounded-2xl px-4 py-2.5 text-sm shadow-xs",
+                          isUser
+                            ? "bg-primary text-primary-foreground rounded-br-sm"
+                            : "border border-border bg-card text-card-foreground rounded-bl-sm",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "mb-1 flex items-center gap-2 text-[11px]",
+                            isUser ? "text-primary-foreground/80" : "text-muted-foreground",
+                          )}
+                        >
+                          <span className="font-medium">{msg.author_name}</span>
+                          <span>
+                            {new Date(msg.created_at).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        </div>
+                        <div className="whitespace-pre-wrap leading-relaxed">{msg.content}</div>
+                      </div>
+                      {isUser && (
+                        <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+                          <User className="h-4 w-4" />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {streaming && (
+                  <div className="flex w-full justify-start gap-2.5">
+                    <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
+                      <Bot className="h-4 w-4" />
+                    </div>
+                    <div className="max-w-[78%] rounded-2xl rounded-bl-sm border border-primary/40 bg-card px-4 py-2.5 text-sm shadow-xs">
+                      <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span className="font-medium">{streaming.actorName}</span>
+                        <span>streaming…</span>
+                      </div>
+                      <div className="whitespace-pre-wrap leading-relaxed">{streaming.content}</div>
+                    </div>
+                  </div>
+                )}
+
+                {failedTurn && (
+                  <div className="flex items-center justify-between rounded-lg border border-destructive/40 bg-destructive/8 px-4 py-2.5 text-xs">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4 text-destructive" />
+                      <span>
+                        Turn {failedTurn.status}: {failedTurn.error_message || failedTurn.error_code}
+                      </span>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => void handleRetry(failedTurn.id)}>
+                      <RotateCcw className="h-3.5 w-3.5" />
+                      Retry
+                    </Button>
+                  </div>
+                )}
+                <div ref={timelineEndRef} />
+              </div>
+            </ScrollArea>
+
+            {/* Composer */}
+            <div className="border-t border-border bg-card/40 px-5 py-3">
+              <div className="mx-auto flex max-w-3xl items-end gap-2">
+                <Textarea
+                  value={composerText}
+                  onChange={(e) => setComposerText(e.target.value)}
+                  onKeyDown={onComposerKeyDown}
+                  placeholder={
+                    activeTurn
+                      ? "Type to cut in mid-turn, or press Stop to cancel…"
+                      : "Write a message to chat… (Enter to send, Shift+Enter for newline)"
+                  }
+                  className="min-h-[52px] max-h-40 resize-y bg-background"
+                />
+                {activeTurn ? (
+                  <div className="flex flex-col gap-1.5">
+                    <Button
+                      size="sm"
+                      disabled={!composerText.trim() || busySubmit}
+                      onClick={() => void handleSendOrCutIn()}
+                    >
+                      <Zap className="h-3.5 w-3.5" />
+                      Cut-in
+                    </Button>
+                    <Button size="sm" variant="destructive" onClick={() => void handleStop()}>
+                      <Square className="h-3.5 w-3.5" />
+                      Stop
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    disabled={!composerText.trim() || busySubmit}
+                    onClick={() => void handleSendOrCutIn()}
+                  >
+                    <Send className="h-4 w-4" />
+                    Send
+                  </Button>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+
+      {/* Right State & Memories Inspector */}
+      {detail && showInspector && primaryMember && (
+        <aside className="w-80 shrink-0 border-l border-border bg-card/40 flex flex-col">
+          <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+            <Brain className="h-4 w-4 text-primary" />
+            <span className="text-sm font-semibold">Actor State &amp; Memory</span>
+          </div>
+          <ScrollArea className="flex-1 p-4">
+            <div className="space-y-5 text-xs">
+              <section className="space-y-2">
+                <div className="font-semibold text-foreground">Affect &amp; Relationship</div>
+                <Card className="p-3 space-y-1.5 bg-background">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Self Valence</span>
+                    <span className="font-mono">{primaryMember.actor_state.self.valence}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Self Activation</span>
+                    <span className="font-mono">{primaryMember.actor_state.self.activation}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Stressed</span>
+                    <span>{primaryMember.actor_state.self.stressed ? "Yes" : "No"}</span>
+                  </div>
+                  {primaryMember.actor_state.relationships?.[detail.room.persona_id] && (
+                    <>
+                      <Separator className="my-1.5" />
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">User Trust</span>
+                        <span className="font-mono">
+                          {primaryMember.actor_state.relationships[detail.room.persona_id].trust}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">User Valence</span>
+                        <span className="font-mono">
+                          {primaryMember.actor_state.relationships[detail.room.persona_id].valence}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                </Card>
+              </section>
+
+              <section className="space-y-2">
+                <div className="flex items-center justify-between font-semibold">
+                  <span>Values</span>
+                  <Badge variant="outline">rev {primaryMember.actor_state.values_revision}</Badge>
+                </div>
+                {(primaryMember.actor_state.values ?? []).length === 0 ? (
+                  <p className="text-muted-foreground">No consolidated values recorded yet.</p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {(primaryMember.actor_state.values ?? []).map((v) => (
+                      <li key={v.id} className="rounded-md border border-border bg-background p-2">
+                        {v.text}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              {primaryMember.actor_state.compressed_memo && (
+                <section className="space-y-2">
+                  <div className="font-semibold">Compressed Memo</div>
+                  <div className="rounded-md border border-border bg-background p-2.5 leading-relaxed text-muted-foreground">
+                    {primaryMember.actor_state.compressed_memo}
+                  </div>
+                </section>
+              )}
+
+              <section className="space-y-2">
+                <div className="font-semibold">
+                  Memories ({memories?.memories.filter((m) => m.kind !== "value_history").length ?? 0})
+                </div>
+                <div className="space-y-1.5">
+                  {(memories?.memories ?? [])
+                    .filter((m) => m.kind !== "value_history")
+                    .map((m) => (
+                      <div
+                        key={m.id}
+                        className="rounded-md border border-border bg-background p-2 space-y-1"
+                      >
+                        <div className="text-[10px] text-muted-foreground">
+                          {m.kind} · {new Date(m.occurred_at).toLocaleString()}
+                        </div>
+                        <div>{m.content}</div>
+                      </div>
+                    ))}
+                </div>
+              </section>
+            </div>
+          </ScrollArea>
+        </aside>
+      )}
+
+      {/* New 1:1 Room Dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create 1:1 Character Room</DialogTitle>
+            <DialogDescription>
+              Snapshots of the chosen persona and character will be bound to this room.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="room-title">Room Title</Label>
+              <Input
+                id="room-title"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                placeholder="Late Night Cafe"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="room-persona">User Persona</Label>
+              <select
+                id="room-persona"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={newPersonaId}
+                onChange={(e) => setNewPersonaId(e.target.value)}
+              >
+                {personas.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="room-character">Character</Label>
+              <select
+                id="room-character"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={newCharacterId}
+                onChange={(e) => setNewCharacterId(e.target.value)}
+              >
+                {characters.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={() => setCreateOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                disabled={!newTitle.trim() || !newPersonaId || !newCharacterId}
+                onClick={() => void handleCreateRoom()}
+              >
+                Create Room
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

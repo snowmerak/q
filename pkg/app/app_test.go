@@ -22,6 +22,7 @@ import (
 	"github.com/snowmerak/q/v2/pkg/app/config"
 	"github.com/snowmerak/q/v2/pkg/domain"
 	"github.com/snowmerak/q/v2/pkg/llm/gateway"
+	"github.com/snowmerak/q/v2/web"
 )
 
 func TestAppLifecycleEndpointsAndSingleInstanceLock(t *testing.T) {
@@ -380,5 +381,33 @@ func TestAppEndToEndRoomTurnsSSEMediaAndReindex(t *testing.T) {
 	var reindexResp map[string]any
 	if code := doJSON(http.MethodPost, "/api/v1/storage/reindex", nil, &reindexResp); code != http.StatusAccepted || reindexResp["job_id"] == "" {
 		t.Fatalf("reindex = %d %v", code, reindexResp)
+	}
+}
+
+func TestEmbeddedSPAServingAndAPI404Isolation(t *testing.T) {
+	ctx := t.Context()
+	a, err := app.Open(ctx, app.Options{DataDir: t.TempDir(), ListenOverride: "127.0.0.1:0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = a.Close(context.Background()) }()
+
+	h := a.Handler()
+
+	// Unmatched /api/ path must always return JSON 404.
+	apiRec := httptest.NewRecorder()
+	h.ServeHTTP(apiRec, httptest.NewRequest(http.MethodGet, "/api/v1/unknown-route", nil))
+	if apiRec.Code != http.StatusNotFound || !strings.Contains(apiRec.Header().Get("Content-Type"), "application/json") {
+		t.Fatalf("unexpected /api 404 response: status=%d ct=%q body=%s", apiRec.Code, apiRec.Header().Get("Content-Type"), apiRec.Body.String())
+	}
+
+	if _, ok := web.DistFS(); ok {
+		for _, p := range []string{"/", "/rooms/demo"} {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `<div id="root">`) {
+				t.Fatalf("SPA route %s failed: status=%d body=%s", p, rec.Code, rec.Body.String())
+			}
+		}
 	}
 }

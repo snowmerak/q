@@ -16,7 +16,8 @@ config/*.local.yaml
 
 # Frontend (React / Vite)
 web/node_modules/
-web/dist/
+web/dist/*
+!web/dist/.gitkeep
 web/.vite/
 web/test-results/
 web/playwright-report/

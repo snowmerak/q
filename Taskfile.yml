@@ -1,0 +1,70 @@
+version: "3"
+
+tasks:
+  web:install:
+    desc: Install frontend dependencies from lockfile
+    cmds:
+      - pnpm --dir web install --frozen-lockfile
+
+  web:typecheck:
+    desc: Run TypeScript typecheck on web/
+    cmds:
+      - pnpm --dir web typecheck
+
+  web:test:
+    desc: Run Vitest unit tests in web/
+    cmds:
+      - pnpm --dir web test
+
+  web:build:
+    desc: Build web/dist bundle for Go //go:embed
+    cmds:
+      - pnpm --dir web build
+
+  build:q:
+    desc: Build unified q server CLI binary (embeds web/dist)
+    deps:
+      - web:build
+    cmds:
+      - go build -o bin/q{{exeExt}} ./cmd/q
+
+  build:llm-provider:
+    desc: Build standalone llm-provider CLI binary
+    cmds:
+      - go build -o bin/llm-provider{{exeExt}} ./cmd/llm-provider
+
+  build:cdp-q-driver:
+    desc: Build standalone cdp-q-driver CLI binary
+    cmds:
+      - go build -o bin/cdp-q-driver{{exeExt}} ./cmd/cdp-q-driver
+
+  build:all:
+    desc: Build all Q v2 CLI binaries
+    deps:
+      - build:q
+      - build:llm-provider
+      - build:cdp-q-driver
+
+  test:go:
+    desc: Run Go unit and integration tests
+    cmds:
+      - go test ./...
+
+  test:all:
+    desc: Run frontend and Go checks and tests
+    deps:
+      - web:typecheck
+      - web:test
+    cmds:
+      - go vet ./...
+      - go test ./...
+
+  dev:server:
+    desc: Start q v2 server in development mode
+    cmds:
+      - go run ./cmd/q serve
+
+  dev:web:
+    desc: Start Vite development server (proxies /api to 127.0.0.1:17070)
+    cmds:
+      - pnpm --dir web dev

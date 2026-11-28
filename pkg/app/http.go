@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/snowmerak/q/v2/pkg/app/config"
 	"github.com/snowmerak/q/v2/pkg/runtime"
 	"github.com/snowmerak/q/v2/pkg/storage"
+	"github.com/snowmerak/q/v2/web"
 )
 
 type apiErrorBody struct {
@@ -68,6 +71,12 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/artifacts/{id}", a.handleGetArtifact)
 	mux.HandleFunc("POST /api/v1/storage/reindex", a.handleReindex)
 
+	distFS, hasUI := web.DistFS()
+	var fileServer http.Handler
+	if hasUI {
+		fileServer = http.FileServerFS(distFS)
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqID := strings.TrimSpace(r.Header.Get("X-Request-ID"))
 		if _, err := uuid.Parse(reqID); err != nil {
@@ -84,8 +93,46 @@ func (a *App) Handler() http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		writeError(w, http.StatusNotFound, "not_found", "frontend assets are not yet built", false, nil)
+		if !hasUI {
+			writeError(w, http.StatusNotFound, "not_found", "frontend assets are not yet built", false, nil)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed", false, nil)
+			return
+		}
+		clean := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if clean == "" {
+			serveEmbeddedIndex(w, distFS)
+			return
+		}
+		if info, err := fs.Stat(distFS, clean); err == nil && !info.IsDir() {
+			if strings.HasPrefix(clean, "assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else if clean == "index.html" {
+				w.Header().Set("Cache-Control", "no-cache")
+			}
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		if strings.Contains(path.Base(clean), ".") {
+			http.NotFound(w, r)
+			return
+		}
+		serveEmbeddedIndex(w, distFS)
 	})
+}
+
+func serveEmbeddedIndex(w http.ResponseWriter, distFS fs.FS) {
+	data, err := fs.ReadFile(distFS, "index.html")
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", "frontend index.html unavailable", false, nil)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
