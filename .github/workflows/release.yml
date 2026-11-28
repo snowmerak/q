@@ -1,0 +1,203 @@
+name: Q v2 Release
+
+on:
+  push:
+    tags:
+      - "v2.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (major.minor.patch)
+        required: true
+        default: "2.0.0"
+        type: string
+      publish_release:
+        description: Attach packaged binaries/installers to GitHub Release
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - id: resolve
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish_release }}
+        run: |
+          set -euo pipefail
+          publish=false
+          version="$INPUT_VERSION"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            publish=true
+          elif [[ "$INPUT_PUBLISH" == "true" ]]; then
+            publish=true
+          fi
+          version_core="${version%%-*}"
+          if [[ ! "$version_core" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected semver version like 2.0.0, got '$version'"
+            exit 1
+          fi
+          printf 'version=%s\ntag=v%s\npublish=%s\n' "$version_core" "$version" "$publish" >> "$GITHUB_OUTPUT"
+
+  package:
+    needs: prepare
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            goos: windows
+            goarch: amd64
+          - runner: windows-latest
+            goos: windows
+            goarch: arm64
+          - runner: ubuntu-24.04
+            goos: linux
+            goarch: amd64
+          - runner: macos-latest
+            goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web build
+
+      - name: Install Linux desktop dependencies and nfpm
+        if: matrix.goos == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev pkg-config
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.2
+
+      - name: Ensure Wails CLI and NSIS on Windows
+        if: matrix.goos == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            choco install nsis -y
+          }
+
+      - name: Build CLI & desktop binaries and package
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin dist
+          ext=""
+          ldflags=""
+          if [[ "$GOOS" == "windows" ]]; then
+            ext=".exe"
+            ldflags="-H windowsgui"
+          fi
+
+          go build -o "bin/q${ext}" ./cmd/q
+          go build -o "bin/llm-provider${ext}" ./cmd/llm-provider
+          go build -o "bin/cdp-q-driver${ext}" ./cmd/cdp-q-driver
+          go -C desktop build ${ldflags:+-ldflags "$ldflags"} -o "../bin/q-desktop${ext}" .
+
+          # Portable archive containing all 4 binaries
+          stage="dist/stage-${GOOS}-${GOARCH}"
+          mkdir -p "$stage"
+          cp "bin/q${ext}" "bin/llm-provider${ext}" "bin/cdp-q-driver${ext}" "bin/q-desktop${ext}" "$stage/"
+          if [[ "$GOOS" == "windows" ]]; then
+            powershell.exe -NoProfile -Command "Compress-Archive -Path '${stage}/*' -DestinationPath 'dist/q-${VERSION}-${GOOS}-${GOARCH}.zip' -Force"
+          else
+            tar -C "$stage" -czf "dist/q-${VERSION}-${GOOS}-${GOARCH}.tar.gz" .
+          fi
+          rm -rf "$stage"
+
+          # OS installer packages
+          if [[ "$GOOS" == "windows" ]]; then
+            mkdir -p bin/nsis
+            "$(go env GOPATH)/bin/wails3.exe" generate webview2bootstrapper -dir bin/nsis
+            makensis "-DPRODUCT_VERSION=${VERSION}" '-DBINARY_PATH=..\..\bin\q-desktop.exe' '-DOUT_FILE=..\..\dist\Q-'"${VERSION}"'-windows-'"${GOARCH}"'-setup.exe' desktop/packaging/windows-wails.nsi
+          elif [[ "$GOOS" == "linux" ]]; then
+            cp desktop/packaging/nfpm.yaml desktop/packaging/nfpm.release.yaml
+            sed -i "s/^version: .*/version: ${VERSION}/" desktop/packaging/nfpm.release.yaml
+            "$(go env GOPATH)/bin/nfpm" pkg -p deb -f desktop/packaging/nfpm.release.yaml -t dist/
+            "$(go env GOPATH)/bin/nfpm" pkg -p rpm -f desktop/packaging/nfpm.release.yaml -t dist/
+            rm -f desktop/packaging/nfpm.release.yaml
+          elif [[ "$GOOS" == "darwin" ]]; then
+            mkdir -p dist/Q.app/Contents/MacOS dist/Q.app/Contents/Resources
+            cp bin/q-desktop dist/Q.app/Contents/MacOS/q-desktop
+            chmod +x dist/Q.app/Contents/MacOS/q-desktop
+            sed "s/<string>2.0.0<\/string>/<string>${VERSION}<\/string>/" desktop/packaging/darwin-Info.plist > dist/Q.app/Contents/Info.plist
+            cp desktop/packaging/icons.icns dist/Q.app/Contents/Resources/icons.icns
+            hdiutil create -volname "Q" -srcfolder dist/Q.app -ov -format UDZO "dist/Q-${VERSION}-darwin-${GOARCH}.dmg"
+            rm -rf dist/Q.app
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: q-${{ needs.prepare.outputs.version }}-all
+          path: artifacts/*
+      - name: Create or update GitHub Release
+        if: needs.prepare.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" artifacts/* --clobber
+          else
+            gh release create "$TAG" artifacts/* --title "Q $TAG" --generate-notes
+          fi

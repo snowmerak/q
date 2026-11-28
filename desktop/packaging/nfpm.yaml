@@ -7,7 +7,7 @@ description: Character-chat-first AI platform
 homepage: https://github.com/snowmerak/q
 license: Unspecified
 contents:
-  - src: ../bin/q-desktop
+  - src: ../../bin/q-desktop
     dst: /usr/lib/q/q-desktop
     file_info:
       mode: 0755

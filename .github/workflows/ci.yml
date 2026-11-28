@@ -1,0 +1,179 @@
+name: Q v2 CI
+
+on:
+  push:
+    branches:
+      - v2
+  pull_request:
+    branches:
+      - v2
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web UI
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web typecheck
+      - run: pnpm --dir web test
+      - run: pnpm --dir web build
+
+  go-core:
+    name: Go Core & CLIs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web build
+
+      - name: Enforce module boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -q 'wailsapp' go.mod; then
+            echo "::error::Root go.mod must not contain wailsapp dependency"
+            exit 1
+          fi
+          bad=$(go list -f '{{.ImportPath}} -> {{.Imports}}' ./pkg/llm/... ./pkg/cdp/... | grep -E 'github\.com/snowmerak/q/v2/pkg/(app|runtime|task|memory|knowledge|storage)' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Reverse import detected: $bad"
+            exit 1
+          fi
+
+      - run: go vet ./...
+      - run: go test -count=1 ./internal/... ./pkg/domain/... ./pkg/llm/... ./pkg/storage/... ./pkg/memory/... ./pkg/knowledge/... ./pkg/task/... ./pkg/runtime/... ./pkg/app/... ./cmd/...
+      - name: Build CLI binaries
+        run: |
+          go build -o /dev/null ./cmd/q
+          go build -o /dev/null ./cmd/llm-provider
+          go build -o /dev/null ./cmd/cdp-q-driver
+
+  storage-matrix:
+    name: 6-Way Live Storage Matrix
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: qtest
+          POSTGRES_DB: qtest
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d qtest"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=15
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: qtest
+          MYSQL_DATABASE: qtest
+        ports:
+          - 13306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pqtest --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+      opensearch:
+        image: opensearchproject/opensearch:3.9.0
+        env:
+          discovery.type: single-node
+          DISABLE_SECURITY_PLUGIN: "true"
+          OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports:
+          - 19200:9200
+        options: >-
+          --health-cmd="curl -sf http://127.0.0.1:9200/_cluster/health >/dev/null || exit 1"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=24
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Run live 6-way storage matrix & DB contract tests
+        env:
+          Q_TEST_POSTGRES_DSN: "postgres://postgres:qtest@127.0.0.1:15432/qtest?sslmode=disable"
+          Q_TEST_MYSQL_DSN: "root:qtest@tcp(127.0.0.1:13306)/qtest"
+          Q_TEST_OPENSEARCH_URL: "http://127.0.0.1:19200"
+        run: go test -v -count=1 -timeout 180s ./pkg/storage/...
+
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+          - os: ubuntu-24.04
+            goos: linux
+          - os: macos-latest
+            goos: darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm --dir web install --frozen-lockfile
+      - run: pnpm --dir web build
+
+      - name: Install Linux WebKitGTK / GTK4 build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev pkg-config
+
+      - run: go -C desktop vet ./...
+      - run: go -C desktop test -v -count=1 ./...
+      - name: Build desktop binary
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            go -C desktop build -ldflags "-H windowsgui" -o NUL .
+          else
+            go -C desktop build -o /dev/null .
+          fi
